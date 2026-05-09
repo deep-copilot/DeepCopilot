@@ -1,0 +1,177 @@
+{
+  "name": "deep-copilot",
+  "displayName": "Deep Copilot",
+  "description": "Deep Copilot — AI coding agent embedded in VS Code. Powered by DeepSeek V4, with file editing, terminal, search, and plan/todos. Standalone, no backend required.",
+  "version": "0.19.0",
+  "publisher": "ZhouChaunge",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ZhouChaunge/DeepPilot"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["AI", "Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "deepseek-agent.deepseek",
+        "name": "deepseek",
+        "fullName": "Deep Copilot",
+        "description": "Deep Copilot V4 agent (file read/write / search / shell)",
+        "isSticky": true,
+        "commands": [
+          { "name": "clear", "description": "Clear session context" },
+          { "name": "doctor", "description": "Check backend / API key status" }
+        ]
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "deepseek-sidebar",
+          "title": "Deep Copilot",
+          "icon": "media/logo.png"
+        }
+      ]
+    },
+    "views": {
+      "deepseek-sidebar": [
+        {
+          "type": "webview",
+          "id": "deepseek.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "deepseekAgent.open",
+        "title": "Deep Copilot: Open Sidebar",
+        "icon": "$(robot)"
+      },
+      {
+        "command": "deepseekAgent.openInTab",
+        "title": "Deep Copilot: Open in Tab",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "deepseekAgent.openTerminal",
+        "title": "Deep Copilot: Open TUI in Terminal",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "deepseekAgent.moveToRight",
+        "title": "Deep Copilot: Move to Secondary Side Bar",
+        "icon": "$(layout-sidebar-right)"
+      },
+      {
+        "command": "deepseekAgent.setApiKey",
+        "title": "Deep Copilot: Set API Key (SecretStorage)",
+        "icon": "$(key)"
+      },
+      {
+        "command": "deepseekAgent.setBaseUrl",
+        "title": "Deep Copilot: Switch API Base URL",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "deepseekAgent.restartServer",
+        "title": "Deep Copilot: Restart Backend",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "deepseekAgent.showApiStatus",
+        "title": "Deep Copilot: API Status / Config",
+        "icon": "$(info)"
+      }
+    ],
+    "configuration": {
+      "title": "Deep Copilot",
+      "properties": {
+        "deepseekAgent.serverExecutablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to deepseek-app-server executable. Leave empty — Deep Copilot is standalone and does not need a backend."
+        },
+        "deepseekAgent.serverPort": {
+          "type": "number",
+          "default": 8787,
+          "description": "API server port (unused in standalone mode)."
+        },
+        "deepseekAgent.apiBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "DeepSeek API Base URL. Leave empty to use https://api.deepseek.com. China users: https://api.deepseeki.com"
+        },
+        "deepseekAgent.defaultModel": {
+          "type": "string",
+          "default": "deepseek-v4-pro",
+          "enum": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+          "enumDescriptions": [
+            "V4 Pro — strongest, ¥4/¥16 per million tokens",
+            "V4 Flash — fast & cheap, ¥0.5/¥2 per million tokens",
+            "Compat alias (= v4-flash)",
+            "Compat alias (= v4-flash, thinking model)"
+          ],
+          "description": "Default DeepSeek model."
+        },
+        "deepseekAgent.approvalMode": {
+          "type": "string",
+          "default": "manual",
+          "enum": ["manual", "auto-edit", "autopilot", "readonly"],
+          "enumDescriptions": [
+            "Manual — approve write_file / run_shell each time (safest, default)",
+            "Auto-Edit — auto-approve file writes, prompt for shell commands",
+            "Autopilot — auto-approve everything (use with caution)",
+            "Read-Only — deny all write/shell tools"
+          ],
+          "description": "Tool approval policy for write_file / run_shell."
+        },
+        "deepseekAgent.autoApproveTools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Tool names to always auto-approve (overrides approvalMode), e.g. [\"write_file\"]"
+        },
+        "deepseekAgent.denyTools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Tool names to always deny (overrides approvalMode), e.g. [\"run_shell\"]"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "deepseekAgent.open",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d"
+      },
+      {
+        "command": "deepseekAgent.openInTab",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "deepseekAgent.open" },
+        { "command": "deepseekAgent.openInTab" },
+        { "command": "deepseekAgent.openTerminal" },
+        { "command": "deepseekAgent.moveToRight" }
+      ]
+    }
+  },
+  "scripts": {
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^2.24.0"
+  }
+}

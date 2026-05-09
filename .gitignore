@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# VS Code extension packages
+*.vsix
+
+# Secrets / environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temp
+*.swp
+*.swo
+*~
