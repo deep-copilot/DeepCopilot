@@ -2,7 +2,7 @@
   "name": "deeppilot",
   "displayName": "DeepPilot",
   "description": "DeepPilot — GitHub Copilot 风格的 DeepSeek V4 代码智能体：三栏布局、流式对话、工具调用、会话记忆，全量代码开源。",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "publisher": "local-dev",
   "repository": { "type": "git", "url": "https://github.com/ZhouChaunge/DeepPilot.git" },
   "homepage": "https://github.com/ZhouChaunge/DeepPilot",

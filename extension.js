@@ -1,285 +1,323 @@
-﻿// DeepSeek Agent VS Code Extension - Sidebar Chat Panel
-// Provides a GitHub Copilot-style sidebar that talks to deepseek-app-server
+﻿// DeepSeek Agent VS Code Extension — Standalone, no external backend required.
+// All API calls go directly to DeepSeek (OpenAI-compatible), all tools run in Node.js.
 'use strict';
 
-const vscode     = require('vscode');
-const http       = require('http');
-const path       = require('path');
-const fs         = require('fs');
-const os         = require('os');
-const { spawn, exec } = require('child_process');
+const vscode = require('vscode');
+const path   = require('path');
+const fs     = require('fs');
+const os     = require('os');
+const cp     = require('child_process');
+const https  = require('https');
+const http   = require('http');
 
-// ─── API Client ───────────────────────────────────────────────────────────────
+// ─── System Prompt ────────────────────────────────────────────────────────────
 
-class ApiClient {
-    constructor(port = 8787) {
-        this.port = port;
-    }
+const SYSTEM_PROMPT = `You are DeepPilot, an expert AI coding agent embedded in VS Code.
+You have access to tools to read files, list directories, search code, write files, and run shell commands.
+Always use tools to explore the workspace before answering. Prefer reading actual files over guessing.
+When referencing files, use the format: path/to/file.ts:lineNumber
+Do NOT use emojis in your responses. Be concise, precise, and professional.
+After completing a task, summarize what you did and any files you changed.
+For complex tasks, use update_plan to show your work plan to the user before starting.`;
 
-    updatePort(port) { this.port = port; }
+// ─── Tool Definitions (OpenAI function-calling format) ────────────────────────
 
-    _request(method, endpoint, body) {
-        return new Promise((resolve, reject) => {
-            const data = body ? JSON.stringify(body) : undefined;
-            const options = {
-                hostname: '127.0.0.1',
-                port: this.port,
-                path: endpoint,
-                method,
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+const TOOL_DEFS = [
+    {
+        type: 'function',
+        function: {
+            name: 'read_file',
+            description: 'Read the contents of a file. Use start_line/end_line to read a range.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: { type: 'string', description: 'Relative or absolute file path' },
+                    start_line: { type: 'integer', description: '1-based start line (optional)' },
+                    end_line: { type: 'integer', description: '1-based end line (optional)' },
                 },
-            };
-            const req = http.request(options, res => {
-                let buf = '';
-                res.on('data', chunk => { buf += chunk; });
-                res.on('end', () => {
-                    try { resolve(JSON.parse(buf)); }
-                    catch { reject(new Error(`Invalid JSON from server: ${buf.substring(0, 300)}`)); }
-                });
-            });
-            req.on('error', reject);
-            req.setTimeout(90_000, () => {
-                req.destroy();
-                reject(new Error('Request timed out (90s)'));
-            });
-            if (data) req.write(data);
-            req.end();
-        });
-    }
+                required: ['path'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'list_dir',
+            description: 'List files and folders at a directory path.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: { type: 'string', description: 'Directory path (default: workspace root)' },
+                },
+                required: [],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'grep_search',
+            description: 'Search for a text pattern across files in the workspace.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    pattern: { type: 'string', description: 'Search pattern' },
+                    path: { type: 'string', description: 'Directory to search (default: workspace root)' },
+                    include: { type: 'string', description: 'File glob filter e.g. "*.ts"' },
+                    is_regex: { type: 'boolean', description: 'Treat pattern as regex' },
+                },
+                required: ['pattern'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'write_file',
+            description: 'Write (or overwrite) a file with the given content. Creates parent directories automatically.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: { type: 'string', description: 'File path to write' },
+                    content: { type: 'string', description: 'Full file content' },
+                },
+                required: ['path', 'content'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'run_shell',
+            description: 'Execute a shell command in the workspace root directory.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    command: { type: 'string', description: 'Shell command to execute' },
+                    timeout_ms: { type: 'integer', description: 'Timeout in milliseconds (default 30000)' },
+                },
+                required: ['command'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'update_plan',
+            description: 'Update the Plan and Todos panels visible to the user in the sidebar.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    plan: {
+                        type: 'array',
+                        description: 'List of plan steps',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                text: { type: 'string' },
+                                status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'blocked'] },
+                            },
+                            required: ['text'],
+                        },
+                    },
+                    todos: {
+                        type: 'array',
+                        description: 'List of todo items',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                text: { type: 'string' },
+                                done: { type: 'boolean' },
+                            },
+                            required: ['text'],
+                        },
+                    },
+                },
+            },
+        },
+    },
+];
 
-    healthCheck() { return this._request('GET', '/healthz'); }
+// ─── DeepSeek API Streaming ───────────────────────────────────────────────────
 
-    sendPrompt(prompt, threadId, model) {
-        const body = { input: prompt };
-        if (threadId) body.thread_id = threadId;
-        if (model)    body.model     = model;
-        return this._request('POST', '/prompt', body);
-    }
+/**
+ * Stream a chat completion from DeepSeek (OpenAI-compatible).
+ * Returns an object: { toolCalls: [{id, name, args}], usage: {…} }
+ */
+function streamDeepSeek({ apiKey, baseUrl, messages, model }, callbacks, abortSignal) {
+    return new Promise((resolve, reject) => {
+        const base = (baseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
+        const urlObj = new URL('/chat/completions', base);
+        const isHttps = urlObj.protocol === 'https:';
 
-    /**
-     * Open an SSE stream via POST /prompt/stream.
-     * Calls handlers.onDelta(text), onThinking(text), onError(msg), onDone() as events arrive.
-     * Returns a function that aborts the request.
-     */
-    streamPrompt(prompt, threadId, model, workspaceRoot, handlers) {
         const body = JSON.stringify({
-            input: prompt,
-            ...(threadId ? { thread_id: threadId } : {}),
-            ...(model ? { model } : {}),
-            ...(workspaceRoot ? { workspace_root: workspaceRoot } : {}),
+            model: model || 'deepseek-chat',
+            messages,
+            tools: TOOL_DEFS,
+            tool_choice: 'auto',
+            stream: true,
+            max_tokens: 8192,
         });
-        const options = {
-            hostname: '127.0.0.1',
-            port: this.port,
-            path: '/prompt/stream',
+
+        const reqOpts = {
+            hostname: urlObj.hostname,
+            port: urlObj.port || (isHttps ? 443 : 80),
+            path: urlObj.pathname + (urlObj.search || ''),
             method: 'POST',
             headers: {
+                'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
                 'Accept': 'text/event-stream',
                 'Content-Length': Buffer.byteLength(body),
             },
         };
 
+        const mod = isHttps ? https : http;
         let buf = '';
-        let aborted = false;
+        const toolCalls = {}; // index → {id, name, args}
+        let usage = null;
+        let settled = false;
 
-        const req = http.request(options, res => {
+        function settle(val) {
+            if (!settled) { settled = true; resolve(val); }
+        }
+
+        const req = mod.request(reqOpts, (res) => {
             if (res.statusCode !== 200) {
-                let errBuf = '';
-                res.on('data', c => errBuf += c);
-                res.on('end', () => {
-                    handlers.onError?.(`HTTP ${res.statusCode}: ${errBuf.substring(0, 300)}`);
-                    handlers.onDone?.();
-                });
+                let errBody = '';
+                res.on('data', c => { errBody += c; });
+                res.on('end', () => reject(new Error(`DeepSeek API ${res.statusCode}: ${errBody.slice(0, 500)}`)));
                 return;
             }
             res.setEncoding('utf8');
             res.on('data', chunk => {
-                if (aborted) return;
                 buf += chunk;
-                // Split on SSE frame boundary (blank line)
                 let idx;
-                while ((idx = buf.indexOf('\n\n')) !== -1) {
-                    const frame = buf.slice(0, idx);
-                    buf = buf.slice(idx + 2);
-                    let event = 'message';
-                    const dataLines = [];
-                    for (const line of frame.split('\n')) {
-                        if (line.startsWith('event:')) event = line.slice(6).trim();
-                        else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+                while ((idx = buf.indexOf('\n')) !== -1) {
+                    const line = buf.slice(0, idx).trim();
+                    buf = buf.slice(idx + 1);
+                    if (!line.startsWith('data: ')) continue;
+                    const data = line.slice(6).trim();
+                    if (data === '[DONE]') { settle({ toolCalls: Object.values(toolCalls), usage }); return; }
+                    let obj;
+                    try { obj = JSON.parse(data); } catch { continue; }
+                    if (obj.usage) usage = obj.usage;
+                    const choice = obj.choices?.[0];
+                    if (!choice) continue;
+                    const delta = choice.delta || {};
+                    if (delta.content)           callbacks.onDelta?.(delta.content);
+                    if (delta.reasoning_content) callbacks.onThinking?.(delta.reasoning_content);
+                    if (delta.tool_calls) {
+                        for (const tc of delta.tool_calls) {
+                            const i = tc.index ?? 0;
+                            if (!toolCalls[i]) toolCalls[i] = { id: '', name: '', args: '' };
+                            if (tc.id)                  toolCalls[i].id   = tc.id;
+                            if (tc.function?.name)      toolCalls[i].name = tc.function.name;
+                            if (tc.function?.arguments) toolCalls[i].args += tc.function.arguments;
+                        }
                     }
-                    if (dataLines.length === 0) continue;
-                    let payload = {};
-                    try { payload = JSON.parse(dataLines.join('\n')); } catch { continue; }
-                    if (event === 'delta') handlers.onDelta?.(payload.text || '');
-                    else if (event === 'thinking') handlers.onThinking?.(payload.text || '');
-                    else if (event === 'tool_call') handlers.onToolCall?.(payload);
-                    else if (event === 'tool_start') handlers.onToolStart?.(payload);
-                    else if (event === 'tool_result') handlers.onToolResult?.(payload);
-                    else if (event === 'approval_request') handlers.onApprovalRequest?.(payload);
-                    else if (event === 'turn_end') handlers.onTurnEnd?.(payload);
-                    else if (event === 'usage') handlers.onUsage?.(payload);
-                    else if (event === 'plan') handlers.onPlan?.(payload);
-                    else if (event === 'error') handlers.onError?.(payload.message || 'unknown error');
-                    else if (event === 'done') { handlers.onDone?.(); }
+                    if (choice.finish_reason === 'stop') { settle({ toolCalls: [], usage }); return; }
                 }
             });
-            res.on('end', () => { if (!aborted) handlers.onDone?.(); });
-            res.on('error', e => handlers.onError?.(e.message));
+            res.on('end', () => settle({ toolCalls: Object.values(toolCalls), usage }));
+            res.on('error', reject);
         });
-        req.on('error', e => { if (!aborted) handlers.onError?.(e.message); });
-        req.setTimeout(600_000, () => { req.destroy(); handlers.onError?.('stream timed out (600s)'); });
+
+        if (abortSignal) {
+            const onAbort = () => { try { req.destroy(); } catch {} reject(new Error('aborted')); };
+            abortSignal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        req.on('error', reject);
         req.write(body);
         req.end();
+    });
+}
 
-        return () => { aborted = true; try { req.destroy(); } catch {} };
-    }
+// ─── Tool Execution ───────────────────────────────────────────────────────────
 
-    approve(id, decision) {
-        return this._request('POST', '/agent/approve', { id, decision: !!decision });
+function wsRoot() {
+    const f = vscode.workspace.workspaceFolders;
+    return (f && f[0] && f[0].uri.fsPath) || os.homedir();
+}
+
+function resolvePath(p) {
+    if (!p) return wsRoot();
+    if (path.isAbsolute(p)) return p;
+    return path.join(wsRoot(), p);
+}
+
+function toolReadFile(args) {
+    try {
+        const fp = resolvePath(args.path);
+        const text = fs.readFileSync(fp, 'utf8');
+        if (args.start_line || args.end_line) {
+            const lines = text.split('\n');
+            const s = Math.max(0, (args.start_line || 1) - 1);
+            const e = args.end_line || lines.length;
+            return lines.slice(s, e).map((l, i) => `${s + i + 1}: ${l}`).join('\n');
+        }
+        if (text.length > 80000) return text.slice(0, 80000) + '\n... [file truncated at 80 KB]';
+        return text;
+    } catch (e) { return `Error: ${e.message}`; }
+}
+
+function toolListDir(args) {
+    try {
+        const dp = resolvePath(args.path || '.');
+        const entries = fs.readdirSync(dp, { withFileTypes: true });
+        return entries.map(e => e.isDirectory() ? e.name + '/' : e.name).join('\n') || '(empty)';
+    } catch (e) { return `Error: ${e.message}`; }
+}
+
+function toolGrepSearch(args) {
+    try {
+        const root = resolvePath(args.path || '.');
+        // Try ripgrep, fall back to native grep
+        const isWin = process.platform === 'win32';
+        const rgExe = (() => { try { cp.execSync(isWin ? 'where rg' : 'which rg', { stdio: 'pipe' }); return 'rg'; } catch { return null; } })();
+        let cmd;
+        if (rgExe) {
+            const fixed = args.is_regex ? '' : '--fixed-strings';
+            const glob  = args.include ? `--glob "${args.include}"` : '';
+            cmd = `rg ${fixed} --line-number --max-count 3 --max-filesize 1M ${glob} -- "${args.pattern.replace(/"/g, '\\"')}" "${root}"`;
+        } else {
+            const fixed = args.is_regex ? '' : '-F';
+            const inc   = args.include ? `--include="${args.include}"` : '';
+            cmd = isWin
+                ? `findstr /s /n /i /m "${args.pattern}" "${root}\\*"`
+                : `grep -rn ${fixed} ${inc} --max-count=3 -- "${args.pattern.replace(/"/g, '\\"')}" "${root}"`;
+        }
+        const out = cp.execSync(cmd, { cwd: wsRoot(), timeout: 15000, encoding: 'utf8', shell: true });
+        const lines = out.trim().split('\n').slice(0, 50);
+        return lines.join('\n') || '(no matches)';
+    } catch (e) {
+        // grep exits 1 for no match — not an error
+        if (e.status === 1) return '(no matches)';
+        return `Error: ${e.message}`;
     }
 }
 
-// ─── Server Manager ───────────────────────────────────────────────────────────
+function toolWriteFile(args) {
+    try {
+        const fp = resolvePath(args.path);
+        fs.mkdirSync(path.dirname(fp), { recursive: true });
+        fs.writeFileSync(fp, args.content, 'utf8');
+        return `OK: wrote ${args.content.length} chars to ${args.path}`;
+    } catch (e) { return `Error: ${e.message}`; }
+}
 
-class ServerManager {
-    constructor(outputChannel, secrets) {
-        this.outputChannel = outputChannel;
-        this._process      = null;
-        this._status       = 'stopped';
-        this.client        = new ApiClient();
-        this.secrets       = secrets || null;
-    }
-
-    /** Restart the server (used after API key / base URL changes). */
-    async restart() {
-        if (this._process) {
-            try { this._process.kill(); } catch {}
-            this._process = null;
-        }
-        this._status = 'stopped';
-        await wait(400);
-        await this.ensureRunning();
-    }
-
-    get isRunning() { return this._status === 'running'; }
-
-    async ensureRunning() {
-        if (this._status === 'running') return;
-        if (this._status === 'starting') {
-            for (let i = 0; i < 33; i++) {
-                await wait(300);
-                if (this._status === 'running') return;
-            }
-            throw new Error('Server start timed out');
-        }
-        if (await this.probe()) return;
-        await this.start();
-    }
-
-    async start() {
-        if (this._status === 'running' || this._status === 'starting') return;
-        const exe = await this.findServerExecutable();
-        if (!exe) {
-            this._status = 'error';
-            throw new Error(
-                '找不到 deepseek-app-server 可执行文件。\n' +
-                '请先运行：cargo build --release -p deepseek-app-server\n' +
-                '或在设置 deepseekAgent.serverExecutablePath 中指定路径'
-            );
-        }
-
-        const config = vscode.workspace.getConfiguration('deepseekAgent');
-        const port   = config.get('serverPort', 8787);
-        this.client.updatePort(port);
-        this._status = 'starting';
-
-        // Build environment: workspace settings + secret storage override the inherited env.
-        const env = Object.assign({}, process.env);
-        const baseUrl = (config.get('apiBaseUrl') || '').trim();
-        if (baseUrl) env.DEEPSEEK_BASE_URL = baseUrl;
-        if (this.secrets) {
-            try {
-                const k = await this.secrets.get('deepseekAgent.apiKey');
-                if (k) env.DEEPSEEK_API_KEY = k;
-            } catch {}
-        }
-        const keySrc = env.DEEPSEEK_API_KEY ? (this.secrets && (await this.secrets.get('deepseekAgent.apiKey')) ? 'SecretStorage' : 'process env') : 'NONE';
-        this.outputChannel.appendLine(`[DeepSeek] Starting server: ${exe} --port ${port} (key=${keySrc}, base=${env.DEEPSEEK_BASE_URL || 'default'})`);
-
-        this._process = spawn(exe, ['--port', String(port)], {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            env,
+function toolRunShell(args) {
+    try {
+        const out = cp.execSync(args.command, {
+            cwd: wsRoot(),
+            timeout: args.timeout_ms || 30000,
+            encoding: 'utf8',
+            shell: true,
         });
-        this._process.stdout?.on('data', d => this.outputChannel.append(`[server] ${d}`));
-        this._process.stderr?.on('data', d => this.outputChannel.append(`[server:err] ${d}`));
-        this._process.on('exit', code => {
-            this.outputChannel.appendLine(`[DeepSeek] Server exited: ${code}`);
-            this._process = null;
-            this._status  = 'stopped';
-        });
-        this._process.on('error', err => {
-            this.outputChannel.appendLine(`[DeepSeek] Server error: ${err.message}`);
-            this._status = 'error';
-        });
-
-        await this._waitForReady(port);
-    }
-
-    async _waitForReady(port, timeout = 12_000) {
-        const deadline = Date.now() + timeout;
-        while (Date.now() < deadline) {
-            try {
-                await this.client.healthCheck();
-                this._status = 'running';
-                this.outputChannel.appendLine(`[DeepSeek] Server ready on port ${port}`);
-                return;
-            } catch { await wait(300); }
-        }
-        this._status = 'error';
-        throw new Error('Server did not become ready in time');
-    }
-
-    async probe() {
-        const config = vscode.workspace.getConfiguration('deepseekAgent');
-        const port   = config.get('serverPort', 8787);
-        this.client.updatePort(port);
-        try {
-            await this.client.healthCheck();
-            if (this._status !== 'running') this._status = 'running';
-            return true;
-        } catch { return false; }
-    }
-
-    async stop() {
-        if (this._process) { this._process.kill(); this._process = null; }
-        this._status = 'stopped';
-    }
-
-    async findServerExecutable() {
-        const config     = vscode.workspace.getConfiguration('deepseekAgent');
-        const configured = config.get('serverExecutablePath', '');
-        if (configured && fs.existsSync(configured)) return configured;
-
-        const isWin   = process.platform === 'win32';
-        const name    = isWin ? 'deepseek-app-server.exe' : 'deepseek-app-server';
-        const folders = vscode.workspace.workspaceFolders || [];
-
-        for (const folder of folders) {
-            for (const sub of ['target/release', 'target/debug']) {
-                const p = path.join(folder.uri.fsPath, sub, name);
-                if (fs.existsSync(p)) return p;
-            }
-        }
-
-        return new Promise(resolve => {
-            const cmd = isWin ? 'where' : 'which';
-            exec(`${cmd} ${name}`, (err, stdout) => {
-                resolve(!err && stdout.trim() ? stdout.trim().split('\n')[0].trim() : null);
-            });
-        });
+        return (out || '').trim() || '(no output)';
+    } catch (e) {
+        return `Exit ${e.status || 1}: ${(e.stderr || e.message || '').slice(0, 2000)}`;
     }
 }
 
@@ -288,19 +326,21 @@ class ServerManager {
 class ChatViewProvider {
     static viewType = 'deepseek.chatView';
 
-    constructor(context, serverManager) {
-        this._context       = context;
-        this._serverManager = serverManager;
-        this._view          = null;       // WebviewView (sidebar)
-        this._panel         = null;       // WebviewPanel (editor tab)
-        this._threadId      = undefined;
-        this._includeCtx    = false;
-        // Sessions persistence (globalState)
-        this._sessionId     = null;       // current session id (null = unsaved)
-        this._reply         = { user: '', asst: '', thoughts: '' };
+    constructor(context) {
+        this._context    = context;
+        this._view       = null;
+        this._panel      = null;
+        this._includeCtx = false;
+        this._sessionId  = null;
+        this._reply      = { user: '', asst: '', thoughts: '' };
+        // Full OpenAI message history for current conversation (multi-turn tool calls)
+        this._messages   = [];
+        // Abort controller for current stream
+        this._abortCtrl  = null;
+        this._busy       = false;
     }
 
-    // ─── Sessions store (globalState) ─────────────────────────────────
+    // ─── Sessions store (globalState) ──────────────────────────────────
     _currentWs() {
         const f = vscode.workspace.workspaceFolders;
         return (f && f[0] && f[0].uri && f[0].uri.fsPath) || '';
@@ -309,8 +349,7 @@ class ChatViewProvider {
         return this._context.globalState.get('deepseekAgent.sessions', []);
     }
     async _sessionsSet(list) {
-        // cap to 100 most recent
-        list.sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
         if (list.length > 100) list = list.slice(0, 100);
         await this._context.globalState.update('deepseekAgent.sessions', list);
     }
@@ -319,15 +358,8 @@ class ChatViewProvider {
         const list = this._sessionsAll();
         let s = this._sessionId ? list.find(x => x.id === this._sessionId) : null;
         if (!s) {
-            const id = 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,6);
-            s = {
-                id,
-                title: (userText || 'Untitled').slice(0, 40),
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-                ws: this._currentWs(),
-                messages: [],
-            };
+            const id = 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+            s = { id, title: (userText || 'Untitled').slice(0, 40), createdAt: Date.now(), updatedAt: Date.now(), ws: this._currentWs(), messages: [] };
             this._sessionId = id;
             list.unshift(s);
         } else if (!s.ws) {
@@ -336,40 +368,48 @@ class ChatViewProvider {
         const cfg = vscode.workspace.getConfiguration('deepseekAgent');
         s.model = cfg.get('defaultModel') || 'deepseek-v4-pro';
         s.mode  = cfg.get('approvalMode') || 'manual';
-        if (userText) s.messages.push({ role:'user', text: userText });
-        if (asstText || thoughts) s.messages.push({ role:'assistant', text: asstText || '', thoughts: thoughts || '' });
+        if (userText) s.messages.push({ role: 'user', text: userText });
+        if (asstText || thoughts) s.messages.push({ role: 'assistant', text: asstText || '', thoughts: thoughts || '' });
         if (s.messages.length > 200) s.messages = s.messages.slice(-200);
-        const last = s.messages[s.messages.length-1];
-        s.preview = (last && last.text || '').replace(/\s+/g, ' ').slice(0, 80);
-        s.msgCount = s.messages.length;
+        const last = s.messages[s.messages.length - 1];
+        s.preview   = (last && last.text || '').replace(/\s+/g, ' ').slice(0, 80);
+        s.msgCount  = s.messages.length;
         s.updatedAt = Date.now();
         await this._sessionsSet(list);
         this._postSessionList();
     }
     _postSessionList() {
-        this._post({ type:'sessions', currentWs: this._currentWs(), items: this._sessionsAll().map(s => ({
-            id:s.id, title:s.title, preview:s.preview, msgCount:s.msgCount,
-            model:s.model, mode:s.mode, ws:s.ws||'', createdAt:s.createdAt, updatedAt:s.updatedAt,
-        })), activeId: this._sessionId });
+        this._post({
+            type: 'sessions', currentWs: this._currentWs(),
+            items: this._sessionsAll().map(s => ({
+                id: s.id, title: s.title, preview: s.preview, msgCount: s.msgCount,
+                model: s.model, mode: s.mode, ws: s.ws || '', createdAt: s.createdAt, updatedAt: s.updatedAt,
+            })),
+            activeId: this._sessionId,
+        });
     }
     async _sessionLoad(id) {
         const s = this._sessionsAll().find(x => x.id === id);
         if (!s) return;
         this._sessionId = s.id;
-        this._threadId  = undefined; // start a fresh model thread when user continues
-        this._post({ type:'sessionLoaded', id:s.id, messages: s.messages || [] });
+        this._messages  = []; // fresh API context (old tool calls not replayable)
+        // Reconstruct simple user/asst messages for API continuity
+        for (const m of (s.messages || [])) {
+            this._messages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.text || '' });
+        }
+        this._post({ type: 'sessionLoaded', id: s.id, messages: s.messages || [] });
         this._postSessionList();
     }
     async _sessionNew() {
         this._sessionId = null;
-        this._threadId  = undefined;
-        this._reply = { user:'', asst:'', thoughts:'' };
-        this._post({ type:'sessionLoaded', id: null, messages: [] });
+        this._messages  = [];
+        this._reply     = { user: '', asst: '', thoughts: '' };
+        this._post({ type: 'sessionLoaded', id: null, messages: [] });
         this._postSessionList();
     }
     async _sessionDelete(id) {
         let list = this._sessionsAll().filter(x => x.id !== id);
-        if (this._sessionId === id) { this._sessionId = null; this._threadId = undefined; }
+        if (this._sessionId === id) { this._sessionId = null; this._messages = []; }
         await this._sessionsSet(list);
         this._postSessionList();
     }
@@ -383,7 +423,7 @@ class ChatViewProvider {
         this._postSessionList();
     }
 
-    /** Returns the active webview (panel takes priority if both exist). */
+    // ─── Webview wiring ────────────────────────────────────────────────
     get _activeWebview() {
         return this._panel?.webview || this._view?.webview || null;
     }
@@ -392,51 +432,36 @@ class ChatViewProvider {
         this._view = webviewView;
         webviewView.webview.options = {
             enableScripts: true,
-            localResourceRoots: [
-                vscode.Uri.joinPath(this._context.extensionUri, 'media'),
-            ],
+            localResourceRoots: [vscode.Uri.joinPath(this._context.extensionUri, 'media')],
         };
         webviewView.webview.html = buildWebviewHtml();
         webviewView.webview.onDidReceiveMessage(msg => this._onMessage(msg));
-
-        this._serverManager.probe().then(running => {
-            this._post({ type: 'serverStatus', running });
-        });
     }
 
-    /** Bind to an editor-tab WebviewPanel (separate window-style experience). */
     bindPanel(panel) {
         this._panel = panel;
         panel.webview.options = {
             enableScripts: true,
-            localResourceRoots: [
-                vscode.Uri.joinPath(this._context.extensionUri, 'media'),
-            ],
+            localResourceRoots: [vscode.Uri.joinPath(this._context.extensionUri, 'media')],
         };
         panel.webview.html = buildWebviewHtml();
         panel.webview.onDidReceiveMessage(msg => this._onMessage(msg));
         panel.onDidDispose(() => { if (this._panel === panel) this._panel = null; });
-        this._serverManager.probe().then(running => {
-            this._post({ type: 'serverStatus', running });
-        });
     }
 
     _onMessage(msg) {
         switch (msg.type) {
             case 'ready': {
-                this._serverManager.probe().then(r => this._post({ type: 'serverStatus', running: r }));
                 const cfg = vscode.workspace.getConfiguration('deepseekAgent');
-                const model = cfg.get('defaultModel') || 'deepseek-v4-pro';
-                const mode  = cfg.get('approvalMode') || 'manual';
-                this._post({ type: 'modelInfo', model, approvalMode: mode });
+                this._post({ type: 'modelInfo', model: cfg.get('defaultModel') || 'deepseek-v4-pro', approvalMode: cfg.get('approvalMode') || 'manual' });
                 this._postSessionList();
-                // Auto-restore most-recent session for current workspace (Copilot-style)
+                // Auto-restore last workspace session (Copilot-style)
                 if (!this._sessionId) {
                     const ws = this._currentWs();
                     if (ws) {
-                        const list = this._sessionsAll().filter(s => (s.ws||'') === ws);
-                        list.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
-                        if (list[0]) { this._sessionLoad(list[0].id); }
+                        const list = this._sessionsAll().filter(s => (s.ws || '') === ws);
+                        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+                        if (list[0]) this._sessionLoad(list[0].id);
                     }
                 }
                 break;
@@ -467,6 +492,9 @@ class ChatViewProvider {
             case 'send':
                 this._handleSend(msg.text);
                 break;
+            case 'stop':
+                if (this._abortCtrl) { this._abortCtrl.abort(); this._abortCtrl = null; }
+                break;
             case 'insert':
                 this._insertToEditor(msg.code);
                 break;
@@ -475,150 +503,195 @@ class ChatViewProvider {
                     .then(() => vscode.window.setStatusBarMessage('已复制到剪贴板', 2000));
                 break;
             case 'clear':
-                this._threadId = undefined;
+                this._messages = [];
+                this._sessionId = null;
                 break;
             case 'contextToggle':
                 this._includeCtx = !!msg.active;
                 break;
-            case 'approve':
-                this._serverManager.client.approve(msg.id, msg.decision)
-                    .catch(err => this._post({ type: 'error', text: 'approve failed: ' + (err?.message || err) }));
-                break;
         }
     }
 
+    // ─── Agentic Loop ──────────────────────────────────────────────────
     async _handleSend(text) {
-        if (!text?.trim()) return;
+        if (!text?.trim() || this._busy) return;
+        this._busy = true;
 
-        let prompt = text;
+        const apiKey = await this._context.secrets.get('deepseekAgent.apiKey');
+        if (!apiKey) {
+            this._post({ type: 'error', text: '请先设置 API Key — 点击工具栏 🔑 按钮' });
+            this._busy = false;
+            return;
+        }
+
+        const cfg      = vscode.workspace.getConfiguration('deepseekAgent');
+        const model    = cfg.get('defaultModel') || 'deepseek-v4-pro';
+        const baseUrl  = (cfg.get('apiBaseUrl') || '').trim() || 'https://api.deepseek.com';
+        const mode     = cfg.get('approvalMode') || 'manual';
+
+        // Build user content (optionally with active file context)
+        let userContent = text;
         if (this._includeCtx) {
             const ctx = this._buildFileContext();
-            if (ctx) prompt = ctx + '\n\n' + text;
+            if (ctx) userContent = ctx + '\n\n' + text;
         }
 
-        this._post({ type: 'thinking', show: true });
-        this._post({ type: 'status', text: '正在连接服务器…' });
+        this._reply = { user: text, asst: '', thoughts: '' };
+        this._messages.push({ role: 'user', content: userContent });
+
+        this._post({ type: 'replyStart' });
+        this._post({ type: 'status', text: '⚡ 思考中...' });
+
+        this._abortCtrl = new AbortController();
+        const signal    = this._abortCtrl.signal;
+
+        const MAX_ITERS = 15;
+        let iter = 0;
 
         try {
-            await this._serverManager.ensureRunning();
-            this._post({ type: 'status', text: '' });
+            while (iter++ < MAX_ITERS) {
+                const msgs = [{ role: 'system', content: SYSTEM_PROMPT }, ...this._messages];
+                let assistantText = '';
+                let reasoningText = '';
 
-            const config = vscode.workspace.getConfiguration('deepseekAgent');
-            const model  = config.get('defaultModel', 'deepseek-v4-pro');
+                const { toolCalls, usage } = await streamDeepSeek(
+                    { apiKey, baseUrl, messages: msgs, model },
+                    {
+                        onDelta:    t => { assistantText += t; this._reply.asst += t; this._post({ type: 'replyDelta', text: t }); },
+                        onThinking: t => { reasoningText += t; this._reply.thoughts += t; this._post({ type: 'thinkingDelta', text: t }); },
+                    },
+                    signal,
+                );
 
-            // Determine workspace root (first folder).
-            const wsFolders = vscode.workspace.workspaceFolders;
-            const workspaceRoot = wsFolders && wsFolders.length > 0 ? wsFolders[0].uri.fsPath : null;
+                if (usage) {
+                    this._post({ type: 'usage', usage });
+                }
 
-            // Tell webview to open a new streaming reply bubble.
-            this._post({ type: 'replyStart' });
+                if (!toolCalls.length) {
+                    // No tool calls → done
+                    this._messages.push({ role: 'assistant', content: assistantText, ...(reasoningText ? { reasoning_content: reasoningText } : {}) });
+                    break;
+                }
 
-            // Reset accumulator for this turn (will save on done)
-            this._reply = { user: text, asst: '', thoughts: '' };
-
-            await new Promise((resolve) => {
-                let gotAnything = false;
-                this._serverManager.client.streamPrompt(prompt, this._threadId, model, workspaceRoot, {
-                    onDelta: (t) => {
-                        gotAnything = true;
-                        this._reply.asst += (t || '');
-                        this._post({ type: 'replyDelta', text: t });
-                    },
-                    onThinking: (t) => {
-                        this._reply.thoughts += (t || '');
-                        this._post({ type: 'thinkingDelta', text: t });
-                    },
-                    onToolStart: (p) => {
-                        gotAnything = true;
-                        this._post({ type: 'toolStart', id: p.id, name: p.name, args: p.args });
-                    },
-                    onToolResult: (p) => {
-                        this._post({ type: 'toolResult', id: p.id, name: p.name, ok: p.ok, output: p.output });
-                    },
-                    onApprovalRequest: (p) => {
-                        // Apply approval policy from config (manual / auto-edit / autopilot / readonly)
-                        const cfg = vscode.workspace.getConfiguration('deepseekAgent');
-                        const mode = cfg.get('approvalMode') || 'manual';
-                        const allowList = cfg.get('autoApproveTools') || [];
-                        const denyList = cfg.get('denyTools') || [];
-                        const decide = (() => {
-                            if (denyList.includes(p.name)) return false;
-                            if (allowList.includes(p.name)) return true;
-                            if (mode === 'autopilot') return true;
-                            if (mode === 'readonly') return false;
-                            if (mode === 'auto-edit') {
-                                if (p.name === 'write_file') return true;
-                                return null; // shell still asks
-                            }
-                            return null; // manual: ask user
-                        })();
-                        if (decide === true || decide === false) {
-                            // Server-side auto-decision — surface a small notice card so user sees what happened
-                            this._post({ type: 'autoApproval', id: p.id, name: p.name, args: p.args, decision: decide, mode });
-                            this._serverManager.client.approve(p.id, decide).catch(err =>
-                                this._post({ type: 'error', text: 'auto-approve failed: ' + (err?.message || err) }));
-                        } else {
-                            this._post({ type: 'approvalRequest', id: p.id, name: p.name, args: p.args });
-                        }
-                    },
-                    onPlan: (p) => {
-                        this._post({ type: 'plan', steps: p.steps || [] });
-                    },
-                    onUsage: (p) => {
-                        this._post({ type: 'usage', usage: p });
-                    },
-                    onTurnEnd: (p) => {
-                        // After a tool round, the model will speak again. Open a new bubble for the next turn.
-                        if (!p.final) this._post({ type: 'newTurn' });
-                    },
-                    onError: (m) => {
-                        this._post({ type: 'error', text: m });
-                    },
-                    onDone: () => {
-                        this._post({ type: 'replyEnd', empty: !gotAnything });
-                        // Persist this exchange to the session store
-                        const r = this._reply;
-                        if (r.user || r.asst) this._appendToCurrentSession(r.user, r.asst, r.thoughts);
-                        this._reply = { user:'', asst:'', thoughts:'' };
-                        resolve();
-                    },
+                // Append assistant message WITH tool_calls (required for API continuity)
+                this._messages.push({
+                    role: 'assistant',
+                    content: assistantText || null,
+                    ...(reasoningText ? { reasoning_content: reasoningText } : {}),
+                    tool_calls: toolCalls.map(tc => ({
+                        id: tc.id, type: 'function',
+                        function: { name: tc.name, arguments: tc.args },
+                    })),
                 });
-            });
-        } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            this._post({ type: 'error', text: errMsg });
-        } finally {
-            this._post({ type: 'thinking', show: false });
-            this._serverManager.probe().then(r => this._post({ type: 'serverStatus', running: r }));
+
+                // Signal webview to finish current bubble and prepare for continuation
+                this._post({ type: 'newTurn' });
+
+                // Execute each tool
+                for (const tc of toolCalls) {
+                    let args;
+                    try { args = JSON.parse(tc.args || '{}'); } catch { args = {}; }
+
+                    this._post({ type: 'toolStart', id: tc.id, name: tc.name, args });
+
+                    let result = '';
+                    try {
+                        result = await this._executeTool(tc.name, args, mode);
+                    } catch (e) {
+                        result = `Error: ${e.message}`;
+                    }
+
+                    this._post({ type: 'toolResult', id: tc.id, name: tc.name, ok: !result.startsWith('Error'), output: result.slice(0, 600) });
+
+                    this._messages.push({
+                        role: 'tool',
+                        tool_call_id: tc.id,
+                        content: String(result),
+                    });
+                }
+            }
+        } catch (e) {
+            if (e.message !== 'aborted') {
+                this._post({ type: 'error', text: e.message });
+            }
+        }
+
+        this._post({ type: 'replyEnd', empty: false });
+        this._post({ type: 'status', text: '' });
+        this._abortCtrl = null;
+        this._busy = false;
+
+        const r = this._reply;
+        if (r.user || r.asst) await this._appendToCurrentSession(r.user, r.asst, r.thoughts);
+        this._reply = { user: '', asst: '', thoughts: '' };
+    }
+
+    // ─── Tool Dispatcher ───────────────────────────────────────────────
+    async _executeTool(name, args, approvalMode) {
+        // Read-only mode: block all writes
+        if (approvalMode === 'readonly' && (name === 'write_file' || name === 'run_shell')) {
+            return 'Denied: Read-Only mode is active.';
+        }
+
+        // Approval for write_file
+        if (name === 'write_file' && approvalMode === 'manual') {
+            const ok = await this._requestApproval(`Write file: ${args.path}`);
+            if (!ok) return 'Denied by user.';
+        }
+
+        // Approval for run_shell
+        if (name === 'run_shell' && (approvalMode === 'manual' || approvalMode === 'auto-edit')) {
+            if (approvalMode === 'manual') {
+                const ok = await this._requestApproval(`Run: ${args.command}`);
+                if (!ok) return 'Denied by user.';
+            }
+            // auto-edit: allow run_shell without prompt
+        }
+
+        switch (name) {
+            case 'read_file':   return toolReadFile(args);
+            case 'list_dir':    return toolListDir(args);
+            case 'grep_search': return toolGrepSearch(args);
+            case 'write_file':  return toolWriteFile(args);
+            case 'run_shell':   return toolRunShell(args);
+            case 'update_plan':
+                this._post({ type: 'plan', steps: args.plan || [], todos: args.todos || [] });
+                return 'Plan updated.';
+            default:
+                return `Unknown tool: ${name}`;
         }
     }
 
+    async _requestApproval(description) {
+        const answer = await vscode.window.showInformationMessage(
+            `DeepPilot wants to: ${description}`,
+            { modal: true },
+            'Approve', 'Deny',
+        );
+        return answer === 'Approve';
+    }
+
+    // ─── Helpers ───────────────────────────────────────────────────────
     _buildFileContext() {
         const editor = vscode.window.activeTextEditor;
         if (!editor) return null;
-
-        const doc      = editor.document;
-        const fileName = path.basename(doc.fileName);
-        const lang     = doc.languageId;
-        const sel      = editor.selection;
-
+        const doc  = editor.document;
+        const sel  = editor.selection;
+        const lang = doc.languageId;
+        const name = path.basename(doc.fileName);
         if (!sel.isEmpty) {
             const selected = doc.getText(sel);
-            return `当前选中的代码（${fileName}，${lang}）：\n\`\`\`${lang}\n${selected}\n\`\`\``;
+            return `Selected code (${name}, ${lang}):\n\`\`\`${lang}\n${selected}\n\`\`\``;
         }
-
         const range   = editor.visibleRanges[0];
         const visible = doc.getText(range).substring(0, 3000);
-        return `当前文件（${fileName}，${lang}）可见内容：\n\`\`\`${lang}\n${visible}\n\`\`\``;
+        return `Current file (${name}, ${lang}):\n\`\`\`${lang}\n${visible}\n\`\`\``;
     }
 
     _insertToEditor(code) {
         const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            vscode.window.showWarningMessage('请先在编辑器中打开一个文件');
-            return;
-        }
-        editor.edit(builder => builder.replace(editor.selection, code));
+        if (!editor) { vscode.window.showWarningMessage('请先在编辑器中打开一个文件'); return; }
+        editor.edit(b => b.replace(editor.selection, code));
         vscode.window.setStatusBarMessage('✓ 代码已插入编辑器', 2500);
     }
 
@@ -627,11 +700,8 @@ class ChatViewProvider {
         try {
             const folders = vscode.workspace.workspaceFolders || [];
             const tries = [];
-            // Absolute path
             if (path.isAbsolute(p)) tries.push(vscode.Uri.file(p));
-            // Workspace-relative for each folder
             for (const f of folders) tries.push(vscode.Uri.joinPath(f.uri, p));
-            // findFiles fallback (basename match)
             let target = null;
             for (const u of tries) {
                 try { await vscode.workspace.fs.stat(u); target = u; break; } catch {}
@@ -645,10 +715,7 @@ class ChatViewProvider {
                     if (c) target = c.uri;
                 }
             }
-            if (!target) {
-                vscode.window.showWarningMessage(`找不到文件：${p}`);
-                return;
-            }
+            if (!target) { vscode.window.showWarningMessage(`找不到文件：${p}`); return; }
             const opts = {};
             if (line && line > 0) {
                 const pos = new vscode.Position(Math.max(0, line - 1), 0);
@@ -665,8 +732,6 @@ class ChatViewProvider {
         if (wv) wv.postMessage(msg);
     }
 }
-
-// ─── Inline Webview HTML ──────────────────────────────────────────────────────
 
 function buildWebviewHtml() {
     // Use a string array + join to avoid template literal escaping issues with regex
@@ -1485,9 +1550,7 @@ function buildWebviewHtml() {
 // ─── Activate ─────────────────────────────────────────────────────────────────
 
 function activate(context) {
-    const output        = vscode.window.createOutputChannel('DeepSeek Agent');
-    const serverManager = new ServerManager(output, context.secrets);
-    const chatProvider  = new ChatViewProvider(context, serverManager);
+    const chatProvider = new ChatViewProvider(context);
 
     // ─── API key / base URL management ────────────────────────────────────
     context.subscriptions.push(
@@ -1496,7 +1559,7 @@ function activate(context) {
             const key = await vscode.window.showInputBox({
                 prompt: '输入 DeepSeek API Key（保存到 VS Code SecretStorage，不会写入 settings.json）',
                 placeHolder: 'sk-...',
-                value: existing ? '' : '',
+                value: existing || '',
                 password: true,
                 ignoreFocusOut: true,
             });
@@ -1506,9 +1569,8 @@ function activate(context) {
                 vscode.window.showInformationMessage('已删除 DeepSeek API Key');
             } else {
                 await context.secrets.store('deepseekAgent.apiKey', key.trim());
-                vscode.window.showInformationMessage('✅ DeepSeek API Key 已保存。正在重启后端…');
+                vscode.window.showInformationMessage('✅ DeepSeek API Key 已保存，立即生效。');
             }
-            await serverManager.restart().catch(e => vscode.window.showErrorMessage('重启失败：' + e.message));
         }),
         vscode.commands.registerCommand('deepseekAgent.setBaseUrl', async () => {
             const cfg = vscode.workspace.getConfiguration('deepseekAgent');
@@ -1518,9 +1580,9 @@ function activate(context) {
                     { label: '🌍 国际版（默认）', description: 'https://api.deepseek.com', value: 'https://api.deepseek.com' },
                     { label: '🇨🇳 中国大陆', description: 'https://api.deepseeki.com', value: 'https://api.deepseeki.com' },
                     { label: '✏️ 自定义…', description: '手动输入 URL', value: '__custom__' },
-                    { label: '↩ 清空（用配置文件 / 默认）', description: '', value: '' },
+                    { label: '↩ 清空（用默认国际版）', description: '', value: '' },
                 ],
-                { placeHolder: `当前：${cur || '默认'}` }
+                { placeHolder: `当前：${cur || '默认（国际版）'}` }
             );
             if (!choice) return;
             let url = choice.value;
@@ -1528,34 +1590,33 @@ function activate(context) {
                 url = await vscode.window.showInputBox({
                     prompt: '输入 OpenAI 兼容 Base URL',
                     value: cur,
-                    placeHolder: 'https://api.example.com/v1',
+                    placeHolder: 'https://api.example.com',
                     ignoreFocusOut: true,
                 });
                 if (url === undefined) return;
             }
             await cfg.update('apiBaseUrl', url, vscode.ConfigurationTarget.Global);
-            vscode.window.showInformationMessage(`✅ Base URL = ${url || '(默认)'}。正在重启后端…`);
-            await serverManager.restart().catch(e => vscode.window.showErrorMessage('重启失败：' + e.message));
-        }),
-        vscode.commands.registerCommand('deepseekAgent.restartServer', async () => {
-            try { await serverManager.restart(); vscode.window.showInformationMessage('✅ 后端已重启'); }
-            catch (e) { vscode.window.showErrorMessage('重启失败：' + e.message); }
+            vscode.window.showInformationMessage(`✅ Base URL = ${url || '(国际版默认)'}`);
         }),
         vscode.commands.registerCommand('deepseekAgent.showApiStatus', async () => {
             const cfg = vscode.workspace.getConfiguration('deepseekAgent');
             const key = await context.secrets.get('deepseekAgent.apiKey');
-            const envKey = process.env.DEEPSEEK_API_KEY;
             const lines = [
-                `**API Key**：${key ? '✅ 已设置（SecretStorage）' : (envKey ? '⚠ 仅来自环境变量' : '❌ 未设置')}`,
-                `**Base URL**：${cfg.get('apiBaseUrl') || '默认（api.deepseek.com 或配置文件）'}`,
-                `**模型**：${cfg.get('defaultModel')}`,
-                `**端口**：${cfg.get('serverPort')}`,
-                `**批准策略**：${cfg.get('approvalMode')}`,
+                `**API Key**：${key ? '✅ 已设置' : '❌ 未设置（点击「设置 Key」）'}`,
+                `**Base URL**：${cfg.get('apiBaseUrl') || 'https://api.deepseek.com（默认）'}`,
+                `**模型**：${cfg.get('defaultModel') || 'deepseek-v4-pro'}`,
+                `**批准策略**：${cfg.get('approvalMode') || 'manual'}`,
             ];
-            const action = await vscode.window.showInformationMessage(lines.join(' · '), '设置 API Key', '切换 Base URL', '重启后端');
+            const action = await vscode.window.showInformationMessage(lines.join(' · '), '设置 API Key', '切换 Base URL');
             if (action === '设置 API Key') vscode.commands.executeCommand('deepseekAgent.setApiKey');
             else if (action === '切换 Base URL') vscode.commands.executeCommand('deepseekAgent.setBaseUrl');
-            else if (action === '重启后端') vscode.commands.executeCommand('deepseekAgent.restartServer');
+        }),
+        // Keep old commands registered so package.json doesn't break
+        vscode.commands.registerCommand('deepseekAgent.restartServer', () => {
+            vscode.window.showInformationMessage('DeepPilot 是独立扩展，无需后端服务器。');
+        }),
+        vscode.commands.registerCommand('deepseekAgent.openTerminal', () => {
+            vscode.window.showInformationMessage('DeepPilot 独立版不需要 TUI 终端。');
         }),
     );
 
@@ -1571,287 +1632,54 @@ function activate(context) {
     // Open sidebar command
     context.subscriptions.push(
         vscode.commands.registerCommand('deepseekAgent.open', () => {
-            vscode.commands.executeCommand('workbench.view.extension.deepseek-sidebar');
+            vscode.commands.executeCommand('workbench.view.extension.deeppilot-sidebar');
         })
     );
 
-    // Open as a dedicated editor tab — looks like a separate "window" right
-    // next to Copilot Chat. The user can then drag this tab to a split group
-    // (right pane) to make it feel like a permanent right-side panel.
+    // Open as dedicated editor tab
     let activeTabPanel = null;
     context.subscriptions.push(
         vscode.commands.registerCommand('deepseekAgent.openInTab', () => {
-            if (activeTabPanel) {
-                activeTabPanel.reveal(vscode.ViewColumn.Beside, false);
-                return;
-            }
+            if (activeTabPanel) { activeTabPanel.reveal(vscode.ViewColumn.Beside, false); return; }
             const panel = vscode.window.createWebviewPanel(
-                'deepseek.chatPanel',
-                'DeepSeek Agent',
+                'deepseek.chatPanel', 'DeepPilot',
                 { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
-                {
-                    enableScripts: true,
-                    retainContextWhenHidden: true,
-                    localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
-                }
+                { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] }
             );
-            try {
-                panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.svg');
-            } catch (_) { /* optional */ }
+            try { panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.svg'); } catch (_) {}
             activeTabPanel = panel;
             panel.onDidDispose(() => { if (activeTabPanel === panel) activeTabPanel = null; });
             chatProvider.bindPanel(panel);
-        })
-    );
-
-    // Open full TUI in terminal
-    context.subscriptions.push(
-        vscode.commands.registerCommand('deepseekAgent.openTerminal', () => {
-            openTuiTerminal();
-        })
-    );
-
-    // Move-to-right helper: opens the auxiliary (right) side bar so the user
-    // can drag the DeepSeek icon there. VS Code does not expose a public API
-    // for third-party extensions to default-locate a view in the secondary
-    // side bar, so we make the manual step as painless as possible.
-    context.subscriptions.push(
+        }),
         vscode.commands.registerCommand('deepseekAgent.moveToRight', async () => {
-            // Make sure the auxiliary bar is visible.
-            try { await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar'); }
-            catch (_) {
-                try { await vscode.commands.executeCommand('workbench.action.toggleAuxiliaryBar'); }
-                catch (_) { /* ignore */ }
-            }
-            // Also reveal our view in its current container.
-            try { await vscode.commands.executeCommand('workbench.view.extension.deepseek-sidebar'); }
-            catch (_) { /* ignore */ }
-            const pick = await vscode.window.showInformationMessage(
-                'DeepSeek 侧栏要放到右侧（像 Copilot Chat 一样）？\n请把活动栏左侧的 ⚡ DeepSeek 图标用鼠标拖到右侧的 Secondary Side Bar 即可。这一步只需做一次，VS Code 会记住位置。',
-                { modal: false },
-                '我知道了',
-                '不再提示'
-            );
-            if (pick === '不再提示') {
-                await context.globalState.update('deepseekAgent.hideMoveHint', true);
-            }
-        })
+            try { await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar'); } catch (_) {}
+            try { await vscode.commands.executeCommand('workbench.view.extension.deeppilot-sidebar'); } catch (_) {}
+            vscode.window.showInformationMessage('把活动栏的 ⚡ 图标拖到右侧 Secondary Side Bar 即可，VS Code 会记住位置。');
+        }),
     );
-
-    // First-run prompt: nudge users towards the new tab experience.
-    if (!context.globalState.get('deepseekAgent.hideMoveHint', false) &&
-        !context.globalState.get('deepseekAgent.tabPrompted_v0_9', false)) {
-        context.globalState.update('deepseekAgent.tabPrompted_v0_9', true);
-        setTimeout(() => {
-            vscode.window.showInformationMessage(
-                'DeepSeek Agent v0.9 已安装。要现在在一个独立标签页里打开它吗（类似 Copilot Chat 的效果）？',
-                '在新标签页打开',
-                '用侧栏',
-                '不再提示'
-            ).then((pick) => {
-                if (pick === '在新标签页打开') {
-                    vscode.commands.executeCommand('deepseekAgent.openInTab');
-                } else if (pick === '用侧栏') {
-                    vscode.commands.executeCommand('deepseekAgent.open');
-                } else if (pick === '不再提示') {
-                    context.globalState.update('deepseekAgent.hideMoveHint', true);
-                }
-            });
-        }, 1500);
-    }
 
     // Status bar button
-    const statusItem   = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    statusItem.text    = '$(robot) DeepSeek';
-    statusItem.tooltip = '点击打开 DeepSeek Agent（侧栏：Ctrl+Shift+D / 独立窗口：Ctrl+Shift+L）';
+    const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    statusItem.text    = '$(robot) DeepPilot';
+    statusItem.tooltip = '点击打开 DeepPilot';
     statusItem.command = 'deepseekAgent.openInTab';
     statusItem.show();
     context.subscriptions.push(statusItem);
 
-    // ─── Chat Participant (lives inside VS Code's built-in Chat panel) ──────
-    // Lets users do `@deepseek your question` from the same right-side chat
-    // panel that hosts Copilot Chat, Cline, etc.
-    if (vscode.chat && typeof vscode.chat.createChatParticipant === 'function') {
-        const participant = vscode.chat.createChatParticipant(
-            'deepseek-agent.deepseek',
-            (request, chatContext, response, token) => chatHandler(serverManager, request, chatContext, response, token)
-        );
-        try {
-            participant.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.svg');
-        } catch (_) { /* optional */ }
-        context.subscriptions.push(participant);
-        output.appendLine('[DeepSeek] Chat participant registered as @deepseek');
-    } else {
-        output.appendLine('[DeepSeek] vscode.chat API unavailable — chat participant disabled (need VS Code 1.95+)');
-    }
-}
-
-// ─── Chat Participant handler ────────────────────────────────────────────────
-
-// Single thread id reused across turns within the active chat session. Reset
-// whenever a session starts fresh (history.length === 0) or `/clear` is used.
-let _chatThreadId = null;
-
-async function chatHandler(serverManager, request, chatContext, response, token) {
-    // Slash commands.
-    if (request.command === 'clear') {
-        _chatThreadId = null;
-        response.markdown('🧹 已清空 DeepSeek 会话上下文（下条消息开启新会话）。');
-        return;
-    }
-    if (request.command === 'doctor') {
-        const running = await serverManager.probe();
-        const cfg = vscode.workspace.getConfiguration('deepseekAgent');
-        const port = cfg.get('serverPort') || 8787;
-        const model = cfg.get('defaultModel') || 'deepseek-v4-pro';
-        const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '(无)';
-        const apiKey = process.env.DEEPSEEK_API_KEY ? '✅ 已设置' : '❌ 未设置（需要 `setx DEEPSEEK_API_KEY ...`）';
-        response.markdown(
-            `**DeepSeek Agent 状态**\n\n` +
-            `- 后端: ${running ? '✅ 运行中' : '⏸ 未启动（首次发送会自动启动）'}\n` +
-            `- 端口: \`${port}\`\n` +
-            `- 模型: \`${model}\`\n` +
-            `- 工作区: \`${ws}\`\n` +
-            `- API Key: ${apiKey}\n`
-        );
-        return;
-    }
-
-    // Make sure backend is alive.
-    try {
-        response.progress('启动后端…');
-        await serverManager.ensureRunning();
-    } catch (e) {
-        response.markdown(`**无法启动 deepseek-app-server：** ${e?.message || e}\n\n请先 \`cargo build --release -p deepseek-app-server\` 并设置 \`DEEPSEEK_API_KEY\` 环境变量。`);
-        return;
-    }
-
-    const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const cfg = vscode.workspace.getConfiguration('deepseekAgent');
-    const model = cfg.get('defaultModel') || 'deepseek-v4-pro';
-
-    // Stable thread id within a chat session.
-    if (!chatContext.history || chatContext.history.length === 0 || !_chatThreadId) {
-        _chatThreadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    }
-    const threadId = _chatThreadId;
-
-    // Build the prompt — optionally include current selection / active file.
-    let prompt = request.prompt || '';
-    const editor = vscode.window.activeTextEditor;
-    if (editor && !editor.selection.isEmpty) {
-        const sel = editor.document.getText(editor.selection);
-        if (sel && sel.length < 6000) {
-            prompt += `\n\n[来自当前编辑器选区 ${path.basename(editor.document.fileName)}]\n\u0060\u0060\u0060\n${sel}\n\u0060\u0060\u0060`;
+    // First-run: prompt for API key
+    context.secrets.get('deepseekAgent.apiKey').then(key => {
+        if (!key && !context.globalState.get('deepseekAgent.keyPrompted')) {
+            context.globalState.update('deepseekAgent.keyPrompted', true);
+            setTimeout(() => {
+                vscode.window.showInformationMessage(
+                    'DeepPilot 已安装！请先设置 DeepSeek API Key 才能开始使用。',
+                    '设置 API Key', '稍后'
+                ).then(pick => {
+                    if (pick === '设置 API Key') vscode.commands.executeCommand('deepseekAgent.setApiKey');
+                });
+            }, 1500);
         }
-    }
-
-    response.progress('思考中…');
-
-    let abortFn = null;
-    let thinkBuf = '';
-    let pendingApprovals = 0;
-    let lastUsage = null;
-    let lastPlan = null;
-
-    await new Promise((resolve) => {
-        let done = false;
-        const finish = () => { if (!done) { done = true; resolve(); } };
-
-        abortFn = serverManager.client.streamPrompt(prompt, threadId, model, wsRoot, {
-            onDelta: (t) => {
-                if (t) response.markdown(t);
-            },
-            onThinking: (t) => {
-                thinkBuf += t;
-                // Show a rolling tail of the thinking stream as progress text.
-                const tail = thinkBuf.replace(/\s+/g, ' ').trim().slice(-80);
-                response.progress(`🤔 ${tail}`);
-            },
-            onToolStart: ({ name, args }) => {
-                const argPreview = (args && args !== '{}') ? ` \`${String(args).slice(0, 100)}\`` : '';
-                response.markdown(`\n\n> 🔧 调用工具 \`${name}\`${argPreview}\n`);
-            },
-            onToolResult: ({ name, ok, output }) => {
-                // Plan results are rendered separately via onPlan; suppress here.
-                if (name === 'update_plan') return;
-                const head = ok ? '✅' : '❌';
-                const out = String(output || '');
-                const truncated = out.length > 1200 ? out.slice(0, 1200) + '\n...(已截断)' : out;
-                response.markdown(`\n> ${head} \`${name}\` ${ok ? '完成' : '失败'}\n\n\`\`\`\n${truncated}\n\`\`\`\n\n`);
-            },
-            onPlan: ({ steps }) => {
-                lastPlan = steps || [];
-                if (!lastPlan.length) return;
-                const icon = (s) => ({
-                    pending: '⬜', in_progress: '🔄', done: '✅', blocked: '🚧',
-                }[s] || '⬜');
-                const lines = lastPlan.map(s => `${icon(s.status)} ${s.title}`).join('\n');
-                response.markdown(`\n\n**📋 计划 / Todos**\n\n${lines}\n\n`);
-            },
-            onUsage: (u) => { lastUsage = u; },
-            onApprovalRequest: async ({ id, name, args }) => {
-                // Auto-approve in chat-participant mode (the user explicitly
-                // invoked an agent, they've consented to tool execution).
-                pendingApprovals++;
-                response.markdown(`\n> ⚠️ 自动批准敏感工具 \`${name}\`（聊天模式下默认放行）\n`);
-                try { await serverManager.client.approve(id, true); } catch (_) {}
-                pendingApprovals--;
-            },
-            onError: (msg) => {
-                response.markdown(`\n\n**错误：** ${msg}\n`);
-            },
-            onTurnEnd: () => { /* between agent steps */ },
-            onDone: finish,
-        });
-
-        token.onCancellationRequested(() => {
-            try { abortFn && abortFn(); } catch (_) {}
-            response.markdown('\n\n_（已取消）_');
-            finish();
-        });
     });
-
-    // Footer: token + cost + thinking time.
-    if (lastUsage) {
-        const cost = (lastUsage.cost_cny || 0).toFixed(4);
-        const think = lastUsage.thinking_ms ? ` · 🤔 ${(lastUsage.thinking_ms / 1000).toFixed(1)}s` : '';
-        const reasoning = lastUsage.reasoning_tokens ? ` (含推理 ${lastUsage.reasoning_tokens})` : '';
-        response.markdown(
-            `\n\n---\n` +
-            `_📊 ${lastUsage.prompt_tokens} in · ${lastUsage.completion_tokens}${reasoning} out · ` +
-            `共 ${lastUsage.total_tokens} tokens · ¥${cost}${think}_\n`
-        );
-    }
-
-    return { metadata: { threadId } };
 }
-
-function openTuiTerminal() {
-    const isWin   = process.platform === 'win32';
-    const exeName = isWin ? 'deepseek.exe' : 'deepseek';
-    const folders = vscode.workspace.workspaceFolders || [];
-
-    let found = null;
-    for (const f of folders) {
-        for (const sub of ['target/release', 'target/debug']) {
-            const p = path.join(f.uri.fsPath, sub, exeName);
-            if (fs.existsSync(p)) { found = p; break; }
-        }
-        if (found) break;
-    }
-    if (!found) found = path.join(os.homedir(), '.cargo', 'bin', exeName);
-
-    vscode.window.createTerminal({
-        name:      'DeepSeek TUI',
-        shellPath: found,
-        iconPath:  new vscode.ThemeIcon('robot'),
-        cwd:       folders[0]?.uri.fsPath || os.homedir(),
-    }).show();
-}
-
-function deactivate() {}
-
-function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 module.exports = { activate, deactivate };
