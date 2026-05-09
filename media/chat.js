@@ -95,6 +95,49 @@
       });
     return x;
   }
+
+  /* ─── #4 Phase 2: terminal-style block for shell langs ──────────── */
+  var SHELL_LANGS = { bash:1, sh:1, zsh:1, shell:1, console:1, terminal:1, powershell:1, ps1:1, ps:1, pwsh:1, cmd:1, bat:1, batch:1, dos:1 };
+  function isShellLang(L){ return !!SHELL_LANGS[String(L||"").toLowerCase()]; }
+  function shellPrompt(L){
+    L = String(L||"").toLowerCase();
+    if (L === "powershell" || L === "ps1" || L === "ps" || L === "pwsh") return "PS&gt;";
+    if (L === "cmd" || L === "bat" || L === "batch" || L === "dos") return "&gt;";
+    return "$";
+  }
+  function buildCodeBlock(c){
+    var b64 = encodeURIComponent(c.raw);
+    if (isShellLang(c.L)){
+      var prompt = shellPrompt(c.L);
+      /* Render each line with the prompt prefix; preserve continuation lines (those starting with whitespace or after backslash) without prompt. */
+      var rawLines = c.raw.split(/\r?\n/);
+      var body = "";
+      for (var i = 0; i < rawLines.length; i++){
+        var lnRaw = rawLines[i];
+        var prev = i > 0 ? rawLines[i-1] : "";
+        var continued = i > 0 && /\\\s*$/.test(prev);
+        var blank = lnRaw.trim() === "";
+        if (blank){ body += "\n"; continue; }
+        if (continued){ body += "  " + escHtml(lnRaw) + "\n"; }
+        else { body += "<span class=\"tprom\">" + prompt + "</span> " + escHtml(lnRaw) + "\n"; }
+      }
+      return "<pre class=\"cb tb\" data-code=\"" + b64 + "\" data-lang=\"" + escHtml(c.L) + "\">" +
+        "<div class=\"cb-h\">" +
+          "<span class=\"lang\">\u25B6 " + escHtml(c.L) + "</span>" +
+          "<button class=\"cb-run\" title=\"\u5728 VS Code \u7ec8\u7aef\u8fd0\u884c\">\u25B6 \u8fd0\u884c</button>" +
+          "<button class=\"cb-term\" title=\"\u63d2\u5165\u7ec8\u7aef\u4f46\u4e0d\u6267\u884c\">\u2192 \u63d2\u5165\u7ec8\u7aef</button>" +
+          "<button class=\"cb-copy\">\u590d\u5236</button>" +
+        "</div>" +
+        "<code>" + body + "</code></pre>";
+    }
+    return "<pre class=\"cb\" data-code=\"" + b64 + "\" data-lang=\"" + escHtml(c.L) + "\">" +
+      "<div class=\"cb-h\">" +
+        "<span class=\"lang\">" + escHtml(c.L) + "</span>" +
+        "<button class=\"cb-copy\">\u590d\u5236</button>" +
+        "<button class=\"cb-insert\">\u63d2\u5165\u7f16\u8f91\u5668</button>" +
+      "</div><code>" + c.raw + "</code></pre>";
+  }
+
   function renderMd(s){
     /* Step 1: extract fenced code blocks as placeholders */
     var codes = [];
@@ -113,8 +156,7 @@
       /* If a paragraph is JUST a code-block placeholder, emit it raw */
       var only = joined.match(/^\s*\u0000CB(\d+)\u0000\s*$/);
       if (only){
-        var c = codes[+only[1]], b64 = encodeURIComponent(c.raw);
-        out.push("<pre class=\"cb\" data-code=\"" + b64 + "\"><div class=\"cb-h\"><span class=\"lang\">" + escHtml(c.L) + "</span><button class=\"cb-copy\">复制</button><button class=\"cb-insert\">插入</button></div><code>" + c.raw + "</code></pre>");
+        out.push(buildCodeBlock(codes[+only[1]]));
       } else {
         out.push("<p>" + renderInline(joined) + "</p>");
       }
@@ -139,8 +181,7 @@
       if (/^\s*\u0000CB\d+\u0000\s*$/.test(ln)){
         flushPara();
         var idx = +ln.match(/\u0000CB(\d+)\u0000/)[1];
-        var cc = codes[idx], b64b = encodeURIComponent(cc.raw);
-        out.push("<pre class=\"cb\" data-code=\"" + b64b + "\"><div class=\"cb-h\"><span class=\"lang\">" + escHtml(cc.L) + "</span><button class=\"cb-copy\">复制</button><button class=\"cb-insert\">插入</button></div><code>" + cc.raw + "</code></pre>");
+        out.push(buildCodeBlock(codes[idx]));
         i++; continue;
       }
       /* Table: header | sep */
@@ -602,6 +643,24 @@
       vscode.postMessage({type:"insert", code: code2});
       var orig2 = t.textContent; t.textContent = "✓ 已插入";
       setTimeout(function(){ t.textContent = orig2; }, 1500);
+      return;
+    }
+    if (t.classList.contains("cb-term")){
+      var preT = t.closest("pre.cb"); if (!preT) return;
+      var codeT = decodeURIComponent(preT.getAttribute("data-code") || "");
+      var langT = preT.getAttribute("data-lang") || "";
+      vscode.postMessage({type:"insertTerminal", code: codeT, lang: langT});
+      var origT = t.textContent; t.textContent = "✓ 已插入";
+      setTimeout(function(){ t.textContent = origT; }, 1500);
+      return;
+    }
+    if (t.classList.contains("cb-run")){
+      var preR = t.closest("pre.cb"); if (!preR) return;
+      var codeR = decodeURIComponent(preR.getAttribute("data-code") || "");
+      var langR = preR.getAttribute("data-lang") || "";
+      vscode.postMessage({type:"runTerminal", code: codeR, lang: langR});
+      var origR = t.textContent; t.textContent = "▶ 运行中…";
+      setTimeout(function(){ t.textContent = origR; }, 1800);
       return;
     }
     var a = t.closest && t.closest("a.flink");

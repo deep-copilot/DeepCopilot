@@ -498,6 +498,12 @@ class ChatViewProvider {
             case 'insert':
                 this._insertToEditor(msg.code);
                 break;
+            case 'insertTerminal':
+                this._sendToTerminal(msg.code, false);
+                break;
+            case 'runTerminal':
+                this._sendToTerminal(msg.code, true);
+                break;
             case 'copy':
                 vscode.env.clipboard.writeText(msg.code)
                     .then(() => vscode.window.setStatusBarMessage('已复制到剪贴板', 2000));
@@ -723,6 +729,21 @@ class ChatViewProvider {
         if (!editor) { vscode.window.showWarningMessage('请先在编辑器中打开一个文件'); return; }
         editor.edit(b => b.replace(editor.selection, code));
         vscode.window.setStatusBarMessage('✓ 代码已插入编辑器', 2500);
+    }
+
+    // Send a shell command to a VS Code integrated terminal.
+    // execute=true   → also press Enter (Run)
+    // execute=false  → only insert text (Insert into Terminal)
+    _sendToTerminal(code, execute) {
+        if (!code) return;
+        // Reuse a dedicated terminal so consecutive runs share history
+        const NAME = 'Deep Copilot';
+        let term = vscode.window.terminals.find(t => t.name === NAME);
+        if (!term) term = vscode.window.createTerminal({ name: NAME, cwd: wsRoot() });
+        term.show(true);
+        // Strip leading "$ " or "PS> " prompts that the model might include
+        const cleaned = code.split(/\r?\n/).map(l => l.replace(/^\s*(?:PS\s*[A-Za-z]?:?[^>]*>\s*|[#$]\s+)/, '')).join('\n');
+        term.sendText(cleaned, !!execute);
     }
 
     async _openFile(p, line) {

@@ -159,3 +159,16 @@ body.narrow #left,body.narrow #right{display:none}
 @keyframes tcur-blink{50%{opacity:0}}
 #sbtn.stop{background:var(--vscode-errorForeground,#f48771);color:#fff;font-size:14px}
 #sbtn.stop:hover{opacity:.9}
+
+/* ── #4 Phase 2: terminal-style code block ── */
+.msgC pre.cb.tb{background:#0c0c0c;border:1px solid #2a2a2a;color:#d4d4d4}
+.msgC pre.cb.tb .cb-h{background:#1a1a1a;color:#888;border-bottom:1px solid #2a2a2a}
+.msgC pre.cb.tb .cb-h .lang{color:#7ec99a;font-weight:600;font-family:var(--vscode-editor-font-family,monospace);text-transform:lowercase}
+.msgC pre.cb.tb .cb-h button{color:#bbb}
+.msgC pre.cb.tb .cb-h button:hover{background:rgba(255,255,255,.08);color:#fff}
+.msgC pre.cb.tb .cb-h button.cb-run{color:#7ec99a;font-weight:600}
+.msgC pre.cb.tb .cb-h button.cb-run:hover{background:rgba(126,201,154,.15)}
+.msgC pre.cb.tb .cb-h button.cb-term{color:#e8b86d}
+.msgC pre.cb.tb .cb-h button.cb-term:hover{background:rgba(232,184,109,.15)}
+.msgC pre.cb.tb code{color:#d4d4d4;background:#0c0c0c;font-family:var(--vscode-editor-font-family,'Cascadia Code',Consolas,monospace);white-space:pre}
+.msgC pre.cb.tb .tprom{color:#7ec99a;font-weight:700;user-select:none;margin-right:2px;opacity:.85}
