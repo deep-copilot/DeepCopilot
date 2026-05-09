@@ -1,5 +1,9 @@
 # Deep Copilot
 
+<p align="center">
+  <img src="media/logo.png" alt="Deep Copilot" width="180" />
+</p>
+
 > 嵌入 VS Code 的 AI 编程助手，由 DeepSeek V4 驱动。无需后端、无需 Docker、无需 Rust —— 纯 JavaScript 单文件扩展，开箱即用。
 
 [![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A51.95.0-blue)](https://code.visualstudio.com/)
@@ -7,8 +11,6 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 Deep Copilot 是一个把 Copilot 风格的 AI Agent 直接搬进 VS Code 的扩展。它通过 DeepSeek API（OpenAI 兼容协议）与模型对话，调用工具读写文件、搜索代码、执行 Shell 命令，并把整个过程实时呈现在侧边栏中。
-
-![Deep Copilot screenshot](media/screenshot.png)
 
 ---
 
