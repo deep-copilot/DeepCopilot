@@ -153,3 +153,9 @@ body.narrow #left,body.narrow #right{display:none}
 #es .big img{width:34px;height:34px;display:block;margin:0 auto}
 #es p{font-size:12px;line-height:1.7}
 #thk{display:none;padding:2px 10px 8px;align-self:flex-start;color:var(--vscode-descriptionForeground);font-size:11px}
+
+/* ── #3 Phase 1: typing cursor + Stop button ── */
+.tcur{display:inline-block;color:var(--vscode-button-background);margin-left:1px;animation:tcur-blink 1s steps(2,end) infinite;font-weight:600}
+@keyframes tcur-blink{50%{opacity:0}}
+#sbtn.stop{background:var(--vscode-errorForeground,#f48771);color:#fff;font-size:14px}
+#sbtn.stop:hover{opacity:.9}

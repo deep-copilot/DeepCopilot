@@ -357,9 +357,28 @@
 
   /* ─── Composer ─────────────────────────────────────────────────────── */
   function autosize(){ inp.style.height = "36px"; inp.style.height = Math.min(inp.scrollHeight, 140) + "px"; }
+  function setBusy(on){
+    busy = !!on;
+    sbtn.classList.toggle("stop", busy);
+    sbtn.textContent = busy ? "\u23F9" : "\u2191";
+    sbtn.title = busy ? "\u505C\u6B62\u751F\u6210 (Esc)" : "\u53D1\u9001";
+    dot.className = "dot" + (busy ? " warn" : "");
+  }
+  function showCursor(){
+    if (!cur) return;
+    var ex = cur.querySelector(".tcur");
+    if (!ex) cur.insertAdjacentHTML("beforeend", "<span class=\"tcur\">\u258D</span>");
+  }
+  function hideCursor(){
+    if (curBubble){
+      var ex = curBubble.querySelector(".msgC .tcur");
+      if (ex) ex.remove();
+    }
+  }
   function doSend(){
+    if (busy){ vscode.postMessage({type:"stop"}); return; }
     var t = inp.value.trim();
-    if (!t || busy) return;
+    if (!t) return;
     add("user", t);
     inp.value = ""; autosize();
     vscode.postMessage({type:"send", text:t});
@@ -376,6 +395,7 @@
   inp.addEventListener("input", autosize);
   inp.addEventListener("keydown", function(e){
     if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); doSend(); }
+    else if (e.key === "Escape" && busy){ e.preventDefault(); vscode.postMessage({type:"stop"}); }
   });
   sbtn.addEventListener("click", doSend);
   cxbt.addEventListener("click", function(){
@@ -401,13 +421,14 @@
   window.addEventListener("message", function(e){
     var m = e.data;
     if (m.type === "thinking"){
-      busy = m.show; thk.style.display = m.show ? "block" : "none"; sbtn.disabled = m.show;
-      dot.className = "dot" + (m.show ? " warn" : "");
+      thk.style.display = m.show ? "block" : "none";
     } else if (m.type === "replyStart"){
       curBubble = null; cur = null; curThk = null; curText = ""; toolMap = {};
       ensureBubble(); ascroll();
+      setBusy(true); showCursor();
     } else if (m.type === "newTurn"){
       curBubble = null; cur = null; curThk = null; curText = ""; ensureBubble();
+      showCursor();
     } else if (m.type === "replyDelta"){
       ensureBubble();
       curText += (m.text || ""); cur.innerHTML = renderMd(curText);
@@ -415,8 +436,9 @@
       if (th2 && th2.style.display !== "none" && !th2.dataset.done) {
         th2.dataset.done = "1";
         th2.dataset.label = "thoughts";
-        th2.textContent = (curThk && curThk.style.display === "block" ? "▾ " : "▸ ") + "thoughts";
+        th2.textContent = (curThk && curThk.style.display === "block" ? "\u25BE " : "\u25B8 ") + "thoughts";
       }
+      showCursor();
       ascroll();
     } else if (m.type === "thinkingDelta"){
       ensureBubble();
@@ -458,6 +480,8 @@
     } else if (m.type === "usage"){
       bumpUsage(m.usage || {});
     } else if (m.type === "replyEnd"){
+      hideCursor();
+      setBusy(false);
       if (cur && m.empty && curText === "" && curBubble && !curBubble.querySelector(".tool")){ cur.textContent = "(no response)"; }
       curBubble = null; cur = null; curThk = null; curText = "";
     } else if (m.type === "reply"){
