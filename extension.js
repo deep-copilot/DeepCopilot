@@ -515,6 +515,34 @@ class ChatViewProvider {
             case 'contextToggle':
                 this._includeCtx = !!msg.active;
                 break;
+            case 'regenerate': {
+                if (this._busy) break;
+                // Pop trailing assistant turns + the last user turn from history,
+                // grab that user text, and re-issue it through _handleSend.
+                let lastUser = '';
+                while (this._messages.length){
+                    const last = this._messages[this._messages.length - 1];
+                    if (last.role === 'user'){
+                        const c = last.content;
+                        if (typeof c === 'string') lastUser = c;
+                        else if (Array.isArray(c)){
+                            const t = c.find(p => p && p.type === 'text');
+                            lastUser = t ? (t.text || '') : '';
+                        }
+                        this._messages.pop();
+                        break;
+                    }
+                    this._messages.pop();
+                }
+                // Strip any leading file-context block we may have prepended originally.
+                const stripped = lastUser.replace(/^---\s*\n[\s\S]*?\n---\s*\n\n?/, '');
+                if (stripped.trim()) this._handleSend(stripped);
+                break;
+            }
+            case 'feedback':
+                // Local-only signal — no telemetry. Just acknowledge.
+                vscode.window.setStatusBarMessage(msg.value === 'up' ? '👍 已记录' : '👎 已记录', 1500);
+                break;
         }
     }
 

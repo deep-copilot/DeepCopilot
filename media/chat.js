@@ -314,13 +314,24 @@
     return out.join("");
   }
 
+  /* ─── #6 Phase 4 helper: per-message hover action bar ──────────── */
+  function actionBarHtml(){
+    return "<div class=\"msgActs\">" +
+      "<button class=\"ma ma-copy\" title=\"\u590d\u5236\u539f\u59cb Markdown\">\ud83d\udccb \u590d\u5236</button>" +
+      "<button class=\"ma ma-regen\" title=\"\u4ee5\u540c\u4e00\u95ee\u9898\u91cd\u65b0\u751f\u6210\">\ud83d\udd04 \u91cd\u65b0\u751f\u6210</button>" +
+      "<button class=\"ma ma-up\" title=\"\u6709\u7528\">\ud83d\udc4d</button>" +
+      "<button class=\"ma ma-down\" title=\"\u4e0d\u6709\u7528\">\ud83d\udc4e</button>" +
+    "</div>";
+  }
+
   function add(role, text){
     if (es) es.style.display = "none";
     var d = document.createElement("div");
     if (role === "user"){ d.className = "msgU"; d.textContent = text; }
     else if (role === "assistant"){
       d.className = "msgA";
-      d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div><div class=\"msgC\">" + escHtml(text) + "</div>";
+      d.setAttribute("data-raw", text || "");
+      d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div><div class=\"msgC\">" + escHtml(text) + "</div>" + actionBarHtml();
     } else { d.className = "err"; d.textContent = text; }
     if (thk && thk.parentNode === msgs) msgs.insertBefore(d, thk); else msgs.appendChild(d);
     ascroll();
@@ -334,7 +345,8 @@
     d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div>" +
       "<div class=\"thinkhead\" style=\"display:none\">▸ thinking</div>" +
       "<div class=\"thinkblk\" style=\"display:none\"></div>" +
-      "<div class=\"tools\"></div><div class=\"msgC\"></div>";
+      "<div class=\"tools\"></div><div class=\"msgC\"></div>" +
+      actionBarHtml();
     if (thk && thk.parentNode === msgs) msgs.insertBefore(d, thk); else msgs.appendChild(d);
     curBubble = d;
     cur = d.querySelector(".msgC");
@@ -610,6 +622,7 @@
       hideCursor();
       setBusy(false);
       if (cur && m.empty && curText === "" && curBubble && !curBubble.querySelector(".tool")){ cur.textContent = "(no response)"; }
+      if (curBubble) curBubble.setAttribute("data-raw", curText || "");
       curBubble = null; cur = null; curThk = null; curText = "";
     } else if (m.type === "reply"){
       add("assistant", m.text);
@@ -644,7 +657,8 @@
           if (es) es.style.display = "none";
           var d = document.createElement("div");
           d.className = "msgA";
-          d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div><div class=\"msgC\"></div>";
+          d.setAttribute("data-raw", mm.text || "");
+          d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div><div class=\"msgC\"></div>" + actionBarHtml();
           if (thk && thk.parentNode === msgs) msgs.insertBefore(d, thk); else msgs.appendChild(d);
           d.querySelector(".msgC").innerHTML = renderMd(mm.text || "");
         }
@@ -756,6 +770,36 @@
         ? "\u2191 \u6298\u53e0"
         : "\u2026 \u5c55\u5f00\u5168\u90e8 " + (preF.getAttribute("data-lines") || "?") + " \u884c";
       return;
+    }
+    /* ── #6 Phase 4: per-message action bar ── */
+    if (t.classList.contains("ma")){
+      var bub = t.closest(".msgA"); if (!bub) return;
+      var raw = bub.getAttribute("data-raw") || "";
+      if (t.classList.contains("ma-copy")){
+        vscode.postMessage({type:"copy", code: raw});
+        var oc = t.textContent; t.textContent = "\u2713 \u5df2\u590d\u5236";
+        setTimeout(function(){ t.textContent = oc; }, 1500);
+        return;
+      }
+      if (t.classList.contains("ma-regen")){
+        if (busy) return;
+        /* Remove this assistant bubble (and any later ones) from the DOM */
+        var nx = bub.nextSibling;
+        while (nx){
+          var rm = nx; nx = nx.nextSibling;
+          if (rm.nodeType === 1 && (rm.classList.contains("msgA") || rm.classList.contains("err"))) rm.parentNode.removeChild(rm);
+        }
+        bub.parentNode.removeChild(bub);
+        vscode.postMessage({type:"regenerate"});
+        return;
+      }
+      if (t.classList.contains("ma-up") || t.classList.contains("ma-down")){
+        var sib = bub.querySelectorAll(".ma-up,.ma-down");
+        for (var si=0; si<sib.length; si++) sib[si].classList.remove("active");
+        t.classList.add("active");
+        vscode.postMessage({type:"feedback", value: t.classList.contains("ma-up") ? "up" : "down"});
+        return;
+      }
     }
     var a = t.closest && t.closest("a.flink");
     if (a){

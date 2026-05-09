@@ -216,3 +216,24 @@ body.vscode-light .msgC pre.cb code .hk-deco{ color:#af00db }
   text-align:center;
 }
 .msgC pre.cb .cb-fold:hover{ background:rgba(255,255,255,.08); color:var(--vscode-textLink-activeForeground,#3794ff) }
+
+/* ── #6 Phase 4: per-message hover action bar ── */
+.msgA{ position:relative }
+.msgA .msgActs{
+  position:absolute; top:6px; right:8px;
+  display:flex; gap:2px;
+  opacity:0; transition:opacity .12s ease;
+  background:var(--vscode-editor-background, #1e1e1e);
+  border:1px solid var(--vscode-panel-border, #333);
+  border-radius:4px; padding:2px;
+  pointer-events:none;
+}
+.msgA:hover .msgActs{ opacity:1; pointer-events:auto }
+.msgA .msgActs .ma{
+  background:transparent; border:none; color:var(--vscode-foreground);
+  font:inherit; font-size:11px; padding:3px 6px; border-radius:3px;
+  cursor:pointer; white-space:nowrap;
+}
+.msgA .msgActs .ma:hover{ background:var(--vscode-toolbar-hoverBackground, rgba(255,255,255,.08)) }
+.msgA .msgActs .ma.active{ background:rgba(126,201,154,.18); color:#7ec99a }
+.msgA .msgActs .ma.ma-down.active{ background:rgba(255,120,120,.15); color:#ff8c8c }
