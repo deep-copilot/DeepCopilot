@@ -9,8 +9,8 @@
   var cxb  = document.getElementById("cxb");
   var cxbt = document.getElementById("cxbt");
   var apibt = document.getElementById("apibt");
-  var leftbt = document.getElementById("leftbt");
-  var rightbt = document.getElementById("rightbt");
+  var edgeL = document.getElementById("edgeL");
+  var edgeR = document.getElementById("edgeR");
   var newSessionBtn = document.getElementById("newSessionBtn");
   var scopeWs = document.getElementById("scopeWs");
   var scopeAll = document.getElementById("scopeAll");
@@ -55,10 +55,25 @@
     else document.body.classList.remove("narrow");
   }
   window.addEventListener("resize", checkNarrow); checkNarrow();
-  /* ▦ left button: toggle Plan/Todos column */
-  leftbt.addEventListener("click", function(){ document.body.classList.toggle("no-left"); });
-  /* ☰ right button: toggle Sessions column */
-  rightbt.addEventListener("click", function(){ document.body.classList.toggle("no-right"); });
+  /* Edge toggles: collapsed by default; persist state. */
+  var _ui = {};
+  try { _ui = (vscode.getState() && vscode.getState().ui) || {}; } catch(e){}
+  function applyPanelState(){
+    document.body.classList.toggle("no-left", _ui.leftCollapsed !== false);
+    document.body.classList.toggle("no-right", _ui.rightCollapsed !== false);
+  }
+  function savePanelState(){
+    try { var s = vscode.getState() || {}; s.ui = _ui; vscode.setState(s); } catch(e){}
+  }
+  applyPanelState();
+  edgeL.addEventListener("click", function(){
+    _ui.leftCollapsed = !document.body.classList.contains("no-left");
+    applyPanelState(); savePanelState();
+  });
+  edgeR.addEventListener("click", function(){
+    _ui.rightCollapsed = !document.body.classList.contains("no-right");
+    applyPanelState(); savePanelState();
+  });
   /* Scope buttons: filter sessions by current workspace or all */
   var scopeMode = "ws"; /* "ws" | "all" */
   function setScope(m){ scopeMode = m; scopeWs.classList.toggle("on", m==="ws"); scopeAll.classList.toggle("on", m==="all"); renderSessions(); }

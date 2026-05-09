@@ -879,7 +879,6 @@ function buildWebviewHtml(webview, extensionUri) {
 </head><body>
 <div id="prog" class="prog"></div>
 <div id="tb">
-  <button class="tbb" id="leftbt" title="左侧栏 Plan/Todos">▦</button>
   <span class="logo">
     <img class="logo-img" src="${logoUri}" alt="logo"/>
     <select class="tbsel" id="modelSel" title="模型">
@@ -896,9 +895,10 @@ function buildWebviewHtml(webview, extensionUri) {
   </span>
   <button class="tbb" id="cxbt" title="包含当前文件">📎</button>
   <button class="tbb" id="apibt" title="API 设置（Key / Base URL）">🔑</button>
-  <button class="tbb" id="rightbt" title="右侧栏 历史会话">☰</button>
   <button class="tbb" id="cbt" title="清空当前会话(不存档)">🗑</button>
 </div>
+<button id="edgeL" class="edge-toggle edge-l" title="Plan / Todos" aria-label="toggle left panel"></button>
+<button id="edgeR" class="edge-toggle edge-r" title="历史会话" aria-label="toggle right panel"></button>
 <div id="sb"></div>
 <aside id="left">
   <section class="pnl" id="planPnl" data-open="1">
