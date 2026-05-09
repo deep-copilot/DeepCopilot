@@ -105,12 +105,93 @@
     if (L === "cmd" || L === "bat" || L === "batch" || L === "dos") return "&gt;";
     return "$";
   }
+
+  /* ─── #5 Phase 3: lightweight syntax highlighter ────────────────── */
+  /* Each spec is a single regex with N alternation groups; classes[i] names group i+1. */
+  var HL_ALIAS = { js:"js", javascript:"js", jsx:"js", ts:"js", tsx:"js", typescript:"js",
+                   py:"py", python:"py",
+                   json:"json", json5:"json",
+                   css:"css", scss:"css", less:"css",
+                   html:"html", xml:"html", svg:"html",
+                   rs:"rs", rust:"rs",
+                   go:"go", golang:"go",
+                   c:"c", cpp:"c", "c++":"c", h:"c", hpp:"c", cc:"c",
+                   java:"c", kotlin:"c", swift:"c",
+                   md:"md", markdown:"md", yaml:"yaml", yml:"yaml", toml:"toml" };
+  var HL_SPEC = {
+    js: {
+      re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|\b(const|let|var|function|class|extends|new|return|if|else|for|while|do|switch|case|break|continue|throw|try|catch|finally|async|await|yield|of|in|typeof|instanceof|delete|void|this|super|import|export|from|as|default|null|undefined|true|false|interface|type|enum)\b|\b(\d+(?:\.\d+)?)\b|([A-Za-z_$][\w$]*)(?=\s*\()/g,
+      classes: ["c", "s", "k", "n", "f"],
+    },
+    py: {
+      re: /(#[^\n]*)|("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b(def|class|return|if|elif|else|for|while|try|except|finally|raise|with|as|import|from|pass|break|continue|lambda|yield|async|await|in|not|and|or|is|None|True|False|self|cls|global|nonlocal)\b|\b(\d+(?:\.\d+)?)\b|@([A-Za-z_]\w*)/g,
+      classes: ["c", "s", "k", "n", "deco"],
+    },
+    json: {
+      re: /("(?:[^"\\]|\\.)*")(?=\s*:)|("(?:[^"\\]|\\.)*")|\b(true|false|null)\b|\b(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g,
+      classes: ["key", "s", "k", "n"],
+    },
+    css: {
+      re: /(\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(@[\w-]+|--[\w-]+|\$[\w-]+)|([#.][\w-]+)|\b([\w-]+)(?=\s*:)|\b(\d+(?:\.\d+)?)(px|em|rem|%|vh|vw|s|ms|deg|fr)?\b|(#[0-9a-fA-F]{3,8})/g,
+      classes: ["c", "s", "k", "f", "n", "num", "unit", "hex"],
+    },
+    rs: {
+      re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b(fn|let|mut|const|static|if|else|match|for|while|loop|break|continue|return|struct|enum|trait|impl|pub|use|mod|crate|self|Self|super|as|where|move|ref|in|true|false|async|await|dyn|unsafe|extern|type)\b|\b(\d+(?:\.\d+)?)\b/g,
+      classes: ["c", "s", "k", "n"],
+    },
+    go: {
+      re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`[^`]*`)|\b(func|var|const|type|struct|interface|map|chan|package|import|return|if|else|for|range|switch|case|default|break|continue|defer|go|select|fallthrough|true|false|nil|iota)\b|\b(\d+(?:\.\d+)?)\b/g,
+      classes: ["c", "s", "k", "n"],
+    },
+    c: {
+      re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b(int|long|short|char|float|double|void|bool|signed|unsigned|const|static|extern|register|volatile|inline|struct|union|enum|typedef|sizeof|return|if|else|for|while|do|switch|case|default|break|continue|goto|public|private|protected|class|virtual|template|namespace|using|new|delete|this|true|false|null|nullptr)\b|\b(\d+(?:\.\d+)?)\b|(#\s*\w+)/g,
+      classes: ["c", "s", "k", "n", "deco"],
+    },
+    yaml: {
+      re: /(#[^\n]*)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|^(\s*[\w.-]+)(?=\s*:)|\b(true|false|null|yes|no)\b|\b(\d+(?:\.\d+)?)\b/gm,
+      classes: ["c", "s", "key", "k", "n"],
+    },
+    toml: {
+      re: /(#[^\n]*)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|(\[[^\]\n]+\])|^(\s*[\w.-]+)(?=\s*=)|\b(true|false)\b|\b(\d+(?:\.\d+)?)\b/gm,
+      classes: ["c", "s", "f", "key", "k", "n"],
+    },
+    md: {
+      re: /^(#{1,6}\s[^\n]*)|^(\s*[-*+]\s)|(`[^`\n]+`)|(\*\*[^*\n]+\*\*|\*[^*\n]+\*|_[^_\n]+_)/gm,
+      classes: ["k", "f", "s", "n"],
+    },
+  };
+  function hl(raw, lang){
+    var L = HL_ALIAS[String(lang||"").toLowerCase()];
+    var spec = L && HL_SPEC[L];
+    if (!spec) return escHtml(raw);
+    var out = "", i = 0, m;
+    spec.re.lastIndex = 0;
+    while ((m = spec.re.exec(raw)) !== null){
+      if (m.index > i) out += escHtml(raw.slice(i, m.index));
+      var picked = false;
+      for (var k = 1; k < m.length; k++){
+        if (m[k] !== undefined){
+          out += "<span class=\"hk-" + spec.classes[k-1] + "\">" + escHtml(m[k]) + "</span>";
+          picked = true;
+          break;
+        }
+      }
+      if (!picked) out += escHtml(m[0]);
+      i = m.index + m[0].length;
+      if (m[0].length === 0) spec.re.lastIndex++;  // safety
+    }
+    out += escHtml(raw.slice(i));
+    return out;
+  }
+
   function buildCodeBlock(c){
     var b64 = encodeURIComponent(c.raw);
+    var rawLines = c.raw.split(/\r?\n/);
+    var FOLD_THRESHOLD = 24, FOLD_KEEP = 16;
+    var foldable = rawLines.length > FOLD_THRESHOLD;
+
     if (isShellLang(c.L)){
       var prompt = shellPrompt(c.L);
-      /* Render each line with the prompt prefix; preserve continuation lines (those starting with whitespace or after backslash) without prompt. */
-      var rawLines = c.raw.split(/\r?\n/);
       var body = "";
       for (var i = 0; i < rawLines.length; i++){
         var lnRaw = rawLines[i];
@@ -121,21 +202,26 @@
         if (continued){ body += "  " + escHtml(lnRaw) + "\n"; }
         else { body += "<span class=\"tprom\">" + prompt + "</span> " + escHtml(lnRaw) + "\n"; }
       }
-      return "<pre class=\"cb tb\" data-code=\"" + b64 + "\" data-lang=\"" + escHtml(c.L) + "\">" +
+      return "<pre class=\"cb tb" + (foldable ? " foldable" : "") + "\" data-code=\"" + b64 + "\" data-lang=\"" + escHtml(c.L) + "\" data-lines=\"" + rawLines.length + "\" data-keep=\"" + FOLD_KEEP + "\">" +
         "<div class=\"cb-h\">" +
           "<span class=\"lang\">\u25B6 " + escHtml(c.L) + "</span>" +
           "<button class=\"cb-run\" title=\"\u5728 VS Code \u7ec8\u7aef\u8fd0\u884c\">\u25B6 \u8fd0\u884c</button>" +
           "<button class=\"cb-term\" title=\"\u63d2\u5165\u7ec8\u7aef\u4f46\u4e0d\u6267\u884c\">\u2192 \u63d2\u5165\u7ec8\u7aef</button>" +
           "<button class=\"cb-copy\">\u590d\u5236</button>" +
         "</div>" +
-        "<code>" + body + "</code></pre>";
+        "<code>" + body + "</code>" +
+        (foldable ? "<button class=\"cb-fold\">\u2026 \u5c55\u5f00\u5168\u90e8 " + rawLines.length + " \u884c</button>" : "") +
+      "</pre>";
     }
-    return "<pre class=\"cb\" data-code=\"" + b64 + "\" data-lang=\"" + escHtml(c.L) + "\">" +
+    var highlighted = hl(c.raw, c.L);
+    return "<pre class=\"cb" + (foldable ? " foldable" : "") + "\" data-code=\"" + b64 + "\" data-lang=\"" + escHtml(c.L) + "\" data-lines=\"" + rawLines.length + "\" data-keep=\"" + FOLD_KEEP + "\">" +
       "<div class=\"cb-h\">" +
         "<span class=\"lang\">" + escHtml(c.L) + "</span>" +
         "<button class=\"cb-copy\">\u590d\u5236</button>" +
         "<button class=\"cb-insert\">\u63d2\u5165\u7f16\u8f91\u5668</button>" +
-      "</div><code>" + c.raw + "</code></pre>";
+      "</div><code>" + highlighted + "</code>" +
+      (foldable ? "<button class=\"cb-fold\">\u2026 \u5c55\u5f00\u5168\u90e8 " + rawLines.length + " \u884c</button>" : "") +
+    "</pre>";
   }
 
   function renderMd(s){
@@ -661,6 +747,14 @@
       vscode.postMessage({type:"runTerminal", code: codeR, lang: langR});
       var origR = t.textContent; t.textContent = "▶ 运行中…";
       setTimeout(function(){ t.textContent = origR; }, 1800);
+      return;
+    }
+    if (t.classList.contains("cb-fold")){
+      var preF = t.closest("pre.cb"); if (!preF) return;
+      preF.classList.toggle("expanded");
+      t.textContent = preF.classList.contains("expanded")
+        ? "\u2191 \u6298\u53e0"
+        : "\u2026 \u5c55\u5f00\u5168\u90e8 " + (preF.getAttribute("data-lines") || "?") + " \u884c";
       return;
     }
     var a = t.closest && t.closest("a.flink");

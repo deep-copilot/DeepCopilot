@@ -172,3 +172,47 @@ body.narrow #left,body.narrow #right{display:none}
 .msgC pre.cb.tb .cb-h button.cb-term:hover{background:rgba(232,184,109,.15)}
 .msgC pre.cb.tb code{color:#d4d4d4;background:#0c0c0c;font-family:var(--vscode-editor-font-family,'Cascadia Code',Consolas,monospace);white-space:pre}
 .msgC pre.cb.tb .tprom{color:#7ec99a;font-weight:700;user-select:none;margin-right:2px;opacity:.85}
+
+/* ── #5 Phase 3: syntax highlight tokens (light/dark adaptive) ── */
+.msgC pre.cb code .hk-c   { color:#7ca069; font-style:italic }              /* comment */
+.msgC pre.cb code .hk-s   { color:#ce9178 }                                  /* string */
+.msgC pre.cb code .hk-k   { color:#569cd6; font-weight:600 }                 /* keyword */
+.msgC pre.cb code .hk-n   { color:#b5cea8 }                                  /* number */
+.msgC pre.cb code .hk-f   { color:#dcdcaa }                                  /* function/selector */
+.msgC pre.cb code .hk-key { color:#9cdcfe }                                  /* json/yaml key */
+.msgC pre.cb code .hk-deco{ color:#c586c0; font-weight:600 }                 /* decorator/preproc */
+.msgC pre.cb code .hk-num { color:#b5cea8 }
+.msgC pre.cb code .hk-unit{ color:#4ec9b0 }
+.msgC pre.cb code .hk-hex { color:#d7ba7d }
+body.vscode-light .msgC pre.cb code .hk-c   { color:#008000 }
+body.vscode-light .msgC pre.cb code .hk-s   { color:#a31515 }
+body.vscode-light .msgC pre.cb code .hk-k   { color:#0000ff }
+body.vscode-light .msgC pre.cb code .hk-n,
+body.vscode-light .msgC pre.cb code .hk-num { color:#098658 }
+body.vscode-light .msgC pre.cb code .hk-f   { color:#795e26 }
+body.vscode-light .msgC pre.cb code .hk-key { color:#0451a5 }
+body.vscode-light .msgC pre.cb code .hk-deco{ color:#af00db }
+
+/* ── #5 Phase 3: long-code folding ── */
+.msgC pre.cb.foldable code{
+  display:block;
+  max-height:calc(1.45em * 16 + 8px);
+  overflow:hidden;
+  position:relative;
+}
+.msgC pre.cb.foldable code::after{
+  content:"";
+  position:absolute; left:0; right:0; bottom:0; height:48px;
+  background:linear-gradient(transparent, var(--vscode-textCodeBlock-background, #1e1e1e));
+  pointer-events:none;
+}
+.msgC pre.cb.foldable.expanded code{ max-height:none }
+.msgC pre.cb.foldable.expanded code::after{ display:none }
+.msgC pre.cb .cb-fold{
+  display:block; width:100%; box-sizing:border-box;
+  background:rgba(255,255,255,.04); color:var(--vscode-textLink-foreground,#3794ff);
+  border:none; border-top:1px solid var(--vscode-panel-border,#333);
+  padding:6px 12px; font:inherit; font-size:12px; cursor:pointer;
+  text-align:center;
+}
+.msgC pre.cb .cb-fold:hover{ background:rgba(255,255,255,.08); color:var(--vscode-textLink-activeForeground,#3794ff) }
