@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Package VSIX
+        run: |
+          npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
+          ls -la *.vsix
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '*.vsix'
+          generate_release_notes: true
+          body: |
+            ## DeepPilot ${{ github.ref_name }}
+
+            从 Releases 页下载 `.vsix`，VS Code 命令面板执行 `Extensions: Install from VSIX...` 即可安装。
+
+            > 别忘了通过命令面板配置 `DeepSeek: 设置 API Key`。

@@ -1,0 +1,169 @@
+{
+  "name": "deeppilot",
+  "displayName": "DeepPilot",
+  "description": "DeepPilot — GitHub Copilot 风格的 DeepSeek V4 代码智能体：三栏布局、流式对话、工具调用、会话记忆，全量代码开源。",
+  "version": "0.17.0",
+  "publisher": "local-dev",
+  "repository": { "type": "git", "url": "https://github.com/ZhouChaunge/DeepPilot.git" },
+  "homepage": "https://github.com/ZhouChaunge/DeepPilot",
+  "bugs": { "url": "https://github.com/ZhouChaunge/DeepPilot/issues" },
+  "license": "MIT",
+  "keywords": ["deepseek", "copilot", "ai", "agent", "chat", "代码助手", "智能体", "v4"],
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["AI", "Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "deeppilot.deepseek",
+        "name": "deeppilot",
+        "fullName": "DeepPilot",
+        "description": "DeepPilot — DeepSeek V4 代码智能体（文件读写 / 搜索 / Shell）",
+        "isSticky": true,
+        "commands": [
+          { "name": "clear", "description": "清空会话上下文" },
+          { "name": "doctor", "description": "检查后端 / API key 状态" }
+        ]
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "deeppilot-sidebar",
+          "title": "DeepPilot",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "deeppilot-sidebar": [
+        {
+          "type": "webview",
+          "id": "deepseek.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "deepseekAgent.open",
+        "title": "DeepSeek: 打开侧边栏",
+        "icon": "$(robot)"
+      },
+      {
+        "command": "deepseekAgent.openInTab",
+        "title": "DeepSeek: 在新标签页中打开（独立窗口）",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "deepseekAgent.openTerminal",
+        "title": "DeepSeek: 在终端中打开完整 TUI Agent",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "deepseekAgent.moveToRight",
+        "title": "DeepSeek: 把侧栏移到右侧（Secondary Side Bar）",
+        "icon": "$(layout-sidebar-right)"
+      },
+      {
+        "command": "deepseekAgent.setApiKey",
+        "title": "DeepSeek: 设置 API Key（保存到 SecretStorage）",
+        "icon": "$(key)"
+      },
+      {
+        "command": "deepseekAgent.setBaseUrl",
+        "title": "DeepSeek: 切换 API Base URL（国际 / 中国 / 自定义）",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "deepseekAgent.restartServer",
+        "title": "DeepSeek: 重启后端服务器",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "deepseekAgent.showApiStatus",
+        "title": "DeepSeek: 查看 API 状态 / 配置摘要",
+        "icon": "$(info)"
+      }
+    ],
+    "configuration": {
+      "title": "DeepPilot",
+      "properties": {
+        "deepseekAgent.serverExecutablePath": {
+          "type": "string",
+          "default": "",
+          "description": "deepseek-app-server 可执行文件路径（留空则自动在工作区 target/ 中查找）"
+        },
+        "deepseekAgent.serverPort": {
+          "type": "number",
+          "default": 8787,
+          "description": "deepseek-app-server 监听端口"
+        },
+        "deepseekAgent.apiBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "DeepSeek API Base URL。留空则用 ~/.deepseek/config.toml 或 https://api.deepseek.com。中国大陆可填 https://api.deepseeki.com。可通过命令面板「DeepSeek: 切换 API Base URL」快捷切换。"
+        },
+        "deepseekAgent.defaultModel": {
+          "type": "string",
+          "default": "deepseek-v4-pro",
+          "enum": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+          "enumDescriptions": [
+            "V4 Pro — 强能力，¥4/¥16 每百万 tokens",
+            "V4 Flash — 快速便宜，¥0.5/¥2 每百万 tokens",
+            "兼容别名（= v4-flash）",
+            "兼容别名（= v4-flash，思考模型）"
+          ],
+          "description": "默认使用的 DeepSeek 模型"
+        },
+        "deepseekAgent.approvalMode": {
+          "type": "string",
+          "default": "manual",
+          "enum": ["manual", "auto-edit", "autopilot", "readonly"],
+          "enumDescriptions": [
+            "Manual — 所有 write_file / run_shell 都需要用户点击批准（最安全，默认）",
+            "Auto-Edit — 自动批准文件写入，但 shell 命令仍需手动批准（类似 Copilot 默认）",
+            "Autopilot — 全部自动批准（类似 Copilot YOLO 模式 — 谨慎使用）",
+            "Read-Only — 拒绝所有需要批准的工具，只允许读文件 / 搜索 / 列目录"
+          ],
+          "description": "工具批准策略：决定 write_file / run_shell 等高权限工具是否需要确认"
+        },
+        "deepseekAgent.autoApproveTools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "始终自动批准的工具名列表（覆盖 approvalMode），例如 [\"write_file\"]"
+        },
+        "deepseekAgent.denyTools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "始终拒绝的工具名列表（覆盖 approvalMode），例如 [\"run_shell\"]"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "deepseekAgent.open",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d"
+      },
+      {
+        "command": "deepseekAgent.openInTab",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "deepseekAgent.open" },
+        { "command": "deepseekAgent.openInTab" },
+        { "command": "deepseekAgent.openTerminal" },
+        { "command": "deepseekAgent.moveToRight" }
+      ]
+    }
+  }
+}

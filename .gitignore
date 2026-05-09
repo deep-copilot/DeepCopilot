@@ -1,0 +1,17 @@
+# Build artifacts
+*.vsix
+node_modules/
+.vscode-test/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.idea/
+*.swp
+
+# OS
+desktop.ini
