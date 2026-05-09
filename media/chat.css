@@ -1,13 +1,13 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--vscode-font-family);font-size:13px;color:var(--vscode-foreground);background:var(--vscode-sideBar-background);height:100vh;overflow:hidden;position:relative;
-  display:grid;grid-template-columns:220px 1fr 280px;grid-template-rows:auto 1fr auto auto;
-  grid-template-areas:"tb tb tb" "left main right" "left composer right" "foot foot foot"}
+  display:grid;grid-template-columns:220px 1fr 280px;grid-template-rows:auto auto 1fr auto auto;
+  grid-template-areas:"tb tb tb" "sb sb sb" "left main right" "left composer right" "foot foot foot"}
 body.no-left{grid-template-columns:0 1fr 280px}
 body.no-left #left{display:none}
 body.no-right{grid-template-columns:220px 1fr 0}
 body.no-right #right{display:none}
 body.no-left.no-right{grid-template-columns:0 1fr 0}
-body.narrow{grid-template-columns:1fr;grid-template-areas:"tb" "main" "composer" "foot"}
+body.narrow{grid-template-columns:1fr;grid-template-areas:"tb" "sb" "main" "composer" "foot"}
 body.narrow #left,body.narrow #right{display:none}
 #tb{grid-area:tb;display:flex;align-items:center;padding:6px 10px;gap:6px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-titleBar-activeBackground)}
 #tb .logo{flex:1;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px}
@@ -22,7 +22,7 @@ body.narrow #left,body.narrow #right{display:none}
 .tbb{background:none;border:none;cursor:pointer;color:var(--vscode-icon-foreground);padding:3px 8px;border-radius:3px;font-size:11px}
 .tbb:hover{background:var(--vscode-toolbar-hoverBackground)}
 .tbb.active{color:var(--vscode-button-background)}
-#sb{grid-area:tb;align-self:end;padding:3px 10px;font-size:11px;color:var(--vscode-descriptionForeground);background:rgba(244,135,113,.1);border-bottom:1px solid var(--vscode-panel-border);display:none}
+#sb{grid-area:sb;padding:4px 12px;font-size:11px;color:var(--vscode-descriptionForeground);background:rgba(244,135,113,.1);border-bottom:1px solid var(--vscode-panel-border);display:none}
 #main{grid-area:main;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:12px;min-height:0}
 .msgU{background:var(--vscode-input-background);border-radius:8px 8px 2px 8px;padding:8px 12px;align-self:flex-end;max-width:88%;white-space:pre-wrap;word-break:break-word;line-height:1.5}
 .msgA{align-self:flex-start;width:100%}
