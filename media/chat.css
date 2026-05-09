@@ -237,3 +237,25 @@ body.vscode-light .msgC pre.cb code .hk-deco{ color:#af00db }
 .msgA .msgActs .ma:hover{ background:var(--vscode-toolbar-hoverBackground, rgba(255,255,255,.08)) }
 .msgA .msgActs .ma.active{ background:rgba(126,201,154,.18); color:#7ec99a }
 .msgA .msgActs .ma.ma-down.active{ background:rgba(255,120,120,.15); color:#ff8c8c }
+
+/* ── #7 Phase 5: slash / @ command popover ── */
+#ia { position: relative }
+#pop.pop{
+  position:absolute; left:8px; right:8px; bottom:calc(100% + 4px);
+  max-height:240px; overflow-y:auto;
+  background:var(--vscode-editorWidget-background, #252526);
+  border:1px solid var(--vscode-editorWidget-border, #454545);
+  border-radius:6px;
+  box-shadow:0 4px 12px rgba(0,0,0,.35);
+  z-index:50;
+  font-size:12px;
+}
+#pop.pop .popi{
+  display:flex; gap:10px; align-items:center;
+  padding:6px 10px; cursor:pointer; user-select:none;
+}
+#pop.pop .popi.sel{ background:var(--vscode-list-activeSelectionBackground, #094771); color:var(--vscode-list-activeSelectionForeground, #fff) }
+#pop.pop .popi:hover{ background:var(--vscode-list-hoverBackground, rgba(255,255,255,.06)) }
+#pop.pop .popn{ font-family:var(--vscode-editor-font-family,monospace); color:#7ec99a; font-weight:600; min-width:90px }
+#pop.pop .popi.sel .popn{ color:#b6e4c4 }
+#pop.pop .popd{ color:var(--vscode-descriptionForeground, #999); font-size:11px }

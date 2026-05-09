@@ -496,6 +496,98 @@
 
   /* ─── Composer ─────────────────────────────────────────────────────── */
   function autosize(){ inp.style.height = "36px"; inp.style.height = Math.min(inp.scrollHeight, 140) + "px"; }
+
+  /* ─── #7 Phase 5: slash commands + @ context + history ─── */
+  var pop = document.getElementById("pop");
+  var popVisible = false, popItems = [], popSel = 0, popKind = "", popTrigStart = 0;
+  var SLASH_CMDS = [
+    { name: "/explain",  desc: "解释下面这段代码做了什么", expand: "请详细解释下列代码的功能、关键逻辑和潜在问题:\n\n" },
+    { name: "/fix",      desc: "查找并修复 bug",           expand: "请审查下列代码,找出 bug 或潜在问题并给出修复版本:\n\n" },
+    { name: "/tests",    desc: "为以下代码写单元测试",     expand: "请为下列代码编写完整的单元测试,覆盖正常路径与边界情况:\n\n" },
+    { name: "/doc",      desc: "为代码补全文档/注释",       expand: "请为下列代码补全文档注释(JSDoc/docstring 等,按语言惯例):\n\n" },
+    { name: "/refactor", desc: "重构以提升清晰度/性能",     expand: "请重构下列代码以提升可读性、模块化与性能,并解释每处改动的理由:\n\n" },
+    { name: "/clear",    desc: "清空当前会话",             expand: "__CLEAR__" },
+  ];
+  var AT_CMDS = [
+    { name: "@file",      desc: "附带当前打开的文件",   action: "ctxOn" },
+    { name: "@selection", desc: "附带编辑器中选中的代码", action: "ctxOn" },
+    { name: "@terminal",  desc: "附带终端最近输出(占位)", action: "noop" },
+  ];
+
+  function showPop(items, kind, trigStart){
+    popItems = items; popSel = 0; popKind = kind; popTrigStart = trigStart;
+    if (!items.length){ hidePop(); return; }
+    var html = "";
+    for (var i = 0; i < items.length; i++){
+      html += "<div class=\"popi" + (i === 0 ? " sel" : "") + "\" data-i=\"" + i + "\">" +
+        "<span class=\"popn\">" + items[i].name + "</span>" +
+        "<span class=\"popd\">" + items[i].desc + "</span></div>";
+    }
+    pop.innerHTML = html;
+    pop.style.display = "block";
+    popVisible = true;
+  }
+  function hidePop(){ if (popVisible){ pop.style.display = "none"; popVisible = false; popItems = []; } }
+  function movePop(d){
+    popSel = (popSel + d + popItems.length) % popItems.length;
+    var nodes = pop.querySelectorAll(".popi");
+    for (var i = 0; i < nodes.length; i++) nodes[i].classList.toggle("sel", i === popSel);
+  }
+  function applyPop(){
+    if (!popItems[popSel]) return;
+    var it = popItems[popSel];
+    if (popKind === "slash"){
+      if (it.expand === "__CLEAR__"){ hidePop(); inp.value = ""; cbt && cbt.click(); return; }
+      // Replace "/xyz..." prefix at popTrigStart with the expansion text
+      var before = inp.value.slice(0, popTrigStart);
+      // Skip the trigger word (slash + non-space chars)
+      var after = inp.value.slice(popTrigStart).replace(/^\S*\s?/, "");
+      inp.value = before + it.expand + after;
+      // Cursor after expansion text
+      var pos = before.length + it.expand.length;
+      autosize();
+      setTimeout(function(){ inp.focus(); inp.setSelectionRange(pos, pos); }, 0);
+    } else if (popKind === "at"){
+      // Remove the @-token and apply action
+      var b2 = inp.value.slice(0, popTrigStart);
+      var a2 = inp.value.slice(popTrigStart).replace(/^\S*\s?/, "");
+      inp.value = b2 + a2;
+      autosize();
+      if (it.action === "ctxOn" && !cxOn){ cxbt.click(); }
+      setTimeout(function(){ inp.focus(); inp.setSelectionRange(b2.length, b2.length); }, 0);
+    }
+    hidePop();
+  }
+  pop.addEventListener("click", function(e){
+    var it = e.target.closest(".popi"); if (!it) return;
+    popSel = parseInt(it.getAttribute("data-i"), 10) || 0;
+    applyPop();
+  });
+
+  function detectTrigger(){
+    var v = inp.value;
+    var caret = inp.selectionStart || 0;
+    // Look backward from caret for nearest whitespace boundary
+    var i = caret - 1;
+    while (i >= 0 && !/\s/.test(v[i])) i--;
+    var start = i + 1;
+    var token = v.slice(start, caret);
+    if (!token) { hidePop(); return; }
+    if (token[0] === "/"){
+      var q = token.slice(1).toLowerCase();
+      var matches = SLASH_CMDS.filter(function(c){ return c.name.slice(1).startsWith(q); });
+      showPop(matches, "slash", start);
+    } else if (token[0] === "@"){
+      var q2 = token.slice(1).toLowerCase();
+      var m2 = AT_CMDS.filter(function(c){ return c.name.slice(1).startsWith(q2); });
+      showPop(m2, "at", start);
+    } else { hidePop(); }
+  }
+
+  /* ─── History recall state ─── */
+  var histStack = [];   /* list of past user prompts in chronological order */
+  var histIdx = -1;     /* current cursor in history when navigating */
+
   function setBusy(on){
     busy = !!on;
     sbtn.classList.toggle("stop", busy);
@@ -518,6 +610,11 @@
     if (busy){ vscode.postMessage({type:"stop"}); return; }
     var t = inp.value.trim();
     if (!t) return;
+    /* Push to history (dedupe consecutive duplicates) */
+    if (histStack.length === 0 || histStack[histStack.length - 1] !== t) histStack.push(t);
+    if (histStack.length > 50) histStack.shift();
+    histIdx = histStack.length;
+    hidePop();
     add("user", t);
     inp.value = ""; autosize();
     vscode.postMessage({type:"send", text:t});
@@ -531,8 +628,39 @@
     renderPlan([]);
     curBubble = null; cur = null; curText = ""; curThk = null; toolMap = {};
   }
-  inp.addEventListener("input", autosize);
+  inp.addEventListener("input", function(){ autosize(); detectTrigger(); });
+  inp.addEventListener("blur", function(){ setTimeout(hidePop, 150); });
   inp.addEventListener("keydown", function(e){
+    /* ── #7 Phase 5: popover navigation ── */
+    if (popVisible){
+      if (e.key === "ArrowDown"){ e.preventDefault(); movePop(1); return; }
+      if (e.key === "ArrowUp")  { e.preventDefault(); movePop(-1); return; }
+      if (e.key === "Tab" || e.key === "Enter"){
+        e.preventDefault(); applyPop(); return;
+      }
+      if (e.key === "Escape"){ e.preventDefault(); hidePop(); return; }
+    }
+    /* ── History recall when input is empty ── */
+    if (!popVisible && (e.key === "ArrowUp" || e.key === "ArrowDown") && inp.value === ""){
+      if (histStack.length === 0) return;
+      e.preventDefault();
+      if (e.key === "ArrowUp"){
+        histIdx = histIdx <= 0 ? histStack.length - 1 : histIdx - 1;
+      } else {
+        histIdx = histIdx >= histStack.length - 1 ? 0 : histIdx + 1;
+      }
+      inp.value = histStack[histIdx];
+      autosize();
+      // Move cursor to end on next tick
+      setTimeout(function(){ inp.setSelectionRange(inp.value.length, inp.value.length); }, 0);
+      return;
+    }
+    /* ── Ctrl/Cmd+K → clear chat ── */
+    if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")){
+      e.preventDefault();
+      cbt && cbt.click();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); doSend(); }
     else if (e.key === "Escape" && busy){ e.preventDefault(); vscode.postMessage({type:"stop"}); }
   });

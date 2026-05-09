@@ -898,8 +898,9 @@ function buildWebviewHtml(webview, extensionUri) {
 </aside>
 <div id="ia">
   <div id="cxb">📎 将附带当前文件 / 选中代码</div>
+  <div id="pop" class="pop" style="display:none"></div>
   <div id="ir">
-    <textarea id="inp" rows="1" placeholder="向 Deep Copilot 提问... (Enter 发送 / Shift+Enter 换行)"></textarea>
+    <textarea id="inp" rows="1" placeholder="向 Deep Copilot 提问... (Enter 发送 / Shift+Enter 换行 / / 命令 / @ 上下文 / Ctrl+K 清空)"></textarea>
     <button id="sbtn" title="发送">↑</button>
   </div>
 </div>
