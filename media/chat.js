@@ -324,6 +324,27 @@
     "</div>";
   }
 
+  /* ─── #8 Phase 6: rich error card with optional Retry ────────── */
+  function addErrorCard(m){
+    if (es) es.style.display = "none";
+    var d = document.createElement("div");
+    d.className = "errCard";
+    var title = escHtml(m.title || "请求失败");
+    var body  = escHtml(m.text || "");
+    var codeBadge = m.code ? "<span class=\"errCode\">HTTP " + m.code + "</span>" : "";
+    var retryBtn = m.retryable ? "<button class=\"errRetry\">\ud83d\udd04 \u91cd\u8bd5</button>" : "";
+    var rawDetails = m.raw && m.raw !== m.text
+      ? "<details class=\"errRaw\"><summary>\u539f\u59cb\u9519\u8bef</summary><pre>" + escHtml(m.raw) + "</pre></details>"
+      : "";
+    d.innerHTML =
+      "<div class=\"errHd\"><span class=\"errIco\">\u26a0</span><span class=\"errTitle\">" + title + "</span>" + codeBadge + "</div>" +
+      "<div class=\"errBody\">" + body + "</div>" +
+      "<div class=\"errFt\">" + retryBtn + "</div>" +
+      rawDetails;
+    if (thk && thk.parentNode === msgs) msgs.insertBefore(d, thk); else msgs.appendChild(d);
+    ascroll();
+  }
+
   function add(role, text){
     if (es) es.style.display = "none";
     var d = document.createElement("div");
@@ -594,6 +615,8 @@
     sbtn.textContent = busy ? "\u23F9" : "\u2191";
     sbtn.title = busy ? "\u505C\u6B62\u751F\u6210 (Esc)" : "\u53D1\u9001";
     dot.className = "dot" + (busy ? " warn" : "");
+    var pb = document.getElementById("prog");
+    if (pb) pb.classList.toggle("on", busy);
   }
   function showCursor(){
     if (!cur) return;
@@ -755,7 +778,7 @@
     } else if (m.type === "reply"){
       add("assistant", m.text);
     } else if (m.type === "error"){
-      add("error", m.text);
+      addErrorCard(m);
     } else if (m.type === "serverStatus"){
       sb.style.display = m.running ? "none" : "block";
       if (!m.running) sb.textContent = "⚠ 后端服务器未启动 — 发送时将自动启动";
@@ -897,6 +920,13 @@
       t.textContent = preF.classList.contains("expanded")
         ? "\u2191 \u6298\u53e0"
         : "\u2026 \u5c55\u5f00\u5168\u90e8 " + (preF.getAttribute("data-lines") || "?") + " \u884c";
+      return;
+    }
+    /* ── #8 Phase 6: error card retry ── */
+    if (t.classList.contains("errRetry")){
+      if (busy) return;
+      var card = t.closest(".errCard"); if (card) card.parentNode.removeChild(card);
+      vscode.postMessage({type:"regenerate"});
       return;
     }
     /* ── #6 Phase 4: per-message action bar ── */

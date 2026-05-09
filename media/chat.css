@@ -259,3 +259,56 @@ body.vscode-light .msgC pre.cb code .hk-deco{ color:#af00db }
 #pop.pop .popn{ font-family:var(--vscode-editor-font-family,monospace); color:#7ec99a; font-weight:600; min-width:90px }
 #pop.pop .popi.sel .popn{ color:#b6e4c4 }
 #pop.pop .popd{ color:var(--vscode-descriptionForeground, #999); font-size:11px }
+
+/* ── #8 Phase 6: top progress bar ── */
+.prog{
+  position:fixed; top:0; left:0; right:0; height:2px;
+  background:transparent; z-index:100; pointer-events:none;
+  overflow:hidden;
+}
+.prog::before{
+  content:""; display:block; height:100%; width:40%;
+  background:linear-gradient(90deg, transparent, var(--vscode-progressBar-background, #0078d4), transparent);
+  transform:translateX(-100%);
+  animation:none;
+}
+.prog.on::before{ animation:progSlide 1.4s ease-in-out infinite }
+@keyframes progSlide{
+  0%   { transform:translateX(-100%) }
+  100% { transform:translateX(350%) }
+}
+
+/* ── #8 Phase 6: rich error card ── */
+.errCard{
+  margin:8px 12px; padding:10px 12px;
+  background:rgba(244, 71, 71, .08);
+  border:1px solid rgba(244, 71, 71, .35);
+  border-left:3px solid #f44747;
+  border-radius:6px;
+  color:var(--vscode-foreground);
+  font-size:13px;
+}
+.errCard .errHd{ display:flex; align-items:center; gap:8px; margin-bottom:4px }
+.errCard .errIco{ color:#f44747; font-size:16px; font-weight:700 }
+.errCard .errTitle{ font-weight:600; color:#ff8c8c; flex:1 }
+.errCard .errCode{
+  font-family:var(--vscode-editor-font-family,monospace); font-size:11px;
+  background:rgba(244, 71, 71, .2); color:#ffb3b3;
+  padding:1px 6px; border-radius:3px;
+}
+.errCard .errBody{ color:var(--vscode-foreground); margin:4px 0 8px; line-height:1.5 }
+.errCard .errFt{ display:flex; gap:6px }
+.errCard .errRetry{
+  background:#f44747; color:#fff; border:none;
+  padding:4px 12px; border-radius:4px; font:inherit; font-size:12px; cursor:pointer;
+}
+.errCard .errRetry:hover{ background:#ff5e5e }
+.errCard .errRaw{ margin-top:6px; font-size:11px; color:var(--vscode-descriptionForeground,#999) }
+.errCard .errRaw summary{ cursor:pointer; user-select:none }
+.errCard .errRaw pre{
+  margin:4px 0 0; padding:6px 8px;
+  background:rgba(0,0,0,.3); border-radius:3px;
+  font-family:var(--vscode-editor-font-family,monospace); font-size:11px;
+  white-space:pre-wrap; word-break:break-word;
+  max-height:160px; overflow-y:auto;
+}
