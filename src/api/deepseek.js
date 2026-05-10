@@ -28,6 +28,10 @@ function streamDeepSeek({ apiKey, baseUrl, messages, model, noTools, toolChoice 
             // calls this turn. 'auto' is default. Used by the conversational
             // intent classifier to physically gate exploration on greetings.
             reqPayload.tool_choice = toolChoice || 'auto';
+            // Allow the model to emit multiple tool calls in one turn.
+            // Read-only tools will be executed in parallel; mutating tools
+            // are still serialized in the agent loop (provider.js).
+            reqPayload.parallel_tool_calls = true;
         }
         const body = JSON.stringify(reqPayload);
 

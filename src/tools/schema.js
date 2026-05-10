@@ -15,8 +15,25 @@ const TOOL_DEFS = [
     {
         type: 'function',
         function: {
+            name: 'apply_patch',
+            description: 'Apply a unified diff patch to one or more workspace files. PREFERRED over str_replace_in_file for any edit spanning multiple lines, multiple hunks, or multiple files. Use standard unified diff format ("--- a/path\\n+++ b/path\\n@@ ... @@\\n context/+add/-remove lines"). Handles CRLF/LF mismatch and ±3-line fuzz automatically. Returns a per-hunk success/failure report so you can self-correct on partial failure.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    patch: {
+                        type: 'string',
+                        description: 'Unified diff text. Must include --- / +++ headers and @@ hunk headers. Multiple files and multiple hunks per file are supported. Paths must be relative to workspace root (strip the leading a/ b/ prefixes — i.e. use the real relative path after ---/+++).',
+                    },
+                },
+                required: ['patch'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
             name: 'str_replace_in_file',
-            description: 'Apply a surgical edit to an existing file by literal find-and-replace. Use this for editing existing files. The old_string must match exactly (whitespace, indentation, line endings included). If old_string is not unique, include more surrounding context, or set expected_replacements to the actual occurrence count. Prefer this over write_file for any edit that is not a full rewrite.',
+            description: 'Apply a surgical edit to an existing file by literal find-and-replace. Use for single, small, uniquely-identifiable replacements where apply_patch would be overkill. The old_string must match exactly (whitespace, indentation, line endings included). If old_string is not unique, include more surrounding context, or set expected_replacements to the actual occurrence count. For multi-line or multi-hunk edits, prefer apply_patch instead.',
             parameters: {
                 type: 'object',
                 properties: {

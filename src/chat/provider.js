@@ -12,7 +12,7 @@ const { streamDeepSeek } = require('../api/deepseek');
 const { wsRoot } = require('../utils/paths');
 const {
     toolReadFile, toolListDir, toolGrepSearch, toolFindFiles,
-    toolWriteFile, toolStrReplaceInFile, toolRunShell, toolWebSearch,
+    toolWriteFile, toolStrReplaceInFile, toolApplyPatch, toolRunShell, toolWebSearch,
 } = require('../tools/exec');
 const { t, isZh } = require('../utils/i18n');
 const { openFile } = require('./openFile');
@@ -93,7 +93,7 @@ class ChatViewProvider {
         this._sessionId  = null;
         // Per-session in-flight runs. A run survives session switches and only ends
         // when the agentic loop completes or the user explicitly stops it.
-        // Map<sessionId, { sessionId, messages, abortCtrl, reply, busy, events }>
+        // Map<sessionId, { sessionId, messages, abortCtrl, reply, busy, events, toolCache }>
         this._runs       = new Map();
     }
 
@@ -106,6 +106,10 @@ class ChatViewProvider {
             reply: { user: '', asst: '', thoughts: '' },
             busy: false,
             events: [],   // buffered webview events for replay on session switch
+            // Per-session tool result cache. Key: `${toolName}::${argsHash}`.
+            // Read-only tools (read_file, grep_search, find_files, list_dir, web_search)
+            // are cached; mutating tools invalidate relevant entries.
+            toolCache: new Map(),
         };
         this._runs.set(sessionId, run);
         return run;
@@ -272,7 +276,7 @@ class ChatViewProvider {
         panel.onDidDispose(() => { if (this._panel === panel) this._panel = null; });
     }
 
-    _onMessage(msg) {
+    async _onMessage(msg) {
         switch (msg.type) {
             case 'ready': {
                 const cfg = vscode.workspace.getConfiguration('deepseekAgent');
@@ -309,7 +313,7 @@ class ChatViewProvider {
                 openFile(msg.path, msg.line);
                 break;
             case 'send':
-                this._handleSend(msg.text);
+                this._handleSend(msg.text, msg.attachments || []);
                 break;
             case 'stop': {
                 // Only abort the foreground session's run; background runs keep going.
@@ -329,6 +333,12 @@ class ChatViewProvider {
             case 'copy':
                 vscode.env.clipboard.writeText(msg.code)
                     .then(() => vscode.window.setStatusBarMessage('已复制到剪贴板', 2000));
+                break;
+            case 'codeBlockApply':
+                await this._applyCodeBlock(msg.code, msg.lang);
+                break;
+            case 'codeBlockCreate':
+                await this._createFileFromCodeBlock(msg.code, msg.lang);
                 break;
             case 'clear':
                 // Clear the foreground view only. Background runs are not aborted.
@@ -363,11 +373,40 @@ class ChatViewProvider {
             case 'feedback':
                 vscode.window.setStatusBarMessage(msg.value === 'up' ? '👍 已记录' : '👎 已记录', 1500);
                 break;
+            case 'fileSearch': {
+                // Webview asks for workspace file list matching a query (for @file popup).
+                const q = String(msg.query || '').toLowerCase();
+                const root = wsRoot();
+                let files = [];
+                try {
+                    const found = await vscode.workspace.findFiles('**/*', '{**/node_modules/**,**/.git/**,**/out/**,**/.vscode/**}', 200);
+                    files = found
+                        .map(u => vscode.workspace.asRelativePath(u, false))
+                        .filter(r => !q || r.toLowerCase().includes(q))
+                        .slice(0, 30);
+                } catch { /* ignore */ }
+                this._post({ type: 'fileSearchResults', query: msg.query, files });
+                break;
+            }
+            case 'fileContent': {
+                // Webview wants file content for an attachment chip.
+                const rel = String(msg.path || '');
+                let content = '';
+                let error = '';
+                try {
+                    const abs = require('path').join(wsRoot(), rel);
+                    content = require('fs').readFileSync(abs, 'utf8');
+                    const MAX = 64 * 1024;
+                    if (content.length > MAX) content = content.slice(0, MAX) + '\n... [truncated]';
+                } catch (e) { error = e.message; }
+                this._post({ type: 'fileContentResult', path: rel, content, error });
+                break;
+            }
         }
     }
 
     // ─── Agentic Loop ──────────────────────────────────────────────────
-    async _handleSend(text) {
+    async _handleSend(text, attachments = []) {
         if (!text?.trim()) return;
         // Reject if the foreground session is already running. Background sessions
         // keep their own busy state independently.
@@ -399,7 +438,24 @@ class ChatViewProvider {
         //   - includeCtx OFF (default): file path + selection only (cheap)
         //   - includeCtx ON:            file path + selection + visible body
         const attachment = this._buildAttachmentBlock(this._includeCtx);
-        const userContent = attachment ? attachment + '\n\n' + text : text;
+
+        // @file chips: prepend each attached file's content as a <attachment> block
+        let attachmentBlocks = attachment ? attachment + '\n\n' : '';
+        if (attachments && attachments.length) {
+            const MAX_TOTAL = 256 * 1024;
+            let totalSize = 0;
+            for (const a of attachments) {
+                if (!a || !a.path) continue;
+                const block = `<attachment path="${a.path}">\n${a.content || '(empty)'}\n</attachment>`;
+                if (totalSize + block.length > MAX_TOTAL) {
+                    attachmentBlocks += `<attachment path="${a.path}">(truncated — total attachment budget exceeded)</attachment>\n\n`;
+                    break;
+                }
+                attachmentBlocks += block + '\n\n';
+                totalSize += block.length;
+            }
+        }
+        const userContent = attachmentBlocks ? attachmentBlocks + text : text;
 
         run.reply = { user: text, asst: '', thoughts: '' };
         run.messages.push({ role: 'user', content: userContent });
@@ -525,47 +581,62 @@ class ChatViewProvider {
 
                 this._runPost(run, { type: 'newTurn' });
 
-                for (const tc of toolCalls) {
+                // ── Parallel / serial dispatch ─────────────────────────────────
+                // Read-only tools can run in parallel; mutating tools are always
+                // serialized to avoid workspace race conditions.
+                const READ_ONLY = new Set(['read_file', 'list_dir', 'grep_search', 'find_files', 'web_search']);
+
+                // Partition: parallel batch (read-only), then serial (mutating)
+                // While preserving the original order for message assembly.
+                const results = new Array(toolCalls.length);
+
+                // Phase 1: launch all read-only tools concurrently
+                const parallelTasks = [];
+                for (let i = 0; i < toolCalls.length; i++) {
+                    const tc = toolCalls[i];
+                    if (!READ_ONLY.has(tc.name)) continue;
                     let args;
                     try { args = JSON.parse(tc.args || '{}'); } catch { args = {}; }
-                    // Webview expects args as a JSON STRING (its shortArgs/toolMeta
-                    // helpers call JSON.parse). Send the raw string, not the object.
                     const argsStr = tc.args || '{}';
+                    Logger.info('TOOL_CALL', { id: tc.id, name: tc.name, args });
+                    this._runPost(run, { type: 'toolStart', id: tc.id, name: tc.name, args: argsStr });
+                    const tT0 = Date.now();
+                    parallelTasks.push(
+                        this._executeTool(tc.name, args, mode, run, signal)
+                            .catch(e => `Error: ${e.message}`)
+                            .then(res => {
+                                if (typeof res !== 'string') { try { res = JSON.stringify(res); } catch { res = String(res); } }
+                                Logger.info('TOOL_RESULT', { id: tc.id, name: tc.name, elapsed_ms: Date.now() - tT0, ok: !String(res).startsWith('Error'), output: String(res).slice(0, 2000) });
+                                this._runPost(run, { type: 'toolResult', id: tc.id, name: tc.name, ok: !res.startsWith('Error'), output: res.slice(0, 600) });
+                                results[i] = { tc, args, result: res };
+                            })
+                    );
+                }
+                if (parallelTasks.length) await Promise.all(parallelTasks);
 
+                // Phase 2: run mutating tools serially (in original order)
+                for (let i = 0; i < toolCalls.length; i++) {
+                    const tc = toolCalls[i];
+                    if (READ_ONLY.has(tc.name)) continue;
+                    let args;
+                    try { args = JSON.parse(tc.args || '{}'); } catch { args = {}; }
+                    const argsStr = tc.args || '{}';
                     Logger.info('TOOL_CALL', { id: tc.id, name: tc.name, args });
                     const tT0 = Date.now();
-
                     this._runPost(run, { type: 'toolStart', id: tc.id, name: tc.name, args: argsStr });
-
                     let result = '';
-                    try {
-                        result = await this._executeTool(tc.name, args, mode, run, signal);
-                    } catch (e) {
-                        result = `Error: ${e.message}`;
-                    }
-                    // Defensive: tools should return strings, but guard against
-                    // accidental object/undefined returns so the UI never sees
-                    // "[object Object]" or "undefined" as a tool output.
-                    if (typeof result !== 'string') {
-                        try { result = JSON.stringify(result); } catch { result = String(result); }
-                    }
-
-                    Logger.info('TOOL_RESULT', {
-                        id: tc.id,
-                        name: tc.name,
-                        elapsed_ms: Date.now() - tT0,
-                        ok: !String(result).startsWith('Error'),
-                        output: String(result).slice(0, 2000),
-                        truncated: String(result).length > 2000,
-                    });
-
+                    try { result = await this._executeTool(tc.name, args, mode, run, signal); }
+                    catch (e) { result = `Error: ${e.message}`; }
+                    if (typeof result !== 'string') { try { result = JSON.stringify(result); } catch { result = String(result); } }
+                    Logger.info('TOOL_RESULT', { id: tc.id, name: tc.name, elapsed_ms: Date.now() - tT0, ok: !String(result).startsWith('Error'), output: String(result).slice(0, 2000) });
                     this._runPost(run, { type: 'toolResult', id: tc.id, name: tc.name, ok: !result.startsWith('Error'), output: result.slice(0, 600) });
+                    results[i] = { tc, args, result };
+                }
 
-                    run.messages.push({
-                        role: 'tool',
-                        tool_call_id: tc.id,
-                        content: String(result),
-                    });
+                // Phase 3: push all tool messages in original order + repetition detection
+                for (let i = 0; i < toolCalls.length; i++) {
+                    const { tc, result } = results[i];
+                    run.messages.push({ role: 'tool', tool_call_id: tc.id, content: String(result) });
 
                     const resStr = String(result);
                     const lowInfo = resStr.length < 80 || /^\(no output/.test(resStr) || /^Exit \d+: ?$/.test(resStr.trim());
@@ -664,6 +735,49 @@ class ChatViewProvider {
     }
 
     // ─── Tool Dispatcher ───────────────────────────────────────────────
+
+    // Stable hash for tool args (cache key generation).
+    _argsHash(name, args) {
+        // Simple deterministic JSON hash — sufficient since we're in the same JS runtime.
+        try { return `${name}::${JSON.stringify(args, Object.keys(args || {}).sort())}`; }
+        catch { return `${name}::${String(args)}`; }
+    }
+
+    // CACHEABLE read-only tools whose results are stable unless the workspace changes.
+    static _CACHEABLE = new Set(['read_file', 'grep_search', 'find_files', 'list_dir', 'web_search']);
+
+    // MUTATING tools — after these run we must invalidate file-based cache entries.
+    static _MUTATING = new Set(['write_file', 'str_replace_in_file', 'apply_patch', 'run_shell']);
+
+    _invalidateCacheForMutation(run, name, args) {
+        if (!run || !run.toolCache) return;
+        // For file-writing tools we know the path; invalidate read_file cache for that path.
+        const paths = new Set();
+        if (args && args.path) paths.add(String(args.path));
+        if (name === 'apply_patch' && args && args.patch) {
+            // Extract paths from diff headers
+            const matches = String(args.patch).matchAll(/^\+\+\+ (?:b\/)?(.+)/gm);
+            for (const m of matches) paths.add(m[1].trim());
+        }
+        // For run_shell we can't know what changed; clear all file-based entries.
+        if (name === 'run_shell' || paths.size === 0) {
+            // Remove all read_file / list_dir / find_files / grep_search cache entries
+            for (const key of run.toolCache.keys()) {
+                if (key.startsWith('read_file::') || key.startsWith('list_dir::') ||
+                    key.startsWith('find_files::') || key.startsWith('grep_search::')) {
+                    run.toolCache.delete(key);
+                }
+            }
+        } else {
+            // Targeted invalidation by path
+            for (const key of run.toolCache.keys()) {
+                for (const p of paths) {
+                    if (key.includes(p)) { run.toolCache.delete(key); break; }
+                }
+            }
+        }
+    }
+
     async _executeTool(name, args, approvalMode, run, abortSignal) {
         // Per-extension auto-approve / deny lists override approvalMode.
         const cfg = vscode.workspace.getConfiguration('deepseekAgent');
@@ -671,15 +785,15 @@ class ChatViewProvider {
         const autoApprove = cfg.get('autoApproveTools') || [];
         if (denyList.includes(name)) return `Denied by configuration: ${name} is in denyTools.`;
 
-        const isMutating = (name === 'write_file' || name === 'run_shell' || name === 'str_replace_in_file');
+        const isMutating = (name === 'write_file' || name === 'run_shell' || name === 'str_replace_in_file' || name === 'apply_patch');
         if (approvalMode === 'readonly' && isMutating) {
             return t('deniedReadonly');
         }
 
         const skipApproval = autoApprove.includes(name);
 
-        if ((name === 'write_file' || name === 'str_replace_in_file') && approvalMode === 'manual' && !skipApproval) {
-            const desc = name === 'write_file' ? `${t('writeFileLabel')}${args.path}` : `${t('writeFileLabel')}${args.path} (str_replace)`;
+        if ((name === 'write_file' || name === 'str_replace_in_file' || name === 'apply_patch') && approvalMode === 'manual' && !skipApproval) {
+            const desc = name === 'write_file' ? `${t('writeFileLabel')}${args.path}` : name === 'apply_patch' ? `${t('writeFileLabel')}(patch)` : `${t('writeFileLabel')}${args.path} (str_replace)`;
             const ok = await this._requestApproval(desc, abortSignal);
             if (!ok) return t('deniedByUser');
         }
@@ -691,6 +805,55 @@ class ChatViewProvider {
             }
         }
 
+        // ── Cache lookup (read-only tools only) ───────────────────────
+        const cache = run && run.toolCache;
+        if (cache && ChatViewProvider._CACHEABLE.has(name)) {
+            const cacheKey = this._argsHash(name, args);
+            if (cache.has(cacheKey)) {
+                const entry = cache.get(cacheKey);
+                // File-based tools: revalidate via mtime
+                if (name === 'read_file' && args.path) {
+                    try {
+                        const fs = require('fs');
+                        const { resolvePath } = require('../utils/paths');
+                        const mtime = fs.statSync(resolvePath(args.path)).mtimeMs;
+                        if (entry.mtime === mtime) {
+                            return entry.result + '\n(cached)';
+                        }
+                        // mtime changed → fall through to fresh read, then re-cache below
+                        cache.delete(cacheKey);
+                    } catch { /* file gone or unreadable — fall through */ }
+                } else {
+                    return entry.result + '\n(cached)';
+                }
+            }
+        }
+
+        const result = await this._dispatchTool(name, args, run, abortSignal);
+
+        // ── Cache store ───────────────────────────────────────────────
+        if (cache && ChatViewProvider._CACHEABLE.has(name) && typeof result === 'string' && !result.startsWith('Error:')) {
+            const cacheKey = this._argsHash(name, args);
+            const entry = { result };
+            if (name === 'read_file' && args.path) {
+                try {
+                    const fs = require('fs');
+                    const { resolvePath } = require('../utils/paths');
+                    entry.mtime = fs.statSync(resolvePath(args.path)).mtimeMs;
+                } catch { /* ignore */ }
+            }
+            cache.set(cacheKey, entry);
+        }
+
+        // ── Cache invalidation (mutating tools) ───────────────────────
+        if (ChatViewProvider._MUTATING.has(name)) {
+            this._invalidateCacheForMutation(run, name, args);
+        }
+
+        return result;
+    }
+
+    async _dispatchTool(name, args, run, abortSignal) {
         switch (name) {
             case 'read_file':           return toolReadFile(args);
             case 'list_dir':            return toolListDir(args);
@@ -698,6 +861,7 @@ class ChatViewProvider {
             case 'find_files':          return toolFindFiles(args);
             case 'write_file':          return toolWriteFile(args);
             case 'str_replace_in_file': return toolStrReplaceInFile(args);
+            case 'apply_patch':         return toolApplyPatch(args);
             case 'run_shell':           return toolRunShell(args, { abortSignal });
             case 'web_search':          return toolWebSearch(args, { secrets: this._context.secrets });
             case 'update_plan': {
@@ -872,6 +1036,41 @@ class ChatViewProvider {
         term.show(true);
         const cleaned = code.split(/\r?\n/).map(l => l.replace(/^\s*(?:PS\s*[A-Za-z]?:?[^>]*>\s*|[#$]\s+)/, '')).join('\n');
         term.sendText(cleaned, !!execute);
+    }
+
+    /** Apply code block to the active editor using apply_patch logic or direct replace. */
+    async _applyCodeBlock(code, lang) {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) { vscode.window.showWarningMessage('请先在编辑器中打开目标文件'); return; }
+        // If the code looks like a unified diff, try apply_patch
+        if (/^---\s/m.test(code) && /^\+\+\+\s/m.test(code)) {
+            const { toolApplyPatch } = require('../tools/exec');
+            const result = await toolApplyPatch({ patch: code });
+            vscode.window.setStatusBarMessage(result.success ? '✓ Patch 已应用' : '✗ Patch 应用失败', 3000);
+            return;
+        }
+        // Otherwise replace the full selection (or whole file if no selection)
+        const sel = editor.selection;
+        if (sel.isEmpty) {
+            // Replace entire file
+            const fullRange = new vscode.Range(
+                editor.document.positionAt(0),
+                editor.document.positionAt(editor.document.getText().length)
+            );
+            editor.edit(b => b.replace(fullRange, code));
+        } else {
+            editor.edit(b => b.replace(sel, code));
+        }
+        vscode.window.setStatusBarMessage('✓ 代码已应用到编辑器', 2500);
+    }
+
+    /** Create a new untitled file with the given code. */
+    async _createFileFromCodeBlock(code, lang) {
+        const langMap = { js: 'javascript', ts: 'typescript', py: 'python', sh: 'shellscript', bash: 'shellscript', css: 'css', html: 'html', json: 'json', md: 'markdown', yaml: 'yaml', yml: 'yaml', c: 'c', cpp: 'cpp', java: 'java', go: 'go', rs: 'rust' };
+        const languageId = langMap[lang] || lang || 'plaintext';
+        const doc = await vscode.workspace.openTextDocument({ content: code, language: languageId });
+        await vscode.window.showTextDocument(doc);
+        vscode.window.setStatusBarMessage('✓ 已在新文件中打开代码', 2500);
     }
 
     _post(msg) {

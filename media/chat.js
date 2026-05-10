@@ -258,6 +258,8 @@
         "<span class=\"lang\">" + escHtml(c.L) + "</span>" +
         "<button class=\"cb-copy\">\u590d\u5236</button>" +
         "<button class=\"cb-insert\">\u63d2\u5165\u7f16\u8f91\u5668</button>" +
+        "<button class=\"cb-apply\" title=\"\u667a\u80fd Apply \u5230\u5f53\u524d\u6587\u4ef6\">\u2714 Apply</button>" +
+        "<button class=\"cb-newfile\" title=\"\u4fdd\u5b58\u4e3a\u65b0\u6587\u4ef6\">\ud83d\udcc4 \u65b0\u5efa\u6587\u4ef6</button>" +
       "</div><code>" + highlighted + "</code>" +
       (foldable ? "<button class=\"cb-fold\">\u2026 \u5c55\u5f00\u5168\u90e8 " + rawLines.length + " \u884c</button>" : "") +
     "</pre>";
@@ -678,6 +680,68 @@
     { name: "@terminal",  desc: "附带终端最近输出(占位)", action: "noop" },
   ];
 
+  // ── @file chips (attached files) ──────────────────────────────────────
+  var atChipsEl = document.getElementById("at-chips");
+  var attachedFiles = []; // [{ path, content }]
+
+  function renderChips() {
+    if (!atChipsEl) return;
+    if (!attachedFiles.length) { atChipsEl.innerHTML = ""; atChipsEl.style.display = "none"; return; }
+    atChipsEl.style.display = "flex";
+    atChipsEl.innerHTML = attachedFiles.map(function(f, i){
+      var name = f.path.replace(/^.*[\\/]/, '');
+      return '<span class="chip" data-i="'+i+'" title="'+f.path+'">📄 '+name+' <button class="chip-x" data-i="'+i+'" title="移除">×</button></span>';
+    }).join('');
+  }
+
+  function removeChip(i) {
+    attachedFiles.splice(i, 1);
+    renderChips();
+  }
+
+  atChipsEl && atChipsEl.addEventListener("click", function(e){
+    var btn = e.target.closest(".chip-x");
+    if (!btn) return;
+    removeChip(parseInt(btn.getAttribute("data-i"), 10));
+  });
+
+  function requestFileContent(path) {
+    vscode.postMessage({ type: "fileContent", path: path });
+  }
+
+  // Request file list from extension for @-popup
+  var _fileSuggestTimer = null;
+  function requestFileSuggest(q) {
+    clearTimeout(_fileSuggestTimer);
+    _fileSuggestTimer = setTimeout(function(){
+      vscode.postMessage({ type: "fileSearch", query: q });
+    }, 80);
+  }
+
+  // Drag-drop files onto input area
+  var composerCard = document.getElementById("composer-card");
+  if (composerCard) {
+    composerCard.addEventListener("dragover", function(e){ e.preventDefault(); composerCard.classList.add("drag-over"); });
+    composerCard.addEventListener("dragleave", function(){ composerCard.classList.remove("drag-over"); });
+    composerCard.addEventListener("drop", function(e){
+      e.preventDefault();
+      composerCard.classList.remove("drag-over");
+      var items = e.dataTransfer && e.dataTransfer.items;
+      if (!items) return;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].kind === "string" && items[i].type === "text/plain") {
+          items[i].getAsString(function(s){
+            // VS Code Explorer drag gives the file path as text
+            var p = s.trim().replace(/\\/g, '/');
+            if (p && !attachedFiles.some(function(f){ return f.path === p; })) {
+              requestFileContent(p);
+            }
+          });
+        }
+      }
+    });
+  }
+
   function showPop(items, kind, trigStart){
     popItems = items; popSel = 0; popKind = kind; popTrigStart = trigStart;
     if (!items.length){ hidePop(); return; }
@@ -712,12 +776,22 @@
       autosize();
       setTimeout(function(){ inp.focus(); inp.setSelectionRange(pos, pos); }, 0);
     } else if (popKind === "at"){
-      // Remove the @-token and apply action
+      // Remove the @-token
       var b2 = inp.value.slice(0, popTrigStart);
       var a2 = inp.value.slice(popTrigStart).replace(/^\S*\s?/, "");
       inp.value = b2 + a2;
       autosize();
-      if (it.action === "ctxOn" && !cxOn){ cxbt.click(); }
+      if (it.filePath) {
+        // File attach — request content, add chip
+        var fp = it.filePath;
+        if (!attachedFiles.some(function(f){ return f.path === fp; })) {
+          attachedFiles.push({ path: fp, content: null }); // placeholder
+          renderChips();
+          requestFileContent(fp);
+        }
+      } else if (it.action === "ctxOn" && !cxOn) {
+        cxbt.click();
+      }
       setTimeout(function(){ inp.focus(); inp.setSelectionRange(b2.length, b2.length); }, 0);
     }
     hidePop();
@@ -743,8 +817,16 @@
       showPop(matches, "slash", start);
     } else if (token[0] === "@"){
       var q2 = token.slice(1).toLowerCase();
-      var m2 = AT_CMDS.filter(function(c){ return c.name.slice(1).startsWith(q2); });
-      showPop(m2, "at", start);
+      // If query looks like a file path fragment (contains / . or alphanums), do file search
+      if (q2.length > 0) {
+        requestFileSuggest(q2);
+        // Show built-in @cmds while waiting for file results
+        var m2 = AT_CMDS.filter(function(c){ return c.name.slice(1).startsWith(q2); });
+        showPop(m2, "at", start);
+      } else {
+        var m3 = AT_CMDS.slice();
+        showPop(m3, "at", start);
+      }
     } else { hidePop(); }
   }
 
@@ -779,7 +861,12 @@
     /* User bubble is now echoed by the provider via 'userEcho' so that the
        message survives session switches (replayed from the run's event log). */
     inp.value = ""; autosize();
-    vscode.postMessage({type:"send", text:t});
+    var toSend = { type:"send", text:t };
+    if (attachedFiles.length) {
+      toSend.attachments = attachedFiles.filter(function(f){ return f.content !== null; });
+    }
+    attachedFiles = []; renderChips();
+    vscode.postMessage(toSend);
   }
   function resetChat(){
     var nodes = msgs.querySelectorAll(".msgU,.msgA,.err");
@@ -1010,6 +1097,31 @@
         }
       }
       renderSessions(); ascroll();
+    } else if (m.type === "fileSearchResults"){
+      // Merge file suggestions into the current @ popup
+      if (popVisible && popKind === "at") {
+        var q3 = (m.query || "").toLowerCase();
+        var fileItems = (m.files || []).map(function(fp){
+          return { name: "@" + fp, desc: "附带文件", filePath: fp };
+        });
+        // Keep AT_CMDS entries that match, then append file results
+        var builtIn = AT_CMDS.filter(function(c){ return c.name.slice(1).startsWith(q3); });
+        var merged = builtIn.concat(fileItems).slice(0, 30);
+        if (merged.length) showPop(merged, "at", popTrigStart);
+      }
+    } else if (m.type === "fileContentResult"){
+      // Update the chip's content
+      for (var fi = 0; fi < attachedFiles.length; fi++) {
+        if (attachedFiles[fi].path === m.path) {
+          if (m.error) {
+            attachedFiles.splice(fi, 1); // remove failed chip
+          } else {
+            attachedFiles[fi].content = m.content || '';
+          }
+          renderChips();
+          break;
+        }
+      }
     }
   });
 
@@ -1119,6 +1231,24 @@
       t.textContent = preF.classList.contains("expanded")
         ? "\u2191 \u6298\u53e0"
         : "\u2026 \u5c55\u5f00\u5168\u90e8 " + (preF.getAttribute("data-lines") || "?") + " \u884c";
+      return;
+    }
+    if (t.classList.contains("cb-apply")){
+      var preA = t.closest("pre.cb"); if (!preA) return;
+      var codeA = decodeURIComponent(preA.getAttribute("data-code") || "");
+      var langA = preA.getAttribute("data-lang") || "";
+      vscode.postMessage({type:"codeBlockApply", code: codeA, lang: langA});
+      var origA = t.textContent; t.textContent = "✓ 应用中…";
+      setTimeout(function(){ t.textContent = origA; }, 2000);
+      return;
+    }
+    if (t.classList.contains("cb-newfile")){
+      var preN = t.closest("pre.cb"); if (!preN) return;
+      var codeN = decodeURIComponent(preN.getAttribute("data-code") || "");
+      var langN = preN.getAttribute("data-lang") || "";
+      vscode.postMessage({type:"codeBlockCreate", code: codeN, lang: langN});
+      var origN = t.textContent; t.textContent = "✓ 已创建";
+      setTimeout(function(){ t.textContent = origN; }, 2000);
       return;
     }
     /* ── File path link → open in main editor (left side) ── */
