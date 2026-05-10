@@ -22,9 +22,9 @@
   var sb   = document.getElementById("sb");
   var dot  = document.getElementById("dot");
   var ftMode = document.getElementById("ft-mode");
-  var ftThink = document.getElementById("ft-think");
   var ftTokens = document.getElementById("ft-tokens");
   var ftCost = document.getElementById("ft-cost");
+  var ftCache = document.getElementById("ft-cache");
   var planBody = document.getElementById("plan-body");
   var planCnt = document.getElementById("plan-cnt");
   var todoBody = document.getElementById("todo-body");
@@ -32,7 +32,7 @@
   var cxOn = false, busy = false;
   var cur = null, curText = "", curThk = null, curBubble = null;
   var toolMap = {};
-  var sess = { tokens:0, cost:0, thinkMs:0 };
+  var sess = { tokens:0, cost:0, cacheHit:0, promptTotal:0 };
   var sessions = [], activeSessionId = null, currentWs = "";
   /* Smart scroll: only auto-stick to bottom when user is at/near bottom; otherwise leave alone. */
   var stick = true;
@@ -49,12 +49,16 @@
   msgs.addEventListener("wheel", function(e){ if (e.deltaY < 0) stick = false; }, { passive: true });
   function ascroll(){ if (stick) msgs.scrollTop = msgs.scrollHeight; else jumpBtn.classList.add("show"); }
 
-  /* Auto narrow mode based on width */
+  /* Auto narrow mode based on width (use webview container width, not full VS Code window) */
   function checkNarrow(){
-    if (window.innerWidth < 600) document.body.classList.add("narrow");
-    else document.body.classList.remove("narrow");
+    var w = document.documentElement.clientWidth || window.innerWidth;
+    document.body.classList.toggle("narrow", w < 600);
   }
-  window.addEventListener("resize", checkNarrow); checkNarrow();
+  window.addEventListener("resize", checkNarrow);
+  if (typeof ResizeObserver !== "undefined") {
+    try { new ResizeObserver(checkNarrow).observe(document.documentElement); } catch(e){}
+  }
+  checkNarrow();
   /* Edge toggles: collapsed by default; persist state. */
   var _ui = {};
   try { _ui = (vscode.getState() && vscode.getState().ui) || {}; } catch(e){}
@@ -99,15 +103,35 @@
     return String(s||"").replace(/[&<>"\']/g, function(c){ return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","\'":"&#39;"})[c]; });
   }
 
+  /* Recognised file extensions for click-to-open links.
+     Includes code, data, images, docs, archives, notebooks, scientific formats. */
+  var FILE_EXT_RE = "(?:ts|tsx|js|jsx|mjs|cjs|rs|py|pyi|ipynb|go|java|kt|kts|c|cc|cpp|cxx|h|hpp|hxx|m|mm|cs|fs|rb|swift|php|lua|vue|svelte|dart|scala|sh|bash|zsh|ps1|psm1|bat|cmd|sql|md|markdown|rst|tex|bib|json|json5|jsonc|toml|yaml|yml|ini|cfg|conf|env|xml|html|htm|css|scss|sass|less|csv|tsv|tab|dat|log|txt|out|err|parquet|arrow|feather|hdf5|h5|nc|mat|npy|npz|pkl|pickle|pt|pth|onnx|safetensors|ckpt|bin|gguf|wav|mp3|mp4|mov|avi|webm|png|jpg|jpeg|gif|bmp|tiff|tif|svg|webp|ico|pdf|ps|eps|dvi|doc|docx|xls|xlsx|ppt|pptx|odt|ods|odp|rtf|zip|tar|gz|tgz|bz2|xz|7z|rar|inp|odb|cae|fil|msg|sta|prt|asm|step|stp|iges|igs|stl|obj|fbx|gltf|glb)";
+  var FILE_LINK_PATH_RE = "[\\w./\\\\\\-]+\\." + FILE_EXT_RE;
+
+  function makeFileLink(p, line, col){
+    var disp = p + (line ? ":" + line : "") + (col ? ":" + col : "");
+    return "<a class=\"flink\" data-path=\"" + escHtml(p) + "\" data-line=\"" + (line || "") + "\">" + escHtml(disp) + "</a>";
+  }
+
   function renderInline(t){
     var x = escHtml(t);
+    var stash = [];
+    function park(html){ stash.push(html); return "\u0001FL" + (stash.length - 1) + "\u0001"; }
+    /* Step A: detect file paths INSIDE inline backticks first, so `foo.csv` becomes
+       a clickable flink instead of a gray non-clickable <code>. Park as placeholder
+       so later passes won't re-match the generated <a> tag. */
+    var inlineFileRe = new RegExp("`(" + FILE_LINK_PATH_RE + ")(?::(\\d+)(?::(\\d+))?)?`", "g");
+    x = x.replace(inlineFileRe, function(_, p, line, col){ return park(makeFileLink(p, line, col)); });
+    /* Step B: bare file paths in still-plain text. Park each as a placeholder. */
+    var bareFileRe = new RegExp("(^|[\\s(\\[\\\"'`>|])(" + FILE_LINK_PATH_RE + ")(?::(\\d+)(?::(\\d+))?)?(?=[\\s,);:.!?\\]\\\"'`<|]|$)", "g");
+    x = x.replace(bareFileRe, function(_, pre, p, line, col){
+      return pre + park(makeFileLink(p, line, col));
+    });
+    /* Step C: remaining backticks → inline code; bold; etc. */
     x = x.replace(/`([^`\n]+)`/g, "<code class=\"ic\">$1</code>");
     x = x.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    x = x.replace(/(^|[\s(\[\"`])([\w./\-]+\.(?:ts|tsx|js|jsx|rs|py|go|java|c|cc|cpp|h|hpp|md|json|toml|yaml|yml|sh|ps1|html|css|scss|sql|rb|swift|kt|php|lua|vue|svelte))(?::(\d+)(?::(\d+))?)?(?=[\s,);:.!?\]\"`]|$)/g,
-      function(_, pre, p, line, col){
-        var disp = p + (line ? ":" + line : "") + (col ? ":" + col : "");
-        return pre + "<a class=\"flink\" data-path=\"" + escHtml(p) + "\" data-line=\"" + (line || "") + "\">" + escHtml(disp) + "</a>";
-      });
+    /* Step D: restore parked file-link HTML. */
+    x = x.replace(/\u0001FL(\d+)\u0001/g, function(_, i){ return stash[+i]; });
     return x;
   }
 
@@ -330,12 +354,18 @@
   }
 
   /* ─── #6 Phase 4 helper: per-message hover action bar ──────────── */
+  /* Clean icon-only buttons (Copilot / ChatGPT style). SVGs use currentColor
+     so they inherit the descriptionForeground / foreground colors on hover. */
+  var ICO_COPY  = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" d="M5.5 2.5h6a1 1 0 0 1 1 1v8M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/></svg>';
+  var ICO_REGEN = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89M13.5 2.5v3h-3"/></svg>';
+  var ICO_UP    = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" d="M6 13.5H3.5v-6H6m0 6 2.2 0a1.5 1.5 0 0 0 1.48-1.24l.6-3.3A1 1 0 0 0 9.3 7.75H6.8l.55-2.6A1.4 1.4 0 0 0 5.98 3.5L6 7.5v6Z"/></svg>';
+  var ICO_DOWN  = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" d="M6 2.5H3.5v6H6m0-6 2.2 0a1.5 1.5 0 0 1 1.48 1.24l.6 3.3A1 1 0 0 1 9.3 8.25H6.8l.55 2.6A1.4 1.4 0 0 1 5.98 12.5L6 8.5v-6Z"/></svg>';
   function actionBarHtml(){
     return "<div class=\"msgActs\">" +
-      "<button class=\"ma ma-copy\" title=\"\u590d\u5236\u539f\u59cb Markdown\">\ud83d\udccb \u590d\u5236</button>" +
-      "<button class=\"ma ma-regen\" title=\"\u4ee5\u540c\u4e00\u95ee\u9898\u91cd\u65b0\u751f\u6210\">\ud83d\udd04 \u91cd\u65b0\u751f\u6210</button>" +
-      "<button class=\"ma ma-up\" title=\"\u6709\u7528\">\ud83d\udc4d</button>" +
-      "<button class=\"ma ma-down\" title=\"\u4e0d\u6709\u7528\">\ud83d\udc4e</button>" +
+      "<button class=\"ma ma-copy\" title=\"\u590d\u5236\" aria-label=\"\u590d\u5236\">" + ICO_COPY + "</button>" +
+      "<button class=\"ma ma-regen\" title=\"\u91cd\u65b0\u751f\u6210\" aria-label=\"\u91cd\u65b0\u751f\u6210\">" + ICO_REGEN + "</button>" +
+      "<button class=\"ma ma-up\" title=\"\u6709\u7528\" aria-label=\"\u6709\u7528\">" + ICO_UP + "</button>" +
+      "<button class=\"ma ma-down\" title=\"\u4e0d\u6709\u7528\" aria-label=\"\u4e0d\u6709\u7528\">" + ICO_DOWN + "</button>" +
     "</div>";
   }
 
@@ -367,7 +397,7 @@
     else if (role === "assistant"){
       d.className = "msgA";
       d.setAttribute("data-raw", text || "");
-      d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div><div class=\"msgC\">" + escHtml(text) + "</div>" + actionBarHtml();
+      d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div><div class=\"msgC\">" + escHtml(text) + "</div>";
     } else { d.className = "err"; d.textContent = text; }
     if (thk && thk.parentNode === msgs) msgs.insertBefore(d, thk); else msgs.appendChild(d);
     ascroll();
@@ -379,36 +409,84 @@
     var d = document.createElement("div");
     d.className = "msgA";
     d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div>" +
-      "<div class=\"thinkhead\" style=\"display:none\">▸ thinking</div>" +
+      "<div class=\"thinkhead\" style=\"display:none\"><span class=\"th-dot\"></span><span class=\"th-chev\">▸</span><span class=\"th-lbl\">thinking…</span></div>" +
       "<div class=\"thinkblk\" style=\"display:none\"></div>" +
-      "<div class=\"tools\"></div><div class=\"msgC\"></div>" +
-      actionBarHtml();
+      "<div class=\"flow\"></div>";
     if (thk && thk.parentNode === msgs) msgs.insertBefore(d, thk); else msgs.appendChild(d);
     curBubble = d;
-    cur = d.querySelector(".msgC");
+    cur = null;        /* no active text segment yet */
+    curText = "";
     curThk = d.querySelector(".thinkblk");
     var thh = d.querySelector(".thinkhead");
     thh.addEventListener("click", function(){
-      if (!curThk) return;
-      var open = curThk.style.display === "block";
-      curThk.style.display = open ? "none" : "block";
-      thh.textContent = (open ? "▸ " : "▾ ") + (thh.dataset.label || "thinking");
+      var blk = thh.parentNode.querySelector(".thinkblk");
+      if (!blk) return;
+      var open = blk.style.display === "block";
+      blk.style.display = open ? "none" : "block";
+      var chev = thh.querySelector(".th-chev");
+      if (chev) chev.textContent = open ? "▸" : "▾";
     });
-    curText = "";
     return d;
+  }
+
+  /* Ensure there is a current text segment to stream markdown into.
+     A new segment is created after each tool card so text/tool order is
+     preserved (Copilot-style interleaving). */
+  function ensureTextSegment(){
+    ensureBubble();
+    if (cur && cur.classList && cur.classList.contains("seg")) return cur;
+    var seg = document.createElement("div");
+    seg.className = "msgC seg";
+    curBubble.querySelector(".flow").appendChild(seg);
+    cur = seg;
+    curText = "";
+    return seg;
   }
 
   function shortArgs(s){
     try { var o = JSON.parse(s||"{}"); return JSON.stringify(o); } catch(e){ return String(s||"").slice(0,200); }
   }
   /* Copilot-style verb + target extraction (e.g. "Read crates/core/src/lib.rs") */
-  var VERB = { read_file:"Read", write_file:"Write", list_dir:"List", grep_search:"Search", run_shell:"Run", update_plan:"Plan" };
+  var TOOL_META = {
+    read_file:    { verb:"Read",     icon:"\uD83D\uDCC4", kind:"read"    },
+    write_file:   { verb:"Edited",   icon:"\u270E",       kind:"write"   },
+    list_dir:     { verb:"Listed",   icon:"\uD83D\uDCC1", kind:"read"    },
+    grep_search:  { verb:"Searched", icon:"\uD83D\uDD0D", kind:"search"  },
+    run_shell:    { verb:"Ran",      icon:"\u25B6",       kind:"shell"   },
+    update_plan:  { verb:"Updated plan", icon:"\uD83D\uDCCB", kind:"plan" }
+  };
+  /* Detect the program/shell being invoked so we can show "powershell" / "python" / "bash"
+     as the verb (mirrors GH Copilot's "Ran terminal command: powershell" style). */
+  function detectShell(cmd){
+    var s = String(cmd||"").trim();
+    if (!s) return "shell";
+    /* strip leading "& " or env assignments */
+    s = s.replace(/^&\s+/, "").replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)+/, "");
+    var first = s.split(/\s+/)[0] || "";
+    /* trim quotes & path */
+    first = first.replace(/^['\"]+|['\"]+$/g, "");
+    var base = first.split(/[\\\/]/).pop().toLowerCase();
+    base = base.replace(/\.(exe|cmd|bat|ps1)$/, "");
+    if (!base) return "shell";
+    if (base === "pwsh" || base === "powershell") return "powershell";
+    if (base === "sh" || base === "bash" || base === "zsh" || base === "fish") return base;
+    return base;
+  }
+  function toolMeta(name, argStr){
+    var meta = TOOL_META[name] || { verb:name, icon:"\u2699", kind:"other" };
+    if (name === "run_shell"){
+      var o; try { o = JSON.parse(argStr||"{}"); } catch(e){ o = {}; }
+      var sh = detectShell(o && (o.command || o.cmd));
+      return { verb: sh, icon: meta.icon, kind: meta.kind, shell: sh };
+    }
+    return meta;
+  }
   function toolTarget(name, argStr){
     var o; try { o = JSON.parse(argStr||"{}"); } catch(e){ return ""; }
     if (!o || typeof o !== "object") return "";
     if (name === "read_file"){
       var p = o.path || o.file || ""; if (!p) return "";
-      if (o.start_line || o.end_line) return p + ":" + (o.start_line||1) + "-" + (o.end_line||"");
+      if (o.start_line || o.end_line) return p + ", lines " + (o.start_line||1) + " to " + (o.end_line||"end");
       return p;
     }
     if (name === "write_file") return o.path || o.file || "";
@@ -425,21 +503,25 @@
   function addToolCard(id, name, args, opts){
     opts = opts || {};
     ensureBubble();
-    var holder = curBubble.querySelector(".tools");
+    var holder = curBubble.querySelector(".flow");
     var d = document.createElement("div");
-    d.className = "tool run";
-    var verb = VERB[name] || name;
+    var meta = toolMeta(name, args);
+    d.className = "tool run k-" + meta.kind;
     var target = toolTarget(name, args);
     var statusTxt = opts.approval ? "等待批准" : "…";
     d.innerHTML = 
       "<div class=\"h\">" +
         "<span class=\"chev\">▶</span>" +
-        "<span class=\"nm\">" + escHtml(verb) + "</span>" +
+        "<span class=\"ico\">" + escHtml(meta.icon) + "</span>" +
+        "<span class=\"nm\">" + escHtml(meta.verb) + "</span>" +
         "<span class=\"tgt\" title=\"" + escHtml(target) + "\">" + escHtml(target) + "</span>" +
         "<span class=\"st\">" + escHtml(statusTxt) + "</span>" +
       "</div>" +
       "<div class=\"b\"><div class=\"args\">" + escHtml(shortArgs(args)) + "</div><div class=\"out\"></div></div>";
     holder.appendChild(d);
+    /* Tool card breaks the current text run; next replyDelta will start a new segment. */
+    if (cur && cur.classList && cur.classList.contains("seg")) cur.setAttribute("data-raw", curText || "");
+    cur = null; curText = "";
     d.querySelector(".h").addEventListener("click", function(){ d.classList.toggle("open"); });
     if (opts.approval){
       d.classList.add("open");
@@ -515,7 +597,13 @@
   function updateTask(){ /* no-op since v0.16: Tasks panel removed; sessions drawer replaces it */ }
 
   /* ─── Footer / session metrics ─────────────────────────────────────── */
-  function fmtCny(v){ return "¥" + (v||0).toFixed(4); }
+  function fmtCny(v){
+    v = v || 0;
+    if (v === 0) return "¥0.0000";
+    if (v < 0.0001) return "¥" + v.toExponential(2);
+    if (v < 1) return "¥" + v.toFixed(4);
+    return "¥" + v.toFixed(3);
+  }
   function fmtTokens(n){
     if (n >= 1e6) return (n/1e6).toFixed(2) + "M";
     if (n >= 1e3) return (n/1e3).toFixed(1) + "K";
@@ -524,14 +612,54 @@
   function bumpUsage(u){
     sess.tokens += (u.total_tokens || 0);
     sess.cost += (u.cost_cny || 0);
-    sess.thinkMs += (u.thinking_ms || 0);
+    var b = u.breakdown;
+    if (b) {
+      sess.cacheHit += (b.cache_hit_tokens || 0);
+      sess.promptTotal += (b.prompt_tokens || 0);
+    }
     ftTokens.textContent = fmtTokens(sess.tokens) + " tokens";
     ftCost.textContent = fmtCny(sess.cost);
-    ftThink.textContent = "🤔 " + (sess.thinkMs / 1000).toFixed(1) + "s";
+    if (ftCache) {
+      var rate = sess.promptTotal ? (sess.cacheHit / sess.promptTotal * 100) : 0;
+      ftCache.textContent = "💾 " + rate.toFixed(0) + "%";
+      ftCache.classList.toggle("good", rate >= 50);
+    }
+    /* Tooltip with per-turn breakdown */
+    if (b) {
+      var tip =
+        "本次: " + (b.total_tokens||0) + " tok"
+        + " (in " + (b.prompt_tokens||0)
+        + (b.cache_hit_tokens ? ", cache " + b.cache_hit_tokens : "")
+        + " / out " + (b.completion_tokens||0) + ")"
+        + "\n累计: " + sess.tokens + " tok / " + fmtCny(sess.cost)
+        + "\n缓存命中率: " + (sess.promptTotal ? (sess.cacheHit/sess.promptTotal*100).toFixed(1) + "%" : "-")
+        + "  (" + sess.cacheHit + "/" + sess.promptTotal + " prompt tok)"
+        + (u.model ? "\n模型: " + u.model : "")
+        + (b.pricing ? "\n单价(¥/1M): in " + b.pricing.input
+            + " · cache " + b.pricing.cache_hit
+            + " · out " + b.pricing.output : "");
+      ftTokens.title = tip;
+      ftCost.title = tip;
+      if (ftCache) ftCache.title = tip;
+    }
   }
 
   /* ─── Composer ─────────────────────────────────────────────────────── */
-  function autosize(){ inp.style.height = "36px"; inp.style.height = Math.min(inp.scrollHeight, 140) + "px"; }
+  /* GH-Copilot-style auto-grow: textarea height tracks content, capped at MAX. */
+  var INP_MIN = 36, INP_MAX = 200;
+  function autosize(){
+    /* Reset to min so scrollHeight reflects actual content (not previous height). */
+    inp.style.height = INP_MIN + "px";
+    var h = Math.min(inp.scrollHeight, INP_MAX);
+    if (h < INP_MIN) h = INP_MIN;
+    inp.style.height = h + "px";
+    /* Show scrollbar only when content exceeds the cap. */
+    inp.style.overflowY = (inp.scrollHeight > INP_MAX) ? "auto" : "hidden";
+  }
+  /* Run once after layout so initial height is correct. */
+  setTimeout(autosize, 0);
+  /* Re-run on window resize since wrapping changes line count. */
+  window.addEventListener("resize", autosize);
 
   /* ─── #7 Phase 5: slash commands + @ context + history ─── */
   var pop = document.getElementById("pop");
@@ -633,16 +761,11 @@
     var pb = document.getElementById("prog");
     if (pb) pb.classList.toggle("on", busy);
   }
-  function showCursor(){
-    if (!cur) return;
-    var ex = cur.querySelector(".tcur");
-    if (!ex) cur.insertAdjacentHTML("beforeend", "<span class=\"tcur\">\u258D</span>");
-  }
+  function showCursor(){ /* disabled: blinking cursor removed for cleaner UI */ }
   function hideCursor(){
-    if (curBubble){
-      var ex = curBubble.querySelector(".msgC .tcur");
-      if (ex) ex.remove();
-    }
+    /* Cleanup any leftover cursors from older sessions */
+    var olds = msgs.querySelectorAll(".tcur");
+    for (var i=0; i<olds.length; i++) olds[i].parentNode && olds[i].parentNode.removeChild(olds[i]);
   }
   function doSend(){
     if (busy){ vscode.postMessage({type:"stop"}); return; }
@@ -653,7 +776,8 @@
     if (histStack.length > 50) histStack.shift();
     histIdx = histStack.length;
     hidePop();
-    add("user", t);
+    /* User bubble is now echoed by the provider via 'userEcho' so that the
+       message survives session switches (replayed from the run's event log). */
     inp.value = ""; autosize();
     vscode.postMessage({type:"send", text:t});
   }
@@ -661,8 +785,9 @@
     var nodes = msgs.querySelectorAll(".msgU,.msgA,.err");
     for (var i=0;i<nodes.length;i++) nodes[i].remove();
     if (es) es.style.display = "block";
-    sess = { tokens:0, cost:0, thinkMs:0 };
-    ftTokens.textContent = "0 tokens"; ftCost.textContent = "¥0.0000"; ftThink.textContent = "🤔 0.0s";
+    sess = { tokens:0, cost:0, cacheHit:0, promptTotal:0 };
+    ftTokens.textContent = "0 tokens"; ftCost.textContent = "¥0.0000";
+    if (ftCache) { ftCache.textContent = "💾 0%"; ftCache.classList.remove("good"); }
     renderPlan([]);
     curBubble = null; cur = null; curText = ""; curThk = null; toolMap = {};
   }
@@ -727,30 +852,56 @@
     var m = e.data;
     if (m.type === "thinking"){
       thk.style.display = m.show ? "block" : "none";
+    } else if (m.type === "userEcho"){
+      add("user", m.text || "");
     } else if (m.type === "replyStart"){
       curBubble = null; cur = null; curThk = null; curText = ""; toolMap = {};
       ensureBubble(); ascroll();
       setBusy(true); showCursor();
     } else if (m.type === "newTurn"){
-      curBubble = null; cur = null; curThk = null; curText = ""; ensureBubble();
+      /* Same bubble for the entire user→assistant turn (GH Copilot style).
+         Just close out the current text segment so the next replyDelta
+         starts a fresh one positioned after any tool cards. */
+      if (cur && cur.classList && cur.classList.contains("seg")) cur.setAttribute("data-raw", curText || "");
+      cur = null; curText = "";
       showCursor();
     } else if (m.type === "replyDelta"){
-      ensureBubble();
+      ensureTextSegment();
       curText += (m.text || ""); cur.innerHTML = renderMd(curText);
       var th2 = curBubble.querySelector(".thinkhead");
       if (th2 && th2.style.display !== "none" && !th2.dataset.done) {
         th2.dataset.done = "1";
-        th2.dataset.label = "thoughts";
-        th2.textContent = (curThk && curThk.style.display === "block" ? "\u25BE " : "\u25B8 ") + "thoughts";
+        th2.classList.add("done");
+        var secs = th2.dataset.start ? Math.round((Date.now() - parseInt(th2.dataset.start,10))/1000) : 0;
+        var lbl = "Thought" + (secs ? " for " + secs + "s" : "");
+        th2.dataset.label = lbl;
+        /* auto-collapse once real reply begins */
+        if (curThk) curThk.style.display = "none";
+        var lblEl = th2.querySelector(".th-lbl"); if (lblEl) lblEl.textContent = lbl;
+        var chevEl = th2.querySelector(".th-chev"); if (chevEl) chevEl.textContent = "▸";
       }
       showCursor();
       ascroll();
     } else if (m.type === "thinkingDelta"){
       ensureBubble();
       var th = curBubble.querySelector(".thinkhead");
-      if (th && th.style.display === "none") { th.style.display = "inline-block"; th.textContent = "▸ thinking…"; }
-      /* keep thinkblk hidden until user clicks the head; just accumulate content */
+      if (th && th.style.display === "none") {
+        th.style.display = "inline-block";
+        th.dataset.start = String(Date.now());
+        /* default-expand so user sees streaming reasoning */
+        if (curThk) curThk.style.display = "block";
+      }
       curThk.textContent += (m.text || "");
+      if (th && !th.dataset.done) {
+        var es2 = th.dataset.start ? Math.round((Date.now() - parseInt(th.dataset.start,10))/1000) : 0;
+        var lbl3 = "Thinking… " + es2 + "s";
+        th.dataset.label = lbl3;
+        var lblEl3 = th.querySelector(".th-lbl"); if (lblEl3) lblEl3.textContent = lbl3;
+        var chevEl3 = th.querySelector(".th-chev");
+        if (chevEl3) chevEl3.textContent = (curThk && curThk.style.display === "block" ? "\u25BE" : "\u25B8");
+      }
+      /* keep view pinned to the latest reasoning text */
+      if (curThk && curThk.style.display === "block") curThk.scrollTop = curThk.scrollHeight;
       ascroll();
     } else if (m.type === "toolStart"){
       addToolCard(m.id, m.name, m.args, {});
@@ -758,15 +909,17 @@
       addToolCard(m.id, m.name, m.args, { approval:true });
     } else if (m.type === "autoApproval"){
       ensureBubble();
-      var holder = curBubble.querySelector(".tools");
+      var holder = curBubble.querySelector(".flow");
       var d = document.createElement("div");
-      d.className = "tool " + (m.decision ? "ok" : "err");
-      var verb2 = (VERB[m.name] || m.name);
+      var meta2 = toolMeta(m.name, m.args);
+      d.className = "tool k-" + meta2.kind + " " + (m.decision ? "ok" : "err");
       var tgt2 = toolTarget(m.name, m.args);
       var label = m.decision ? ("auto-allow · " + m.mode) : ("auto-deny · " + m.mode);
-      d.innerHTML = "<div class=\"h\"><span class=\"chev\">▶</span><span class=\"nm\">" + escHtml(verb2) + "</span><span class=\"tgt\">" + escHtml(tgt2) + "</span><span class=\"st\">" + escHtml(label) + "</span></div>" +
+      d.innerHTML = "<div class=\"h\"><span class=\"chev\">▶</span><span class=\"ico\">" + escHtml(meta2.icon) + "</span><span class=\"nm\">" + escHtml(meta2.verb) + "</span><span class=\"tgt\">" + escHtml(tgt2) + "</span><span class=\"st\">" + escHtml(label) + "</span></div>" +
         "<div class=\"b\"><div class=\"args\">" + escHtml(shortArgs(m.args)) + "</div></div>";
       holder.appendChild(d);
+      if (cur && cur.classList && cur.classList.contains("seg")) cur.setAttribute("data-raw", curText || "");
+      cur = null; curText = "";
       d.querySelector(".h").addEventListener("click", function(){ d.classList.toggle("open"); });
     } else if (m.type === "toolResult"){
       var tc = toolMap[m.id];
@@ -787,8 +940,27 @@
     } else if (m.type === "replyEnd"){
       hideCursor();
       setBusy(false);
-      if (cur && m.empty && curText === "" && curBubble && !curBubble.querySelector(".tool")){ cur.textContent = "(no response)"; }
-      if (curBubble) curBubble.setAttribute("data-raw", curText || "");
+      if (curBubble) {
+        /* Aggregate raw text from all flow segments for copy / regenerate. */
+        var segs = curBubble.querySelectorAll(".flow .msgC.seg");
+        var rawAll = "";
+        for (var si=0; si<segs.length; si++){
+          var raw = segs[si].getAttribute("data-raw");
+          rawAll += (raw != null ? raw : (segs[si].textContent || ""));
+          if (si < segs.length-1) rawAll += "\n";
+        }
+        if (cur && cur.classList && cur.classList.contains("seg")){
+          cur.setAttribute("data-raw", curText || "");
+        }
+        if (m.empty && !rawAll.trim() && !curBubble.querySelector(".tool")){
+          ensureTextSegment(); cur.textContent = "(no response)";
+        }
+        curBubble.setAttribute("data-raw", rawAll);
+        /* Strip any stale action bars from previous turn bubbles, attach only to last */
+        var prev = msgs.querySelectorAll(".msgA .msgActs");
+        for (var pi=0; pi<prev.length; pi++) prev[pi].parentNode.removeChild(prev[pi]);
+        curBubble.insertAdjacentHTML("beforeend", actionBarHtml());
+      }
       curBubble = null; cur = null; curThk = null; curText = "";
     } else if (m.type === "reply"){
       add("assistant", m.text);
@@ -815,6 +987,12 @@
     } else if (m.type === "sessionLoaded"){
       activeSessionId = m.id || null;
       resetChat();
+      /* When switching sessions, reset busy/status to a clean state. If the
+         newly-foregrounded session has an in-flight run, the provider will
+         immediately replay its buffered events (replyStart, deltas, etc.)
+         which will set busy back to true. */
+      setBusy(false);
+      sb.style.display = "none";
       var msgsArr = m.messages || [];
       for (var k=0; k<msgsArr.length; k++){
         var mm = msgsArr[k];
@@ -824,9 +1002,11 @@
           var d = document.createElement("div");
           d.className = "msgA";
           d.setAttribute("data-raw", mm.text || "");
-          d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div><div class=\"msgC\"></div>" + actionBarHtml();
+          d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div><div class=\"msgC\"></div>";
           if (thk && thk.parentNode === msgs) msgs.insertBefore(d, thk); else msgs.appendChild(d);
           d.querySelector(".msgC").innerHTML = renderMd(mm.text || "");
+          /* Action bar only on the very last assistant bubble (post-load) */
+          if (k === msgsArr.length - 1) d.insertAdjacentHTML("beforeend", actionBarHtml());
         }
       }
       renderSessions(); ascroll();
@@ -865,8 +1045,12 @@
       var b = dayBucket(s.updatedAt || s.createdAt || 0);
       if (b !== lastBucket){ html += '<div class="grp">' + b + '</div>'; lastBucket = b; }
       var act = (s.id === activeSessionId) ? " active" : "";
-      html += '<div class="si' + act + '" data-id="' + s.id + '">' +
-        '<div class="ti">' + escHtml(s.title || "Untitled") + '</div>' +
+      var bsy = s.busy ? " busy" : "";
+      html += '<div class="si' + act + bsy + '" data-id="' + s.id + '">' +
+        '<div class="ti">' +
+          (s.busy ? '<span class="busy-dot" title="思考中…"></span>' : '') +
+          escHtml(s.title || "Untitled") +
+        '</div>' +
         '<div class="meta">' + escHtml(s.model || "") + " · " + (s.msgCount||0) + " msg · " + escHtml(relTime(s.updatedAt)) + '</div>' +
         (s.preview ? '<div class="pv">' + escHtml(s.preview) + '</div>' : "") +
         '<div class="ops"><button class="rn" title="重命名">✏</button><button class="dl" title="删除">🗑</button></div>' +
@@ -937,6 +1121,15 @@
         : "\u2026 \u5c55\u5f00\u5168\u90e8 " + (preF.getAttribute("data-lines") || "?") + " \u884c";
       return;
     }
+    /* ── File path link → open in main editor (left side) ── */
+    var fl = t.closest && t.closest("a.flink");
+    if (fl){
+      e.preventDefault();
+      var fp = fl.getAttribute("data-path") || "";
+      var ln = parseInt(fl.getAttribute("data-line") || "0", 10) || 0;
+      if (fp) vscode.postMessage({ type: "openFile", path: fp, line: ln });
+      return;
+    }
     /* ── #8 Phase 6: error card retry ── */
     if (t.classList.contains("errRetry")){
       if (busy) return;
@@ -945,16 +1138,17 @@
       return;
     }
     /* ── #6 Phase 4: per-message action bar ── */
-    if (t.classList.contains("ma")){
-      var bub = t.closest(".msgA"); if (!bub) return;
+    var maBtn = t.closest && t.closest(".ma");
+    if (maBtn){
+      var bub = maBtn.closest(".msgA"); if (!bub) return;
       var raw = bub.getAttribute("data-raw") || "";
-      if (t.classList.contains("ma-copy")){
+      if (maBtn.classList.contains("ma-copy")){
         vscode.postMessage({type:"copy", code: raw});
-        var oc = t.textContent; t.textContent = "\u2713 \u5df2\u590d\u5236";
-        setTimeout(function(){ t.textContent = oc; }, 1500);
+        maBtn.classList.add("copied");
+        setTimeout(function(){ maBtn.classList.remove("copied"); }, 1500);
         return;
       }
-      if (t.classList.contains("ma-regen")){
+      if (maBtn.classList.contains("ma-regen")){
         if (busy) return;
         /* Remove this assistant bubble (and any later ones) from the DOM */
         var nx = bub.nextSibling;
@@ -966,11 +1160,11 @@
         vscode.postMessage({type:"regenerate"});
         return;
       }
-      if (t.classList.contains("ma-up") || t.classList.contains("ma-down")){
+      if (maBtn.classList.contains("ma-up") || maBtn.classList.contains("ma-down")){
         var sib = bub.querySelectorAll(".ma-up,.ma-down");
         for (var si=0; si<sib.length; si++) sib[si].classList.remove("active");
-        t.classList.add("active");
-        vscode.postMessage({type:"feedback", value: t.classList.contains("ma-up") ? "up" : "down"});
+        maBtn.classList.add("active");
+        vscode.postMessage({type:"feedback", value: maBtn.classList.contains("ma-up") ? "up" : "down"});
         return;
       }
     }

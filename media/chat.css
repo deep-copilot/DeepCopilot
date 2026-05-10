@@ -9,6 +9,12 @@ body.no-right #right{display:none}
 body.no-left.no-right{grid-template-columns:0 1fr 0}
 body.narrow{grid-template-columns:1fr;grid-template-areas:"tb" "sb" "main" "composer" "foot"}
 body.narrow #left,body.narrow #right{display:none}
+/* CSS-only fallback: force narrow layout when webview viewport < 600px (independent of JS) */
+@media (max-width: 599px){
+  body{grid-template-columns:1fr !important;grid-template-areas:"tb" "sb" "main" "composer" "foot" !important}
+  body #left,body #right{display:none !important}
+  .edge-toggle{display:none !important}
+}
 #tb{grid-area:tb;display:flex;align-items:center;padding:6px 10px;gap:6px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-titleBar-activeBackground)}
 #tb .logo{flex:1;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px}
 #tb .logo-img{width:18px;height:18px;display:block;opacity:.9}
@@ -24,8 +30,9 @@ body.narrow #left,body.narrow #right{display:none}
 .tbb.active{color:var(--vscode-button-background)}
 #sb{grid-area:sb;padding:4px 12px;font-size:11px;color:var(--vscode-descriptionForeground);background:rgba(244,135,113,.1);border-bottom:1px solid var(--vscode-panel-border);display:none}
 /* Edge toggle buttons: half-circle pill on left/right edge to expand/collapse side panels */
-.edge-toggle{position:fixed;top:50%;transform:translateY(-50%);width:18px;height:54px;border:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background);color:var(--vscode-descriptionForeground);font-size:12px;line-height:54px;text-align:center;cursor:pointer;padding:0;z-index:50;opacity:.55;transition:opacity .15s,background .15s,transform .15s,left .25s,right .25s;display:flex;align-items:center;justify-content:center}
-.edge-toggle:hover{opacity:1;background:var(--vscode-toolbar-hoverBackground);color:var(--vscode-foreground)}
+.edge-toggle{position:fixed;top:50%;transform:translateY(-50%);width:20px;height:64px;border:1px solid rgba(127,127,127,.55);background:rgba(127,127,127,.22);color:var(--vscode-foreground);font-size:13px;font-weight:600;line-height:64px;text-align:center;cursor:pointer;padding:0;z-index:50;opacity:.85;box-shadow:0 0 0 1px rgba(0,0,0,.12), 0 2px 4px rgba(0,0,0,.18);transition:opacity .15s,background .15s,border-color .15s,transform .15s,left .25s,right .25s;display:flex;align-items:center;justify-content:center}
+.edge-toggle:hover{opacity:1;background:rgba(127,127,127,.42);border-color:rgba(127,127,127,.95);color:var(--vscode-foreground)}
+.edge-toggle:active{background:rgba(127,127,127,.55)}
 .edge-toggle.edge-l{left:0;border-left:none;border-radius:0 14px 14px 0}
 .edge-toggle.edge-r{right:0;border-right:none;border-radius:14px 0 0 14px}
 .edge-toggle::before{content:"";font-family:"Segoe UI Symbol",sans-serif}
@@ -71,25 +78,43 @@ body.narrow .edge-toggle{display:none}
 .jumpbtn.show{display:block}
 #main{position:relative}
 .thinkblk{font-size:11px;color:var(--vscode-descriptionForeground);font-style:italic;border-left:2px solid var(--vscode-panel-border);padding:6px 10px;margin:4px 0 8px 0;white-space:pre-wrap;opacity:.85;max-height:200px;overflow-y:auto;background:rgba(255,255,255,.02);border-radius:0 3px 3px 0}
-.thinkhead{font-size:10.5px;color:var(--vscode-descriptionForeground);margin-bottom:3px;cursor:pointer;user-select:none;display:inline-block;padding:2px 6px;border-radius:3px;opacity:.7}
+.thinkhead{font-size:11px;color:var(--vscode-descriptionForeground);margin-bottom:4px;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:10px;opacity:.85;background:rgba(255,255,255,.03);border:1px solid var(--vscode-panel-border)}
 .thinkhead:hover{background:var(--vscode-toolbar-hoverBackground);opacity:1}
-.tool{margin:2px 0;border:1px solid var(--vscode-panel-border);border-radius:4px;font-size:12px;overflow:hidden;background:var(--vscode-textCodeBlock-background)}
-.tool .h{display:flex;align-items:center;gap:6px;padding:3px 8px;cursor:pointer;user-select:none;line-height:1.4}
-.tool .h:hover{background:rgba(255,255,255,.04)}
-.tool .h .ico{font-size:11px;opacity:.65;flex-shrink:0}
-.tool .h .nm{font-family:var(--vscode-editor-font-family,monospace);font-weight:500;color:var(--vscode-foreground);font-size:11.5px;flex-shrink:0}
-.tool .h .tgt{flex:1;color:var(--vscode-textLink-foreground);font-family:var(--vscode-editor-font-family,monospace);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.tool .h .st{font-size:10px;opacity:.55;flex-shrink:0;font-family:var(--vscode-font-family)}
-.tool .h .chev{font-size:9px;opacity:.5;flex-shrink:0;transition:transform .15s}
+.thinkhead .th-chev{font-size:9px;opacity:.6}
+.thinkhead .th-lbl{font-weight:500}
+.thinkhead .th-dot{width:7px;height:7px;border-radius:50%;background:var(--vscode-button-background);box-shadow:0 0 0 0 var(--vscode-button-background);animation:thpulse 1.4s ease-out infinite;flex-shrink:0}
+.thinkhead.done .th-dot{animation:none;opacity:.45;background:var(--vscode-descriptionForeground)}
+@keyframes thpulse{0%{box-shadow:0 0 0 0 rgba(100,160,255,.55);transform:scale(1)}70%{box-shadow:0 0 0 6px rgba(100,160,255,0);transform:scale(1.15)}100%{box-shadow:0 0 0 0 rgba(100,160,255,0);transform:scale(1)}}
+.flow{display:flex;flex-direction:column;gap:2px}
+.flow .msgC.seg{line-height:1.6;word-break:break-word}
+.flow .msgC.seg:empty{display:none}
+/* GitHub-Copilot–style flat tool rows: hairline border, no fill, subtle hover. */
+.tool{margin:1px 0;border:1px solid transparent;border-bottom-color:var(--vscode-panel-border);border-radius:0;font-size:12px;overflow:hidden;background:transparent}
+.tool:first-child{border-top-color:var(--vscode-panel-border)}
+.tool .h{display:flex;align-items:center;gap:8px;padding:5px 4px 5px 2px;cursor:pointer;user-select:none;line-height:1.35}
+.tool .h:hover{background:var(--vscode-list-hoverBackground,rgba(255,255,255,.04))}
+.tool .h .chev{font-size:9px;opacity:.45;flex-shrink:0;transition:transform .15s;width:10px;text-align:center}
 .tool.open .h .chev{transform:rotate(90deg)}
-.tool .b{padding:6px 10px;display:none;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;white-space:pre-wrap;max-height:280px;overflow:auto;border-top:1px solid var(--vscode-panel-border)}
+.tool .h .ico{font-size:12px;flex-shrink:0;width:16px;text-align:center;line-height:1;opacity:.85}
+.tool .h .nm{font-family:var(--vscode-font-family);font-weight:400;color:var(--vscode-foreground);font-size:12px;flex-shrink:0;opacity:.95}
+.tool .h .tgt{flex:1;color:var(--vscode-foreground);font-family:var(--vscode-editor-font-family,monospace);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;opacity:.7}
+.tool .h .st{font-size:10.5px;flex-shrink:0;font-family:var(--vscode-font-family);padding:0 2px;border-radius:0;background:transparent;color:var(--vscode-descriptionForeground);opacity:.7}
+.tool .b{padding:6px 10px 8px 24px;display:none;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;white-space:pre-wrap;max-height:280px;overflow:auto;color:var(--vscode-descriptionForeground)}
 .tool.open .b{display:block}
-.tool .args{color:var(--vscode-descriptionForeground);margin-bottom:4px;white-space:pre-wrap;word-break:break-all;font-size:10.5px}
-.tool.err{border-color:rgba(244,135,113,.45)}
+.tool .args{color:var(--vscode-descriptionForeground);margin-bottom:4px;white-space:pre-wrap;word-break:break-all;font-size:10.5px;opacity:.75}
+/* Per-tool accent colors — only tint the icon, no left bar */
+.tool.k-shell .h .ico{color:#4ec9b0}
+.tool.k-read  .h .ico{color:#9cdcfe}
+.tool.k-search .h .ico{color:#dcdcaa}
+.tool.k-write .h .ico{color:#ce9178}
+.tool.k-plan  .h .ico{color:#c586c0}
+.tool.k-other .h .ico{color:var(--vscode-descriptionForeground)}
+/* States */
 .tool.err .h .st{color:var(--vscode-errorForeground);opacity:.95}
-.tool.ok .h .st{color:#7ec99a}
-.tool.run .h .st{color:#e8b86d}
-.tool .approve{padding:5px 8px;display:flex;gap:6px;border-top:1px solid var(--vscode-panel-border);background:rgba(255,200,100,.08)}
+.tool.ok  .h .st{color:var(--vscode-descriptionForeground);opacity:.7}
+.tool.run .h .st{color:#e8b86d;opacity:.95}
+.tool.run .h .st::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#e8b86d;margin-right:5px;vertical-align:middle;animation:thpulse 1.4s ease-out infinite}
+.tool .approve{padding:5px 8px;display:flex;gap:6px;border-top:1px solid var(--vscode-panel-border);background:rgba(255,200,100,.06)}
 .tool .approve button{padding:3px 10px;border:none;border-radius:3px;cursor:pointer;font-size:11px}
 .btn-yes{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
 .btn-no{background:var(--vscode-input-background);color:var(--vscode-foreground);border:1px solid var(--vscode-panel-border)!important}
@@ -146,14 +171,33 @@ body.narrow .edge-toggle{display:none}
 #right .si:hover .ops{display:flex}
 #right .si .ops button{background:none;border:none;color:var(--vscode-icon-foreground);cursor:pointer;padding:2px 4px;border-radius:3px;font-size:10px;opacity:.7}
 #right .si .ops button:hover{background:var(--vscode-toolbar-hoverBackground);opacity:1}
+#right .si.busy .ti{color:var(--vscode-button-background)}
+#right .si .busy-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--vscode-button-background,#4ea1ff);margin-right:6px;vertical-align:middle;animation:sibusy 1s ease-in-out infinite}
+@keyframes sibusy{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
 #ia{grid-area:composer;border-top:1px solid var(--vscode-panel-border);padding:8px;background:var(--vscode-sideBar-background)}
 #cxb{display:none;font-size:11px;color:var(--vscode-button-background);padding:0 2px 6px}
-#ir{display:flex;gap:6px;align-items:flex-end}
-#inp{flex:1;resize:none;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:6px;padding:7px 10px;font-family:inherit;font-size:13px;line-height:1.45;min-height:36px;max-height:140px;outline:none}
-#inp:focus{border-color:var(--vscode-focusBorder)}
-#sbtn{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:6px;width:34px;height:34px;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1}
+/* GH-Copilot-style composer card: textarea on top, bottom bar with attach/model/mode/send */
+#composer-card{display:flex;flex-direction:column;background:var(--vscode-input-background);border:1px solid var(--vscode-input-border);border-radius:10px;transition:border-color .12s,box-shadow .12s}
+#composer-card:focus-within{border-color:var(--vscode-focusBorder);box-shadow:0 0 0 1px var(--vscode-focusBorder)}
+#inp{flex:0 0 auto;resize:none;background:transparent;color:var(--vscode-input-foreground);border:none;border-radius:10px 10px 0 0;padding:9px 12px 6px;font-family:inherit;font-size:13px;line-height:1.45;min-height:36px;max-height:200px;outline:none;overflow-y:hidden;box-sizing:border-box;width:100%;display:block}
+#composer-bar{display:flex;align-items:center;gap:4px;padding:4px 6px 6px}
+#composer-bar .cb-left{flex:1;display:flex;align-items:center;gap:4px;flex-wrap:wrap;min-width:0}
+#composer-bar .cbtn{background:none;border:none;color:var(--vscode-icon-foreground);cursor:pointer;padding:3px 7px;border-radius:6px;font-size:13px;line-height:1;height:24px;display:inline-flex;align-items:center;justify-content:center;opacity:.85}
+#composer-bar .cbtn:hover{background:var(--vscode-toolbar-hoverBackground);opacity:1}
+#composer-bar .cbtn.active{color:var(--vscode-button-background);background:rgba(100,160,255,.10);opacity:1}
+#composer-bar .cbsel{background:transparent;color:var(--vscode-foreground);border:1px solid transparent;border-radius:6px;font-size:11px;padding:2px 4px;cursor:pointer;outline:none;height:24px;max-width:120px}
+#composer-bar .cbsel:hover{background:var(--vscode-toolbar-hoverBackground)}
+#composer-bar .cbsel:focus{border-color:var(--vscode-focusBorder)}
+#composer-bar .cbsel#modeSel[data-m="autopilot"]{color:var(--vscode-errorForeground)}
+#composer-bar .cbsel#modeSel[data-m="auto-edit"]{color:#e8b86d}
+#composer-bar .cbsel#modeSel[data-m="readonly"]{color:#7ec99a}
+#sbtn{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1}
 #sbtn:hover{opacity:.85}
 #sbtn:disabled{opacity:.38;cursor:default}
+/* Extra-narrow: hide model select label, keep mode + attach + send */
+@media (max-width: 380px){
+  #composer-bar .cbsel{max-width:80px;font-size:10px}
+}
 #foot{grid-area:foot;padding:3px 12px;font-size:10px;border-top:1px solid var(--vscode-panel-border);color:var(--vscode-descriptionForeground);background:var(--vscode-statusBar-background,var(--vscode-titleBar-activeBackground));display:flex;align-items:center;gap:12px;height:22px}
 #foot .ft-left{flex:1;display:flex;align-items:center;gap:8px}
 #foot .ft-right{display:flex;align-items:center;gap:10px}
@@ -161,10 +205,13 @@ body.narrow .edge-toggle{display:none}
 #foot .dot.warn{background:#e8b86d}
 #foot .dot.err{background:var(--vscode-errorForeground)}
 #foot .pill{padding:1px 6px;border-radius:8px;background:rgba(255,255,255,.05)}
-#es{padding:24px;text-align:center;opacity:.55;align-self:center;margin:auto}
+#foot .pill#ft-cache.good{color:#7ec99a}
+#es{padding:24px;text-align:center;opacity:.85;align-self:center;margin:auto}
 #es .big{font-size:32px;margin-bottom:8px}
 #es .big img{width:34px;height:34px;display:block;margin:0 auto}
-#es p{font-size:12px;line-height:1.7}
+#es strong{font-size:24px;font-weight:600;letter-spacing:.5px;display:inline-block;margin-bottom:6px}
+#es p{font-size:14px;line-height:1.7;margin:0}
+#es p.hint{font-size:12px;margin-top:14px;opacity:.85}
 #thk{display:none;padding:2px 10px 8px;align-self:flex-start;color:var(--vscode-descriptionForeground);font-size:11px}
 
 /* ── #3 Phase 1: typing cursor + Stop button ── */
@@ -230,26 +277,44 @@ body.vscode-light .msgC pre.cb code .hk-deco{ color:#af00db }
 }
 .msgC pre.cb .cb-fold:hover{ background:rgba(255,255,255,.08); color:var(--vscode-textLink-activeForeground,#3794ff) }
 
-/* ── #6 Phase 4: per-message hover action bar ── */
+/* ── #6 Phase 4: per-message action bar (Copilot/ChatGPT-style icon buttons) ── */
 .msgA{ position:relative }
 .msgA .msgActs{
-  position:absolute; top:6px; right:8px;
   display:flex; gap:2px;
-  opacity:0; transition:opacity .12s ease;
-  background:var(--vscode-editor-background, #1e1e1e);
-  border:1px solid var(--vscode-panel-border, #333);
-  border-radius:4px; padding:2px;
-  pointer-events:none;
+  margin-top:6px;
+  opacity:.55; /* faintly visible by default so it's discoverable */
+  transition:opacity .15s ease;
+  pointer-events:auto;
 }
-.msgA:hover .msgActs{ opacity:1; pointer-events:auto }
+.msgA:hover .msgActs,
+.msgA .msgActs:focus-within { opacity:1 }
 .msgA .msgActs .ma{
-  background:transparent; border:none; color:var(--vscode-foreground);
-  font:inherit; font-size:11px; padding:3px 6px; border-radius:3px;
-  cursor:pointer; white-space:nowrap;
+  display:inline-flex; align-items:center; justify-content:center;
+  width:26px; height:26px; padding:0;
+  background:transparent; border:1px solid transparent;
+  color:var(--vscode-descriptionForeground);
+  border-radius:6px;
+  cursor:pointer; line-height:0;
 }
-.msgA .msgActs .ma:hover{ background:var(--vscode-toolbar-hoverBackground, rgba(255,255,255,.08)) }
-.msgA .msgActs .ma.active{ background:rgba(126,201,154,.18); color:#7ec99a }
-.msgA .msgActs .ma.ma-down.active{ background:rgba(255,120,120,.15); color:#ff8c8c }
+.msgA .msgActs .ma:hover{
+  background:var(--vscode-toolbar-hoverBackground, rgba(255,255,255,.08));
+  color:var(--vscode-foreground);
+}
+.msgA .msgActs .ma:focus-visible{
+  outline:1px solid var(--vscode-focusBorder, #0078d4); outline-offset:1px;
+}
+.msgA .msgActs .ma svg{ display:block }
+.msgA .msgActs .ma.active{
+  background:var(--vscode-toolbar-activeBackground, rgba(255,255,255,.12));
+  color:var(--vscode-foreground);
+}
+.msgA .msgActs .ma.ma-up.active{ color:#7ec99a }
+.msgA .msgActs .ma.ma-down.active{ color:#ff8c8c }
+.msgA .msgActs .ma.ma-copy.copied{ color:#7ec99a }
+.msgA .msgActs .ma.ma-copy.copied svg{ display:none }
+.msgA .msgActs .ma.ma-copy.copied::before{
+  content:"\2713"; font-size:14px; font-weight:600; line-height:1;
+}
 
 /* ── #7 Phase 5: slash / @ command popover ── */
 #ia { position: relative }

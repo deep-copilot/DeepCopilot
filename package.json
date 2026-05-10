@@ -2,7 +2,7 @@
   "name": "deep-copilot",
   "displayName": "Deep Copilot",
   "description": "Deep Copilot — AI coding agent embedded in VS Code. Powered by DeepSeek V4, with file editing, terminal, search, and plan/todos. Standalone, no backend required.",
-  "version": "0.20.0",
+  "version": "0.24.2",
   "publisher": "ZhouChaunge",
   "repository": {
     "type": "git",
@@ -11,9 +11,14 @@
   "engines": {
     "vscode": "^1.95.0"
   },
-  "categories": ["AI", "Other"],
-  "activationEvents": ["onStartupFinished"],
-  "main": "./extension.js",
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
   "contributes": {
     "chatParticipants": [
       {
@@ -23,8 +28,14 @@
         "description": "Deep Copilot V4 agent (file read/write / search / shell)",
         "isSticky": true,
         "commands": [
-          { "name": "clear", "description": "Clear session context" },
-          { "name": "doctor", "description": "Check backend / API key status" }
+          {
+            "name": "clear",
+            "description": "Clear session context"
+          },
+          {
+            "name": "doctor",
+            "description": "Check backend / API key status"
+          }
         ]
       }
     ],
@@ -86,6 +97,11 @@
         "command": "deepseekAgent.showApiStatus",
         "title": "Deep Copilot: API Status / Config",
         "icon": "$(info)"
+      },
+      {
+        "command": "deepseekAgent.openDebugLog",
+        "title": "Deep Copilot: Open Debug Log",
+        "icon": "$(output)"
       }
     ],
     "configuration": {
@@ -109,19 +125,29 @@
         "deepseekAgent.defaultModel": {
           "type": "string",
           "default": "deepseek-v4-pro",
-          "enum": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
+          "enum": [
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-chat",
+            "deepseek-reasoner"
+          ],
           "enumDescriptions": [
-            "V4 Pro — strongest, ¥4/¥16 per million tokens",
-            "V4 Flash — fast & cheap, ¥0.5/¥2 per million tokens",
-            "Compat alias (= v4-flash)",
-            "Compat alias (= v4-flash, thinking model)"
+            "V4 Pro — strongest, ¥3/¥6 per 1M tokens (2.5折至 2026-05-31，原价 ¥12/¥24)",
+            "V4 Flash — fast & cheap, ¥1/¥2 per 1M tokens",
+            "Compat alias (= v4-flash, non-thinking)",
+            "Compat alias (= v4-flash, thinking mode)"
           ],
           "description": "Default DeepSeek model."
         },
         "deepseekAgent.approvalMode": {
           "type": "string",
           "default": "manual",
-          "enum": ["manual", "auto-edit", "autopilot", "readonly"],
+          "enum": [
+            "manual",
+            "auto-edit",
+            "autopilot",
+            "readonly"
+          ],
           "enumDescriptions": [
             "Manual — approve write_file / run_shell each time (safest, default)",
             "Auto-Edit — auto-approve file writes, prompt for shell commands",
@@ -132,15 +158,50 @@
         },
         "deepseekAgent.autoApproveTools": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Tool names to always auto-approve (overrides approvalMode), e.g. [\"write_file\"]"
         },
         "deepseekAgent.denyTools": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Tool names to always deny (overrides approvalMode), e.g. [\"run_shell\"]"
+        },
+        "deepseekAgent.enableDebugLog": {
+          "type": "boolean",
+          "default": true,
+          "description": "记录每次请求的思维链 / 工具调用 / API 事件到 .deep-copilot/logs/ 与 Output 面板，便于排查卡住的问题。"
+        },
+        "deepseekAgent.maxIterations": {
+          "type": "number",
+          "default": 15,
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Hard ceiling on tool-call iterations per send. Prevents runaway loops. Increase for very large refactors."
+        },
+        "deepseekAgent.compactBudgetTokens": {
+          "type": "number",
+          "default": 96000,
+          "minimum": 8000,
+          "description": "Approximate token budget before older tool results are auto-compacted to fit the model context window."
+        },
+        "deepseekAgent.interactionMode": {
+          "type": "string",
+          "default": "agent",
+          "enum": [
+            "agent",
+            "ask"
+          ],
+          "enumDescriptions": [
+            "Agent — model can autonomously call tools (file reads, edits, shell, etc.). Recommended for coding tasks.",
+            "Ask — pure conversational mode. Tools are NEVER exposed to the model. Use for Q&A or when you don't want any workspace exploration."
+          ],
+          "description": "Interaction mode (analogous to GitHub Copilot's Ask vs Agent). Agent mode also runs a per-turn intent classifier that auto-disables tools on greetings."
         }
       }
     },
@@ -158,20 +219,32 @@
     ],
     "menus": {
       "commandPalette": [
-        { "command": "deepseekAgent.open" },
-        { "command": "deepseekAgent.openInTab" },
-        { "command": "deepseekAgent.openTerminal" },
-        { "command": "deepseekAgent.moveToRight" }
+        {
+          "command": "deepseekAgent.open"
+        },
+        {
+          "command": "deepseekAgent.openInTab"
+        },
+        {
+          "command": "deepseekAgent.openTerminal"
+        },
+        {
+          "command": "deepseekAgent.moveToRight"
+        }
       ]
     }
   },
   "scripts": {
-    "package": "vsce package",
-    "publish": "vsce publish"
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "package": "npm run build && vsce package --out release/",
+    "publish": "npm run build && vsce publish",
+    "vscode:prepublish": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.95.0",
-    "@vscode/vsce": "^2.24.0"
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.28.0"
   }
 }

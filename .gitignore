@@ -23,3 +23,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Build output
+out/
+
