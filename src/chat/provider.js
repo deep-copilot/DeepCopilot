@@ -12,7 +12,7 @@ const { streamDeepSeek } = require('../api/deepseek');
 const { wsRoot } = require('../utils/paths');
 const {
     toolReadFile, toolListDir, toolGrepSearch, toolFindFiles,
-    toolWriteFile, toolStrReplaceInFile, toolRunShell,
+    toolWriteFile, toolStrReplaceInFile, toolRunShell, toolWebSearch,
 } = require('../tools/exec');
 const { t, isZh } = require('../utils/i18n');
 const { openFile } = require('./openFile');
@@ -699,6 +699,7 @@ class ChatViewProvider {
             case 'write_file':          return toolWriteFile(args);
             case 'str_replace_in_file': return toolStrReplaceInFile(args);
             case 'run_shell':           return toolRunShell(args, { abortSignal });
+            case 'web_search':          return toolWebSearch(args, { secrets: this._context.secrets });
             case 'update_plan': {
                 const normStatus = (status, done) => {
                     if (done === true) return 'done';

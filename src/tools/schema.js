@@ -123,6 +123,24 @@ const TOOL_DEFS = [
             },
         },
     },
+    // ─── network / research tool ────────────────────────────────────────
+    {
+        type: 'function',
+        function: {
+            name: 'web_search',
+            description: 'Search the live web (Tavily) for up-to-date information. Use ONLY when the user asks about recent events, current versions, latest documentation, news, or facts that may have changed after your training data. Do NOT use for code that lives in the workspace (use grep_search/read_file). Returns a list of {title, url, content} snippets and an optional synthesized answer. Requires the user to have configured a Tavily API key (command: "Deep Copilot: Set Tavily API Key").',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'The search query. Be specific. Use natural language; do not include site: operators unless necessary.' },
+                    max_results: { type: 'integer', description: 'Maximum number of results to return (1–10, default 5).' },
+                    search_depth: { type: 'string', enum: ['basic', 'advanced'], description: 'basic = fast; advanced = deeper crawl, slower but higher quality. Default basic.' },
+                    include_answer: { type: 'boolean', description: 'If true, ask Tavily to also return a synthesized answer paragraph (default true).' },
+                },
+                required: ['query'],
+            },
+        },
+    },
     // ─── meta / UI tool ─────────────────────────────────────────────────
     {
         type: 'function',

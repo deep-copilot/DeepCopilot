@@ -323,6 +323,103 @@ async function toolRunShell(args, ctx = {}) {
     } catch (e) { return `Error: ${e.message}`; }
 }
 
+// ---------- web_search (Tavily) ----------
+//
+// Uses Node's built-in https — no npm dependency. The Tavily API key must
+// be stored in VS Code SecretStorage under 'deepseekAgent.tavilyKey'.
+// Endpoint: https://api.tavily.com/search
+
+const https = require('https');
+
+function _tavilyRequest(payload, timeoutMs = 20000) {
+    return new Promise((resolve, reject) => {
+        const body = JSON.stringify(payload);
+        const req = https.request({
+            method: 'POST',
+            hostname: 'api.tavily.com',
+            path: '/search',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+            },
+            timeout: timeoutMs,
+        }, (res) => {
+            let chunks = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { chunks += c; });
+            res.on('end', () => {
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    return reject(new Error(`Tavily HTTP ${res.statusCode}: ${chunks.slice(0, 500)}`));
+                }
+                try { resolve(JSON.parse(chunks)); }
+                catch (e) { reject(new Error(`Tavily JSON parse failed: ${e.message}`)); }
+            });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(new Error('Tavily request timeout')); });
+        req.write(body);
+        req.end();
+    });
+}
+
+async function toolWebSearch(args, ctx = {}) {
+    try {
+        const query = String(args.query || '').trim();
+        if (!query) return 'Error: query is empty.';
+
+        const secrets = ctx && ctx.secrets;
+        if (!secrets) return 'Error: SecretStorage unavailable (internal).';
+        const apiKey = await secrets.get('deepseekAgent.tavilyKey');
+        if (!apiKey) {
+            return 'Error: Tavily API key not configured. Run command "Deep Copilot: Set Tavily API Key" (or 飞 Tavily 官方 https://app.tavily.com 注册免费 1000 次/月)，然后重试。';
+        }
+
+        const max = Math.max(1, Math.min(10, Number.isFinite(args.max_results) ? args.max_results : 5));
+        const depth = (args.search_depth === 'advanced') ? 'advanced' : 'basic';
+        const includeAnswer = (args.include_answer !== false);
+
+        const payload = {
+            api_key: apiKey,
+            query,
+            max_results: max,
+            search_depth: depth,
+            include_answer: includeAnswer,
+            include_raw_content: false,
+            include_images: false,
+        };
+
+        const data = await _tavilyRequest(payload);
+
+        const lines = [];
+        lines.push(`Query: ${query}`);
+        if (includeAnswer && data.answer) {
+            lines.push('');
+            lines.push('## Synthesized answer');
+            lines.push(data.answer);
+        }
+        const results = Array.isArray(data.results) ? data.results : [];
+        if (results.length === 0) {
+            lines.push('');
+            lines.push('(No results.)');
+        } else {
+            lines.push('');
+            lines.push(`## Top ${results.length} result(s)`);
+            results.forEach((r, i) => {
+                const title = (r.title || '(no title)').replace(/\s+/g, ' ').trim();
+                const url = r.url || '';
+                const snippet = (r.content || '').replace(/\s+/g, ' ').trim();
+                lines.push('');
+                lines.push(`### ${i + 1}. ${title}`);
+                if (url) lines.push(url);
+                if (snippet) lines.push(snippet);
+            });
+        }
+        return truncate(lines.join('\n'));
+    } catch (e) {
+        return `Error: ${e.message || String(e)}`;
+    }
+}
+
 module.exports = {
     toolReadFile,
     toolListDir,
@@ -331,6 +428,7 @@ module.exports = {
     toolWriteFile,
     toolStrReplaceInFile,
     toolRunShell,
+    toolWebSearch,
     truncate,
     isDangerous,
 };

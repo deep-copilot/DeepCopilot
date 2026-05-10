@@ -2,7 +2,7 @@
   "name": "deep-copilot",
   "displayName": "Deep Copilot",
   "description": "Deep Copilot — AI coding agent embedded in VS Code. Powered by DeepSeek V4, with file editing, terminal, search, and plan/todos. Standalone, no backend required.",
-  "version": "0.24.2",
+  "version": "0.25.0",
   "publisher": "ZhouChaunge",
   "repository": {
     "type": "git",
@@ -87,6 +87,11 @@
         "command": "deepseekAgent.setBaseUrl",
         "title": "Deep Copilot: Switch API Base URL",
         "icon": "$(globe)"
+      },
+      {
+        "command": "deepseekAgent.setTavilyKey",
+        "title": "Deep Copilot: Set Tavily API Key (Web Search)",
+        "icon": "$(search)"
       },
       {
         "command": "deepseekAgent.restartServer",

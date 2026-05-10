@@ -58,6 +58,26 @@ function activate(context) {
             await cfg.update('apiBaseUrl', url, vscode.ConfigurationTarget.Global);
             vscode.window.showInformationMessage(t('baseUrlSet') + (url || (isZh() ? '（默认国际版）' : '(default international)')));
         }),
+        vscode.commands.registerCommand('deepseekAgent.setTavilyKey', async () => {
+            const existing = await context.secrets.get('deepseekAgent.tavilyKey');
+            const key = await vscode.window.showInputBox({
+                prompt: isZh()
+                    ? '输入 Tavily API Key（用于 web_search 联网搜索；从 https://app.tavily.com 获取，免费 1000 次/月）'
+                    : 'Enter your Tavily API key (for web_search; get one at https://app.tavily.com — 1000 free searches/month)',
+                placeHolder: 'tvly-...',
+                value: existing || '',
+                password: true,
+                ignoreFocusOut: true,
+            });
+            if (key === undefined) return;
+            if (key.trim() === '') {
+                await context.secrets.delete('deepseekAgent.tavilyKey');
+                vscode.window.showInformationMessage(isZh() ? 'Deep Copilot：Tavily API Key 已删除。' : 'Deep Copilot: Tavily API key removed.');
+            } else {
+                await context.secrets.store('deepseekAgent.tavilyKey', key.trim());
+                vscode.window.showInformationMessage(isZh() ? 'Deep Copilot：Tavily API Key 已保存。' : 'Deep Copilot: Tavily API key saved.');
+            }
+        }),
         vscode.commands.registerCommand('deepseekAgent.showApiStatus', async () => {
             const cfg = vscode.workspace.getConfiguration('deepseekAgent');
             const key = await context.secrets.get('deepseekAgent.apiKey');
