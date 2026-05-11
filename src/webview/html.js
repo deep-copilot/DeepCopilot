@@ -4,16 +4,19 @@
 const vscode = require('vscode');
 
 function buildWebviewHtml(webview, extensionUri) {
-    const cssUri  = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'chat.css'));
-    const jsUri   = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'chat.js'));
-    const logoUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logo.png'));
+    const cssUri      = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'chat.css'));
+    const jsUri       = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'chat.js'));
+    const logoUri     = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logo.png'));
+    const codiconUri  = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'codicon.css'));
+    const katexCssUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'katex.min.css'));
+    const katexJsUri  = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'katex.min.js'));
     const nonce   = Buffer.from(Date.now().toString() + Math.random().toString()).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
     const csp = [
         `default-src 'none'`,
         `img-src ${webview.cspSource} https: data:`,
         `style-src ${webview.cspSource} 'unsafe-inline'`,
         `script-src 'nonce-${nonce}'`,
-        `font-src ${webview.cspSource}`,
+        `font-src ${webview.cspSource} data:`,
     ].join('; ');
     return `<!DOCTYPE html>
 <html lang="zh"><head>
@@ -21,6 +24,8 @@ function buildWebviewHtml(webview, extensionUri) {
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deep Copilot</title>
+<link rel="stylesheet" href="${codiconUri}">
+<link rel="stylesheet" href="${katexCssUri}">
 <link rel="stylesheet" href="${cssUri}">
 </head><body>
 <div id="prog" class="prog"></div>
@@ -86,12 +91,10 @@ function buildWebviewHtml(webview, extensionUri) {
           <option value="deepseek-v4-flash">v4-flash</option>
           <option value="deepseek-reasoner">reasoner</option>
         </select>
-        <select class="cbsel" id="modeSel" title="批准策略 (Approval Mode)">
-          <option value="manual">🛡 Manual</option>
-          <option value="auto-edit">✏️ Auto-Edit</option>
-          <option value="autopilot">🚀 Autopilot</option>
-          <option value="readonly">👁 Read-Only</option>
-        </select>
+        <div id="modePicker" class="mode-picker" data-m="manual">
+          <button id="modeBtn" class="cbtn mode-trigger" title="批准策略 (Approval Mode)">🛡 Manual <span class="mode-chev">▾</span></button>
+          <div id="modeDrop" class="mode-drop" style="display:none"></div>
+        </div>
       </div>
       <button id="sbtn" title="发送">↑</button>
     </div>
@@ -108,6 +111,7 @@ function buildWebviewHtml(webview, extensionUri) {
     <span class="pill" id="ft-cost" style="color:#e8b86d">¥0.0000</span>
   </div>
 </div>
+<script nonce="${nonce}" src="${katexJsUri}"></script>
 <script nonce="${nonce}" src="${jsUri}"></script>
 </body></html>`;
 }

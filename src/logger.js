@@ -16,6 +16,21 @@ let thinkingTimer = null;
 
 function ts() { return new Date().toISOString(); }
 
+// Remove log files older than MAX_LOG_AGE_MS from the given directory.
+function _cleanOldLogs(dir) {
+    const MAX_LOG_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+    const now = Date.now();
+    try {
+        for (const entry of fs.readdirSync(dir)) {
+            if (!entry.startsWith('session-') || !entry.endsWith('.log')) continue;
+            const fp = path.join(dir, entry);
+            try {
+                if (now - fs.statSync(fp).mtimeMs > MAX_LOG_AGE_MS) fs.unlinkSync(fp);
+            } catch { /* ignore individual file errors */ }
+        }
+    } catch { /* ignore if dir unreadable */ }
+}
+
 function safeJson(o) {
     try {
         return JSON.stringify(o, (_k, v) => {
@@ -56,6 +71,7 @@ const Logger = {
                 || os.tmpdir();
             const dir = path.join(root, '.deep-copilot', 'logs');
             fs.mkdirSync(dir, { recursive: true });
+            _cleanOldLogs(dir);
             const stamp = new Date().toISOString().replace(/[:.]/g, '-');
             filePath = path.join(dir, `session-${stamp}.log`);
             stream = fs.createWriteStream(filePath, { flags: 'a' });

@@ -4,6 +4,37 @@
 'use strict';
 
 const esbuild = require('esbuild');
+const fs = require('fs');
+const path = require('path');
+
+// Keep codicons font files in media/ in sync with node_modules on every build.
+function syncCodicons() {
+    const src = path.join(__dirname, 'node_modules', '@vscode', 'codicons', 'dist');
+    const dst = path.join(__dirname, 'media');
+    for (const f of ['codicon.css', 'codicon.ttf']) {
+        const s = path.join(src, f), d = path.join(dst, f);
+        if (fs.existsSync(s)) fs.copyFileSync(s, d);
+    }
+}
+// Keep KaTeX distributable in sync with node_modules on every build.
+function syncKatex() {
+    const src = path.join(__dirname, 'node_modules', 'katex', 'dist');
+    const dst = path.join(__dirname, 'media');
+    const fontsDir = path.join(dst, 'fonts');
+    if (!fs.existsSync(fontsDir)) fs.mkdirSync(fontsDir, { recursive: true });
+    for (const f of ['katex.min.js', 'katex.min.css']) {
+        const s = path.join(src, f), d = path.join(dst, f);
+        if (fs.existsSync(s)) fs.copyFileSync(s, d);
+    }
+    const srcFonts = path.join(src, 'fonts');
+    if (fs.existsSync(srcFonts)) {
+        for (const f of fs.readdirSync(srcFonts)) {
+            fs.copyFileSync(path.join(srcFonts, f), path.join(fontsDir, f));
+        }
+    }
+}
+syncCodicons();
+syncKatex();
 
 const watch = process.argv.includes('--watch');
 const isProd = !watch && process.env.NODE_ENV !== 'development';

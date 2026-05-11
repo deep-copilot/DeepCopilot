@@ -22,9 +22,6 @@ body.narrow #left,body.narrow #right{display:none}
 #tb .logo .model{opacity:.65;font-weight:400;font-size:11px}
 .tbsel{background:var(--vscode-input-background);color:var(--vscode-foreground);border:1px solid var(--vscode-input-border);border-radius:3px;font-size:11px;padding:2px 4px;cursor:pointer;outline:none}
 .tbsel:focus{border-color:var(--vscode-focusBorder)}
-.tbsel#modeSel[data-m="autopilot"]{background:rgba(244,135,113,.15);border-color:var(--vscode-errorForeground)}
-.tbsel#modeSel[data-m="auto-edit"]{background:rgba(232,184,109,.15)}
-.tbsel#modeSel[data-m="readonly"]{background:rgba(126,201,154,.10)}
 .tbb{background:none;border:none;cursor:pointer;color:var(--vscode-icon-foreground);padding:3px 8px;border-radius:3px;font-size:11px}
 .tbb:hover{background:var(--vscode-toolbar-hoverBackground)}
 .tbb.active{color:var(--vscode-button-background)}
@@ -43,10 +40,29 @@ body.no-right .edge-toggle.edge-r::before{content:"\25C2"} /* ◂ expand (point 
 body:not(.no-right) .edge-toggle.edge-r{right:280px}
 body:not(.no-right) .edge-toggle.edge-r::before{content:"\25B8"} /* ▸ collapse */
 body.narrow .edge-toggle{display:none}
-#main{grid-area:main;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:12px;min-height:0}
-.msgU{background:var(--vscode-input-background);border-radius:8px 8px 2px 8px;padding:8px 12px;align-self:flex-end;max-width:88%;white-space:pre-wrap;word-break:break-word;line-height:1.5}
+#main{grid-area:main;overflow-y:auto;padding:10px 24px;display:flex;flex-direction:column;gap:12px;min-height:0}
+body.narrow #main{padding-left:12px;padding-right:12px}
+.msgU{background:rgba(128,128,128,.18);outline:1px solid transparent;border-radius:8px 8px 2px 8px;padding:8px 12px;align-self:flex-end;max-width:88%;word-break:break-word;line-height:1.5;position:relative;cursor:pointer;transition:outline-color .15s,background .15s}
+.msgU-hd{display:none}
+.msgU-body{white-space:pre-wrap;word-break:break-word;line-height:1.5;pointer-events:none}
+.lbl-you{display:none}
+.msgU:hover{background:rgba(128,128,128,.26);outline-color:var(--vscode-focusBorder,rgba(127,127,127,.6))}
+/* ── Inline edit mode (GH Copilot style) ── */
+.msgU.editing{background:var(--vscode-input-background);outline:1px solid var(--vscode-focusBorder);cursor:default;padding:6px 8px;max-width:88%;width:88%}
+.msgU.editing:hover{background:var(--vscode-input-background)}
+.msgU.editing .msgU-body{display:none}
+.msgU-editor{display:flex;flex-direction:column;gap:6px;width:100%}
+.msgU-editor textarea{width:100%;min-height:48px;max-height:240px;resize:none;background:transparent;color:var(--vscode-input-foreground);border:none;outline:none;font-family:inherit;font-size:13px;line-height:1.5;padding:2px 0;box-sizing:border-box}
+.msgU-editor-bar{display:flex;justify-content:flex-end;gap:6px;font-size:11px}
+.msgU-editor-bar .hint{flex:1;color:var(--vscode-descriptionForeground);opacity:.7;align-self:center;font-size:10.5px}
+.msgU-editor-bar button{padding:3px 12px;border-radius:5px;font-size:11px;cursor:pointer;border:1px solid transparent;line-height:1.4}
+.msgU-editor-bar .btn-save{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border-color:var(--vscode-button-background)}
+.msgU-editor-bar .btn-save:hover{background:var(--vscode-button-hoverBackground)}
+.msgU-editor-bar .btn-save:disabled{opacity:.5;cursor:not-allowed}
+.msgU-editor-bar .btn-cancel{background:transparent;color:var(--vscode-foreground);border-color:var(--vscode-panel-border)}
+.msgU-editor-bar .btn-cancel:hover{background:var(--vscode-toolbar-hoverBackground)}
 .msgA{align-self:flex-start;width:100%}
-.msgA .lbl{font-size:10px;font-weight:700;letter-spacing:1px;color:var(--vscode-button-background);margin-bottom:5px}
+.msgA .lbl{display:none}
 .msgC{line-height:1.6;word-break:break-word}
 .msgC>p{margin:0 0 8px 0}
 .msgC>p:last-child{margin-bottom:0}
@@ -81,6 +97,7 @@ body.narrow .edge-toggle{display:none}
 .jumpbtn.show{display:block}
 #main{position:relative}
 .thinkblk{font-size:11px;color:var(--vscode-descriptionForeground);font-style:italic;border-left:2px solid var(--vscode-panel-border);padding:6px 10px;margin:4px 0 8px 0;white-space:pre-wrap;opacity:.85;max-height:200px;overflow-y:auto;background:rgba(255,255,255,.02);border-radius:0 3px 3px 0}
+.math-block{overflow-x:auto;padding:6px 2px;text-align:center}.math-block .katex-display{margin:0}.katex{font-size:1.05em}
 .thinkhead{font-size:11px;color:var(--vscode-descriptionForeground);margin-bottom:4px;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:10px;opacity:.85;background:rgba(255,255,255,.03);border:1px solid var(--vscode-panel-border)}
 .thinkhead:hover{background:var(--vscode-toolbar-hoverBackground);opacity:1}
 .thinkhead .th-chev{font-size:9px;opacity:.6}
@@ -98,7 +115,7 @@ body.narrow .edge-toggle{display:none}
 .tool .h:hover{background:var(--vscode-list-hoverBackground,rgba(255,255,255,.04))}
 .tool .h .chev{font-size:9px;opacity:.45;flex-shrink:0;transition:transform .15s;width:10px;text-align:center}
 .tool.open .h .chev{transform:rotate(90deg)}
-.tool .h .ico{font-size:12px;flex-shrink:0;width:16px;text-align:center;line-height:1;opacity:.85}
+.tool .h .ico{font-size:14px;flex-shrink:0;width:16px;text-align:center;line-height:1;opacity:.75;font-family:"codicon";display:inline-block;vertical-align:middle}
 .tool .h .nm{font-family:var(--vscode-font-family);font-weight:400;color:var(--vscode-foreground);font-size:12px;flex-shrink:0;opacity:.95}
 .tool .h .tgt{flex:1;color:var(--vscode-foreground);font-family:var(--vscode-editor-font-family,monospace);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;opacity:.7}
 .tool .h .st{font-size:10.5px;flex-shrink:0;font-family:var(--vscode-font-family);padding:0 2px;border-radius:0;background:transparent;color:var(--vscode-descriptionForeground);opacity:.7}
@@ -121,6 +138,32 @@ body.narrow .edge-toggle{display:none}
 .tool .approve button{padding:3px 10px;border:none;border-radius:3px;cursor:pointer;font-size:11px}
 .btn-yes{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
 .btn-no{background:var(--vscode-input-background);color:var(--vscode-foreground);border:1px solid var(--vscode-panel-border)!important}
+/* ── Prose tool lines (GH Copilot style) ── */
+.tl{display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:12px;color:var(--vscode-descriptionForeground);line-height:1.4;overflow:hidden}
+.tl .ico{font-size:13px;width:14px;flex-shrink:0;font-family:"codicon";opacity:.65;display:inline-block}
+.tl .tl-prose{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tl .tl-prose code{font-family:var(--vscode-editor-font-family,monospace);font-size:11px;background:var(--vscode-textCodeBlock-background,rgba(127,127,127,.15));padding:0 3px;border-radius:2px}
+.tl .tl-res{flex-shrink:0;font-size:10.5px;opacity:.55;margin-left:4px}
+.tl.run .tl-res::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#e8b86d;margin-right:4px;vertical-align:middle;animation:thpulse 1.4s ease-out infinite}
+.tl.err .tl-res{color:var(--vscode-errorForeground);opacity:.9}
+.tl.k-shell .ico{color:#4ec9b0}.tl.k-read .ico{color:#9cdcfe}.tl.k-search .ico{color:#dcdcaa}.tl.k-write .ico{color:#ce9178}.tl.k-plan .ico{color:#c586c0}
+/* Live streaming preview for write_file / str_replace_in_file / apply_patch */
+.tl-stream{margin:2px 0 6px 22px;padding:6px 8px;max-height:220px;overflow:auto;background:var(--vscode-textCodeBlock-background,rgba(127,127,127,.08));border:1px solid var(--vscode-panel-border);border-left:2px solid #ce9178;border-radius:4px;font-family:var(--vscode-editor-font-family,monospace);font-size:11.5px;line-height:1.45;white-space:pre;color:var(--vscode-editor-foreground);position:relative}
+.tl-stream code{font-family:inherit;font-size:inherit;background:transparent;padding:0;display:block}
+.tl-stream::before{content:"streaming…";position:absolute;top:2px;right:6px;font-family:var(--vscode-font-family);font-size:10px;opacity:.55;color:#e8b86d}
+.tl-stream.done::before{content:"done";color:#7bc47f;opacity:.7}
+.tl-stream.done.err::before{content:"failed";color:var(--vscode-errorForeground);opacity:.9}
+.tl-stream.done{border-left-color:#7bc47f}
+.tl-stream.done.err{border-left-color:var(--vscode-errorForeground)}
+/* Group collapse */
+.tl-group{display:flex;flex-direction:column}
+.tl-summary{display:flex;align-items:center;gap:6px;padding:3px 2px;font-size:12px;color:var(--vscode-descriptionForeground);cursor:pointer;user-select:none;line-height:1.4;overflow:hidden}
+.tl-summary:hover{background:var(--vscode-list-hoverBackground,rgba(255,255,255,.04));border-radius:3px}
+.tl-summary .tl-prose{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tl-summary .tl-chev{flex-shrink:0;font-size:11px;opacity:.5;transition:transform .15s;margin-left:2px}
+.tl-group.open .tl-summary .tl-chev{transform:rotate(180deg)}
+.tl-list{display:none;flex-direction:column;padding-left:8px;border-left:1px solid var(--vscode-panel-border);margin-left:6px}
+.tl-group.open .tl-list{display:flex}
 .err{color:var(--vscode-errorForeground);font-size:12px;padding:6px 10px;background:rgba(244,135,113,.08);border-radius:6px;border-left:3px solid var(--vscode-errorForeground);align-self:flex-start;width:100%;white-space:pre-wrap}
 #left{grid-area:left;display:flex;flex-direction:column;border-right:1px solid var(--vscode-panel-border);overflow:hidden;min-width:0;background:var(--vscode-sideBar-background)}
 #right{grid-area:right;display:flex;flex-direction:column;border-left:1px solid var(--vscode-panel-border);overflow:hidden;min-width:0;background:var(--vscode-sideBar-background)}
@@ -162,7 +205,8 @@ body.narrow .edge-toggle{display:none}
 #right .rlist{flex:1 1 auto;overflow-y:auto;padding:0}
 #right .rlist .empty{padding:18px 12px;text-align:center;color:var(--vscode-descriptionForeground);font-style:italic;font-size:11px;opacity:.6}
 #right .grp{font-size:9.5px;font-weight:700;color:var(--vscode-descriptionForeground);text-transform:uppercase;letter-spacing:1px;padding:6px 10px 3px;position:sticky;top:0;background:var(--vscode-sideBar-background);border-bottom:1px solid var(--vscode-panel-border);opacity:.7;z-index:1}
-#right .si{padding:6px 8px 6px 10px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;position:relative}
+#right .si{padding:8px 8px 8px 10px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;position:relative}
+#right .si .si-time{font-size:10px;color:var(--vscode-descriptionForeground);margin-top:2px;opacity:.65}
 #right .si:hover{background:var(--vscode-toolbar-hoverBackground)}
 #right .si.active{background:rgba(100,160,255,.10)}
 #right .si.active::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:2px;background:var(--vscode-button-background);border-radius:0 2px 2px 0}
@@ -170,14 +214,24 @@ body.narrow .edge-toggle{display:none}
 #right .si.active .ti{color:var(--vscode-button-background)}
 #right .si .meta{font-size:9.5px;color:var(--vscode-descriptionForeground);margin-top:1px;opacity:.75}
 #right .si .pv{font-size:10px;color:var(--vscode-descriptionForeground);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.6}
-#right .si .ops{position:absolute;right:4px;top:50%;transform:translateY(-50%);display:none;gap:1px}
+#right .si .ops{position:absolute;right:4px;top:50%;transform:translateY(-50%);display:none;gap:1px;background:var(--vscode-sideBar-background)}
 #right .si:hover .ops{display:flex}
-#right .si .ops button{background:none;border:none;color:var(--vscode-icon-foreground);cursor:pointer;padding:2px 4px;border-radius:3px;font-size:10px;opacity:.7}
+#right .si .ops button{background:none;border:none;color:var(--vscode-icon-foreground);cursor:pointer;padding:2px 5px;border-radius:3px;font-size:11px;opacity:.7;line-height:1}
 #right .si .ops button:hover{background:var(--vscode-toolbar-hoverBackground);opacity:1}
+#right .si.pinned .ti::before{content:"📌 ";font-size:9px}
+#right .si .unread-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--vscode-button-background);margin-right:5px;vertical-align:middle}
+#right .si .si-rename-inp{width:100%;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-focusBorder);border-radius:3px;font-size:11.5px;font-family:inherit;padding:1px 4px;outline:none}
+/* Right-click context menu */
+.sess-ctx{position:fixed;z-index:500;min-width:160px;background:var(--vscode-menu-background,var(--vscode-editorWidget-background));border:1px solid var(--vscode-menu-border,var(--vscode-panel-border));border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.25);padding:4px 0;font-size:12px;color:var(--vscode-foreground)}
+.ctx-item{padding:5px 14px;cursor:pointer;white-space:nowrap}
+.ctx-item:hover{background:var(--vscode-list-hoverBackground)}
+.ctx-item.danger{color:var(--vscode-errorForeground)}
+.ctx-sep{height:1px;background:var(--vscode-panel-border);margin:3px 0}
 #right .si.busy .ti{color:var(--vscode-button-background)}
 #right .si .busy-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--vscode-button-background,#4ea1ff);margin-right:6px;vertical-align:middle;animation:sibusy 1s ease-in-out infinite}
 @keyframes sibusy{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
-#ia{grid-area:composer;border-top:1px solid var(--vscode-panel-border);padding:8px;background:var(--vscode-sideBar-background)}
+#ia{grid-area:composer;border-top:1px solid var(--vscode-panel-border);padding:8px 24px;background:var(--vscode-sideBar-background)}
+body.narrow #ia{padding-left:8px;padding-right:8px}
 #cxb{display:none;font-size:11px;color:var(--vscode-button-background);padding:0 2px 6px}
 /* @file attachment chips */
 #at-chips{display:none;flex-wrap:wrap;gap:4px;padding:4px 2px;max-width:100%}
@@ -197,9 +251,27 @@ body.narrow .edge-toggle{display:none}
 #composer-bar .cbsel{background:transparent;color:var(--vscode-foreground);border:1px solid transparent;border-radius:6px;font-size:11px;padding:2px 4px;cursor:pointer;outline:none;height:24px;max-width:120px}
 #composer-bar .cbsel:hover{background:var(--vscode-toolbar-hoverBackground)}
 #composer-bar .cbsel:focus{border-color:var(--vscode-focusBorder)}
-#composer-bar .cbsel#modeSel[data-m="autopilot"]{color:var(--vscode-errorForeground)}
-#composer-bar .cbsel#modeSel[data-m="auto-edit"]{color:#e8b86d}
-#composer-bar .cbsel#modeSel[data-m="readonly"]{color:#7ec99a}
+/* ── Mode Picker (custom dropdown) ── */
+.mode-picker{position:relative;display:inline-flex;align-items:center}
+.mode-trigger{font-size:11px;padding:2px 7px;height:24px;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;border-radius:6px;border:1px solid transparent}
+.mode-trigger:hover{background:var(--vscode-toolbar-hoverBackground);border-color:rgba(127,127,127,.3)}
+.mode-chev{font-size:9px;opacity:.7}
+#modePicker[data-m="autopilot"] .mode-trigger{color:var(--vscode-errorForeground)}
+#modePicker[data-m="auto-edit"] .mode-trigger{color:#e8b86d}
+#modePicker[data-m="readonly"] .mode-trigger{color:#7ec99a}
+.mode-drop{position:absolute;bottom:calc(100% + 8px);left:0;min-width:260px;background:var(--vscode-menu-background,var(--vscode-editorWidget-background,var(--vscode-sideBar-background)));border:1px solid var(--vscode-menu-border,var(--vscode-panel-border));border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.25),0 2px 6px rgba(0,0,0,.15);z-index:200;overflow:hidden;animation:modeFadeIn .12s ease}
+@keyframes modeFadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.mode-drop-hd{font-size:10px;font-weight:600;color:var(--vscode-descriptionForeground);text-transform:uppercase;letter-spacing:.7px;padding:7px 12px 5px;border-bottom:1px solid var(--vscode-panel-border)}
+.mo{display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;transition:background .1s;color:var(--vscode-foreground)}
+.mo:not(:last-child){border-bottom:1px solid var(--vscode-panel-border)}
+.mo:hover{background:var(--vscode-list-hoverBackground)}
+.mo.sel{background:var(--vscode-list-activeSelectionBackground,rgba(0,116,204,.12))}
+.mo-icon{font-size:16px;width:22px;text-align:center;flex-shrink:0}
+.mo-body{flex:1;display:flex;flex-direction:column;gap:1px;min-width:0}
+.mo-name{font-size:12px;font-weight:600;color:var(--vscode-foreground)}
+.mo-desc{font-size:11px;color:var(--vscode-descriptionForeground);line-height:1.4}
+.mo-chk{font-size:12px;color:var(--vscode-button-background);opacity:0;flex-shrink:0}
+.mo.sel .mo-chk{opacity:1}
 #sbtn{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1}
 #sbtn:hover{opacity:.85}
 #sbtn:disabled{opacity:.38;cursor:default}

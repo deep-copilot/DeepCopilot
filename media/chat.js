@@ -18,7 +18,42 @@
   var dsearch = document.getElementById("dsearch");
   var cbt  = document.getElementById("cbt");
   var modelSel = document.getElementById("modelSel");
-  var modeSel = document.getElementById("modeSel");
+  var modePicker = document.getElementById("modePicker");
+  var modeBtn    = document.getElementById("modeBtn");
+  var modeDrop   = document.getElementById("modeDrop");
+  var _modeOpen  = false;
+  var MODES = [
+    { value: "manual",    icon: "🛡", name: "Manual",    desc: "每次操作前逐一确认，完全掌控执行过程" },
+    { value: "auto-edit", icon: "✏️", name: "Auto-Edit", desc: "文件编辑自动执行，Shell 命令仍需手动确认" },
+    { value: "autopilot", icon: "🚀", name: "Autopilot", desc: "完全自动运行，无需任何手动确认（高风险）" },
+    { value: "readonly",  icon: "👁",  name: "Read-Only", desc: "仅读取与分析，不执行任何写操作" },
+  ];
+  function setModeUI(mode){
+    var md = MODES.find(function(x){ return x.value === mode; }) || MODES[0];
+    if (modePicker) modePicker.dataset.m = mode;
+    if (modeBtn) modeBtn.innerHTML = md.icon + " " + md.name + " <span class='mode-chev'>\u25BE</span>";
+    if (modeDrop){ var opts = modeDrop.querySelectorAll(".mo"); for (var i=0;i<opts.length;i++) opts[i].classList.toggle("sel", opts[i].dataset.mode === mode); }
+  }
+  function openModeDrop(){
+    if (!modeDrop || _modeOpen) return;
+    var cur = modePicker ? (modePicker.dataset.m || "manual") : "manual";
+    var h = "<div class='mode-drop-hd'>批准策略 (Approval Mode)</div>";
+    for (var i=0;i<MODES.length;i++){
+      var md = MODES[i];
+      h += "<div class='mo" + (md.value === cur ? " sel" : "") + "' data-mode='" + md.value + "'>" +
+           "<span class='mo-icon'>" + md.icon + "</span>" +
+           "<span class='mo-body'><span class='mo-name'>" + md.name + "</span><span class='mo-desc'>" + md.desc + "</span></span>" +
+           "<span class='mo-chk'>✓</span></div>";
+    }
+    modeDrop.innerHTML = h;
+    modeDrop.style.display = "block";
+    _modeOpen = true;
+  }
+  function closeModeDrop(){
+    if (!modeDrop || !_modeOpen) return;
+    modeDrop.style.display = "none";
+    _modeOpen = false;
+  }
   var sb   = document.getElementById("sb");
   var dot  = document.getElementById("dot");
   var ftMode = document.getElementById("ft-mode");
@@ -32,6 +67,8 @@
   var cxOn = false, busy = false;
   var cur = null, curText = "", curThk = null, curBubble = null;
   var toolMap = {};
+  var _userMsgCount = 0; // tracks index of each .msgU for editUserMessage
+  var _editPendingIdx = -1; // index of msgU being edited, set before postMessage
   var sess = { tokens:0, cost:0, cacheHit:0, promptTotal:0 };
   var sessions = [], activeSessionId = null, currentWs = "";
   /* Smart scroll: only auto-stick to bottom when user is at/near bottom; otherwise leave alone. */
@@ -127,9 +164,13 @@
     x = x.replace(bareFileRe, function(_, pre, p, line, col){
       return pre + park(makeFileLink(p, line, col));
     });
-    /* Step C: remaining backticks → inline code; bold; etc. */
+    /* Step C: remaining backticks → inline code; bold; inline math $...$; etc. */
     x = x.replace(/`([^`\n]+)`/g, "<code class=\"ic\">$1</code>");
     x = x.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    /* Inline math: $...$ (not preceded/followed by another $, avoid $$) */
+    x = x.replace(/(?<!\$)\$([^\$\n]{1,200})\$(?!\$)/g, function(_, tex){
+      return renderMathSafe(tex, false);
+    });
     /* Step D: restore parked file-link HTML. */
     x = x.replace(/\u0001FL(\d+)\u0001/g, function(_, i){ return stash[+i]; });
     return x;
@@ -265,10 +306,37 @@
     "</pre>";
   }
 
+  /* ─── KaTeX math rendering helpers ─────────────────────────────── */
+  function renderMathSafe(tex, displayMode){
+    if (typeof katex === "undefined") return "<code class=\"ic\">" + escHtml(tex) + "</code>";
+    try {
+      return katex.renderToString(tex, { displayMode: displayMode, throwOnError: false, output: "html" });
+    } catch(e) {
+      return "<code class=\"ic\">" + escHtml(tex) + "</code>";
+    }
+  }
+  function renderMathBlock(m){
+    return "<div class=\"math-block\">" + renderMathSafe(m.tex.trim(), true) + "</div>";
+  }
+
   function renderMd(s){
+    /* Step 0: extract display math $$...$$, \[...\] and inline \(...\) as
+       placeholders (before code blocks so that math inside ``` isn't touched). */
+    var maths = [];
+    function parkMath(tex, display){
+      maths.push({ display: display, tex: tex });
+      return "\u0000MATH" + (maths.length - 1) + "\u0000";
+    }
+    var src0 = String(s||"")
+      /* display: $$...$$ */
+      .replace(/\$\$([\s\S]*?)\$\$/g, function(_, tex){ return parkMath(tex, true); })
+      /* display: \[...\] */
+      .replace(/\\\[([\s\S]*?)\\\]/g, function(_, tex){ return parkMath(tex, true); })
+      /* inline: \(...\) */
+      .replace(/\\\(([\s\S]*?)\\\)/g, function(_, tex){ return parkMath(tex, false); });
     /* Step 1: extract fenced code blocks as placeholders */
     var codes = [];
-    var src = String(s||"").replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)```/g, function(_, lang, code){
+    var src = String(src0||"").replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)```/g, function(_, lang, code){
       var L = (lang || "plaintext").toLowerCase();
       var raw = code.replace(/\n$/, "");
       codes.push({L:L, raw:raw});
@@ -285,7 +353,13 @@
       if (only){
         out.push(buildCodeBlock(codes[+only[1]]));
       } else {
-        out.push("<p>" + renderInline(joined) + "</p>");
+        /* If a paragraph is JUST a math placeholder, emit math block */
+        var monly = joined.match(/^\s*\u0000MATH(\d+)\u0000\s*$/);
+        if (monly){
+          out.push(renderMathBlock(maths[+monly[1]]));
+        } else {
+          out.push("<p>" + renderInline(joined) + "</p>");
+        }
       }
       paraBuf = [];
     }
@@ -309,6 +383,13 @@
         flushPara();
         var idx = +ln.match(/\u0000CB(\d+)\u0000/)[1];
         out.push(buildCodeBlock(codes[idx]));
+        i++; continue;
+      }
+      /* Standalone display-math placeholder line */
+      if (/^\s*\u0000MATH\d+\u0000\s*$/.test(ln)){
+        flushPara();
+        var midx = +ln.match(/\u0000MATH(\d+)\u0000/)[1];
+        out.push(renderMathBlock(maths[midx]));
         i++; continue;
       }
       /* Table: header | sep */
@@ -352,7 +433,51 @@
       paraBuf.push(ln); i++;
     }
     flushPara();
-    return out.join("");
+    /* Final pass: restore ALL math placeholders (display + inline) anywhere
+       they survived — inside <p>, <li>, <td>, <th>, <blockquote>, etc.
+       Done after the markdown HTML is fully assembled so we don't have to
+       worry about which sub-renderer escaped or transformed the placeholder. */
+    var finalHtml = out.join("");
+    finalHtml = finalHtml.replace(/\u0000MATH(\d+)\u0000/g, function(_, idx){
+      var m = maths[+idx];
+      if (!m) return "";
+      return m.display
+        ? "<div class=\"math-block\">" + renderMathSafe(m.tex.trim(), true) + "</div>"
+        : renderMathSafe(m.tex.trim(), false);
+    });
+    return finalHtml;
+  }
+
+  /* ─── Throttled streaming render ────────────────────────────────
+     Streaming chat responses can arrive as thousands of tiny chunks
+     (one per token). Re-running the full renderMd → KaTeX → highlight
+     pipeline on every chunk is O(N²) and freezes the webview for long
+     replies (long code blocks, math, etc.). We coalesce updates into
+     one DOM write per animation frame and force a final flush at
+     transition points (newTurn, toolStart, replyEnd). */
+  var _renderRafId = 0;
+  var _renderLastTs = 0;
+  function _doRender(){
+    _renderRafId = 0;
+    _renderLastTs = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+    if (cur && cur.classList && cur.classList.contains("seg")){
+      try { cur.innerHTML = renderMd(curText); } catch(e){}
+    }
+  }
+  function scheduleRender(){
+    if (_renderRafId) return;
+    _renderRafId = (typeof requestAnimationFrame === "function")
+      ? requestAnimationFrame(_doRender)
+      : setTimeout(function(){ _doRender(); }, 16);
+  }
+  function flushRender(){
+    if (_renderRafId){
+      if (typeof cancelAnimationFrame === "function") {
+        try { cancelAnimationFrame(_renderRafId); } catch(e){ clearTimeout(_renderRafId); }
+      } else { clearTimeout(_renderRafId); }
+      _renderRafId = 0;
+    }
+    _doRender();
   }
 
   /* ─── #6 Phase 4 helper: per-message hover action bar ──────────── */
@@ -395,11 +520,16 @@
   function add(role, text){
     if (es) es.style.display = "none";
     var d = document.createElement("div");
-    if (role === "user"){ d.className = "msgU"; d.textContent = text; }
-    else if (role === "assistant"){
+    if (role === "user"){
+      var idx = _userMsgCount++;
+      d.className = "msgU";
+      d.dataset.msgIdx = idx;
+      d.dataset.origText = text || "";
+      d.innerHTML = "<div class=\"msgU-body\">" + escHtml(text) + "</div>";
+    } else if (role === "assistant"){
       d.className = "msgA";
       d.setAttribute("data-raw", text || "");
-      d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div><div class=\"msgC\">" + escHtml(text) + "</div>";
+      d.innerHTML = "<div class=\"msgC\">" + escHtml(text) + "</div>";
     } else { d.className = "err"; d.textContent = text; }
     if (thk && thk.parentNode === msgs) msgs.insertBefore(d, thk); else msgs.appendChild(d);
     ascroll();
@@ -410,7 +540,7 @@
     if (es) es.style.display = "none";
     var d = document.createElement("div");
     d.className = "msgA";
-    d.innerHTML = "<div class=\"lbl\">DEEP COPILOT</div>" +
+    d.innerHTML =
       "<div class=\"thinkhead\" style=\"display:none\"><span class=\"th-dot\"></span><span class=\"th-chev\">▸</span><span class=\"th-lbl\">thinking…</span></div>" +
       "<div class=\"thinkblk\" style=\"display:none\"></div>" +
       "<div class=\"flow\"></div>";
@@ -431,12 +561,55 @@
     return d;
   }
 
+  /* Group the trailing run of consecutive prose tool lines (.tl) into a
+     collapsible .tl-group. Called (a) when text starts flowing after tools
+     (streaming, GH Copilot look-ahead style) and (b) at replyEnd for
+     responses that end with tools and have no trailing text. */
+  function groupTrailingToolLines(){
+    if (!curBubble) return;
+    var flow = curBubble.querySelector(".flow");
+    if (!flow) return;
+    var children = Array.from(flow.children);
+    var toolRuns = [];
+    for (var i = children.length - 1; i >= 0; i--){
+      if (children[i].classList.contains("tl")) toolRuns.unshift(children[i]);
+      else break;
+    }
+    if (toolRuns.length < 2) return;
+    /* Build "Read ×2 · Ran shell" style label */
+    var verbCounts = {};
+    toolRuns.forEach(function(t){
+      var proseEl = t.querySelector(".tl-prose");
+      var verb = proseEl ? proseEl.textContent.trim().split(/\s+/)[0] : "Tool";
+      verbCounts[verb] = (verbCounts[verb] || 0) + 1;
+    });
+    var label = Object.keys(verbCounts).map(function(v){
+      return verbCounts[v] > 1 ? v + " \xd7" + verbCounts[v] : v;
+    }).join("  \xb7  ");
+    var firstIco = toolRuns[0].querySelector(".ico");
+    var icoHtml = firstIco ? firstIco.outerHTML : "";
+    var grp = document.createElement("div");
+    grp.className = "tl-group";
+    var sumRow = document.createElement("div");
+    sumRow.className = "tl-summary";
+    sumRow.innerHTML = icoHtml + "<span class=\"tl-prose\">" + escHtml(label) + "</span><span class=\"tl-chev\">\u2228</span>";
+    var listEl = document.createElement("div");
+    listEl.className = "tl-list";
+    toolRuns.forEach(function(t){ listEl.appendChild(t); });
+    grp.appendChild(sumRow);
+    grp.appendChild(listEl);
+    flow.appendChild(grp);
+    (function(g){ sumRow.addEventListener("click", function(){ g.classList.toggle("open"); }); })(grp);
+  }
+
   /* Ensure there is a current text segment to stream markdown into.
      A new segment is created after each tool card so text/tool order is
-     preserved (Copilot-style interleaving). */
+     preserved (Copilot-style interleaving). When text arrives AFTER tools,
+     group those trailing tool lines first (GH Copilot look-ahead fold). */
   function ensureTextSegment(){
     ensureBubble();
     if (cur && cur.classList && cur.classList.contains("seg")) return cur;
+    groupTrailingToolLines();
     var seg = document.createElement("div");
     seg.className = "msgC seg";
     curBubble.querySelector(".flow").appendChild(seg);
@@ -450,12 +623,12 @@
   }
   /* Copilot-style verb + target extraction (e.g. "Read crates/core/src/lib.rs") */
   var TOOL_META = {
-    read_file:    { verb:"Read",     icon:"\uD83D\uDCC4", kind:"read"    },
-    write_file:   { verb:"Edited",   icon:"\u270E",       kind:"write"   },
-    list_dir:     { verb:"Listed",   icon:"\uD83D\uDCC1", kind:"read"    },
-    grep_search:  { verb:"Searched", icon:"\uD83D\uDD0D", kind:"search"  },
-    run_shell:    { verb:"Ran",      icon:"\u25B6",       kind:"shell"   },
-    update_plan:  { verb:"Updated plan", icon:"\uD83D\uDCCB", kind:"plan" }
+    read_file:    { verb:"Read",         icon:"codicon-file",          kind:"read"   },
+    write_file:   { verb:"Edited",       icon:"codicon-edit",          kind:"write"  },
+    list_dir:     { verb:"Listed",       icon:"codicon-folder-opened", kind:"read"   },
+    grep_search:  { verb:"Searched",     icon:"codicon-search",        kind:"search" },
+    run_shell:    { verb:"Ran",          icon:"codicon-terminal",      kind:"shell"  },
+    update_plan:  { verb:"Updated plan", icon:"codicon-checklist",     kind:"plan"   }
   };
   /* Detect the program/shell being invoked so we can show "powershell" / "python" / "bash"
      as the verb (mirrors GH Copilot's "Ran terminal command: powershell" style). */
@@ -475,7 +648,7 @@
     return base;
   }
   function toolMeta(name, argStr){
-    var meta = TOOL_META[name] || { verb:name, icon:"\u2699", kind:"other" };
+    var meta = TOOL_META[name] || { verb:name, icon:"codicon-tools", kind:"other" };
     if (name === "run_shell"){
       var o; try { o = JSON.parse(argStr||"{}"); } catch(e){ o = {}; }
       var sh = detectShell(o && (o.command || o.cmd));
@@ -502,6 +675,50 @@
     var v = o.path || o.file || o.query || o.pattern || o.command || ""; return String(v).slice(0,120);
   }
 
+  /* Build an HTML prose sentence for a tool call (safe — all values go through escHtml/code). */
+  function toolProseHtml(name, argStr, meta){
+    var o; try { o = JSON.parse(argStr||"{}" ); } catch(e){ o = {}; }
+    function code(s){ return "<code>" + escHtml(String(s||" ").slice(0,80)) + "</code>"; }
+    var verb = escHtml(meta.verb);
+    if (name === "read_file"){
+      var p = o.path || o.file || ""; if (!p) return verb;
+      var loc = (o.start_line || o.end_line) ? ", lines " + (o.start_line||1) + " to " + (o.end_line||"end") : "";
+      return verb + " " + code(p) + escHtml(loc);
+    }
+    if (name === "write_file") return verb + " " + code(o.path || o.file || "");
+    if (name === "list_dir")   return verb + " " + code(o.path || o.dir || ".");
+    if (name === "grep_search"){
+      var pat = o.pattern || o.query || "";
+      var inPath = o.path || o.dir || "";
+      return verb + " for " + code(pat) + (inPath ? " in " + code(inPath) : "");
+    }
+    if (name === "run_shell"){
+      var cmd = String(o.command || o.cmd || "");
+      return verb + " " + code(cmd.length > 60 ? cmd.slice(0,60) + "\u2026" : cmd);
+    }
+    var tgt = String(o.path || o.file || o.query || o.pattern || o.command || "");
+    return verb + (tgt ? " " + code(tgt) : "");
+  }
+
+  /* Prose line tool row — no expandable body, result appended inline. */
+  function addToolLine(id, name, args){
+    ensureBubble();
+    var holder = curBubble.querySelector(".flow");
+    var d = document.createElement("div");
+    var meta = toolMeta(name, args);
+    d.className = "tl run k-" + meta.kind;
+    d.innerHTML =
+      "<i class=\"ico codicon " + escHtml(meta.icon) + "\"></i>" +
+      "<span class=\"tl-prose\">" + toolProseHtml(name, args, meta) + "</span>" +
+      "<span class=\"tl-res\"></span>";
+    holder.appendChild(d);
+    if (cur && cur.classList && cur.classList.contains("seg")) { flushRender(); cur.setAttribute("data-raw", curText || ""); }
+    cur = null; curText = "";
+    toolMap[id] = { root:d, body:null, status:d.querySelector(".tl-res"), isLine:true, name:name, args:args };
+    ascroll();
+    return d;
+  }
+
   function addToolCard(id, name, args, opts){
     opts = opts || {};
     ensureBubble();
@@ -514,7 +731,7 @@
     d.innerHTML = 
       "<div class=\"h\">" +
         "<span class=\"chev\">▶</span>" +
-        "<span class=\"ico\">" + escHtml(meta.icon) + "</span>" +
+        "<i class=\"ico codicon " + escHtml(meta.icon) + "\"></i>" +
         "<span class=\"nm\">" + escHtml(meta.verb) + "</span>" +
         "<span class=\"tgt\" title=\"" + escHtml(target) + "\">" + escHtml(target) + "</span>" +
         "<span class=\"st\">" + escHtml(statusTxt) + "</span>" +
@@ -540,7 +757,7 @@
         d.querySelector(".st").textContent = "拒绝"; d.classList.remove("run"); d.classList.add("err");
       });
     }
-    toolMap[id] = { root:d, body:d.querySelector(".b .out"), status:d.querySelector(".st") };
+    toolMap[id] = { root:d, body:d.querySelector(".b .out"), status:d.querySelector(".st"), name:name, args:args };
     ascroll();
     return d;
   }
@@ -876,7 +1093,7 @@
     ftTokens.textContent = "0 tokens"; ftCost.textContent = "¥0.0000";
     if (ftCache) { ftCache.textContent = "💾 0%"; ftCache.classList.remove("good"); }
     renderPlan([]);
-    curBubble = null; cur = null; curText = ""; curThk = null; toolMap = {};
+    curBubble = null; cur = null; curText = ""; curThk = null; toolMap = {}; _userMsgCount = 0; _editPendingIdx = -1;
   }
   inp.addEventListener("input", function(){ autosize(); detectTrigger(); });
   inp.addEventListener("blur", function(){ setTimeout(hidePop, 150); });
@@ -924,9 +1141,19 @@
   modelSel.addEventListener("change", function(){
     vscode.postMessage({type:"setModel", model: modelSel.value});
   });
-  modeSel.addEventListener("change", function(){
-    modeSel.dataset.m = modeSel.value;
-    vscode.postMessage({type:"setMode", mode: modeSel.value});
+  modeBtn && modeBtn.addEventListener("click", function(e){
+    e.stopPropagation();
+    _modeOpen ? closeModeDrop() : openModeDrop();
+  });
+  modeDrop && modeDrop.addEventListener("click", function(e){
+    var opt = e.target.closest(".mo"); if (!opt) return;
+    var mode = opt.dataset.mode;
+    setModeUI(mode);
+    vscode.postMessage({type:"setMode", mode: mode});
+    closeModeDrop();
+  });
+  document.addEventListener("click", function(e){
+    if (modePicker && !modePicker.contains(e.target)) closeModeDrop();
   });
   apibt.addEventListener("click", function(){ vscode.postMessage({type:"openApiSettings"}); });
   cbt.addEventListener("click", function(){
@@ -941,6 +1168,30 @@
       thk.style.display = m.show ? "block" : "none";
     } else if (m.type === "userEcho"){
       add("user", m.text || "");
+    } else if (m.type === "editFillInput"){
+      // Backend truncated history; remove all DOM nodes from the edited msg onward
+      var editIdx = _editPendingIdx;
+      _editPendingIdx = -1;
+      if (editIdx >= 0){
+        var allMsgU = msgs.querySelectorAll(".msgU");
+        for (var ei = 0; ei < allMsgU.length; ei++){
+          if (Number(allMsgU[ei].dataset.msgIdx) >= editIdx){
+            // remove this and all subsequent message nodes
+            var toRemove = [];
+            var nd = allMsgU[ei];
+            while (nd){
+              var nx = nd.nextSibling;
+              if (nd !== thk && nd !== jumpBtn) toRemove.push(nd);
+              nd = nx;
+            }
+            toRemove.forEach(function(n){ if (n.parentNode === msgs) msgs.removeChild(n); });
+            _userMsgCount = editIdx;
+            break;
+          }
+        }
+      }
+      inp.value = m.text || ""; autosize(); inp.focus();
+      if (es && msgs.querySelectorAll(".msgU,.msgA").length === 0) es.style.display = "block";
     } else if (m.type === "replyStart"){
       curBubble = null; cur = null; curThk = null; curText = ""; toolMap = {};
       ensureBubble(); ascroll();
@@ -949,12 +1200,13 @@
       /* Same bubble for the entire user→assistant turn (GH Copilot style).
          Just close out the current text segment so the next replyDelta
          starts a fresh one positioned after any tool cards. */
-      if (cur && cur.classList && cur.classList.contains("seg")) cur.setAttribute("data-raw", curText || "");
+      if (cur && cur.classList && cur.classList.contains("seg")) { flushRender(); cur.setAttribute("data-raw", curText || ""); }
       cur = null; curText = "";
       showCursor();
     } else if (m.type === "replyDelta"){
       ensureTextSegment();
-      curText += (m.text || ""); cur.innerHTML = renderMd(curText);
+      curText += (m.text || "");
+      scheduleRender();
       var th2 = curBubble.querySelector(".thinkhead");
       if (th2 && th2.style.display !== "none" && !th2.dataset.done) {
         th2.dataset.done = "1";
@@ -991,7 +1243,7 @@
       if (curThk && curThk.style.display === "block") curThk.scrollTop = curThk.scrollHeight;
       ascroll();
     } else if (m.type === "toolStart"){
-      addToolCard(m.id, m.name, m.args, {});
+      addToolLine(m.id, m.name, m.args);
     } else if (m.type === "approvalRequest"){
       addToolCard(m.id, m.name, m.args, { approval:true });
     } else if (m.type === "autoApproval"){
@@ -1002,23 +1254,76 @@
       d.className = "tool k-" + meta2.kind + " " + (m.decision ? "ok" : "err");
       var tgt2 = toolTarget(m.name, m.args);
       var label = m.decision ? ("auto-allow · " + m.mode) : ("auto-deny · " + m.mode);
-      d.innerHTML = "<div class=\"h\"><span class=\"chev\">▶</span><span class=\"ico\">" + escHtml(meta2.icon) + "</span><span class=\"nm\">" + escHtml(meta2.verb) + "</span><span class=\"tgt\">" + escHtml(tgt2) + "</span><span class=\"st\">" + escHtml(label) + "</span></div>" +
+      d.innerHTML = "<div class=\"h\"><span class=\"chev\">▶</span><i class=\"ico codicon " + escHtml(meta2.icon) + "\"></i><span class=\"nm\">" + escHtml(meta2.verb) + "</span><span class=\"tgt\">" + escHtml(tgt2) + "</span><span class=\"st\">" + escHtml(label) + "</span></div>" +
         "<div class=\"b\"><div class=\"args\">" + escHtml(shortArgs(m.args)) + "</div></div>";
       holder.appendChild(d);
-      if (cur && cur.classList && cur.classList.contains("seg")) cur.setAttribute("data-raw", curText || "");
+      if (cur && cur.classList && cur.classList.contains("seg")) { flushRender(); cur.setAttribute("data-raw", curText || ""); }
       cur = null; curText = "";
       d.querySelector(".h").addEventListener("click", function(){ d.classList.toggle("open"); });
+    } else if (m.type === "toolArgsDelta"){
+      var tcs = toolMap[m.id];
+      if (!tcs){ addToolLine(m.id, m.name || "write_file", "{}"); tcs = toolMap[m.id]; }
+      var pre = tcs._streamPre;
+      if (!pre){
+        pre = document.createElement("pre");
+        pre.className = "tl-stream";
+        var codeEl = document.createElement("code");
+        pre.appendChild(codeEl);
+        /* Insert after the tool line so the live preview sits below the prose */
+        var parent = tcs.root.parentNode;
+        if (parent) parent.insertBefore(pre, tcs.root.nextSibling);
+        tcs._streamPre = pre;
+        tcs._streamCode = codeEl;
+        tcs._streamBuf = "";
+        tcs._streamPending = false;
+      }
+      tcs._streamBuf += (m.contentDelta || "");
+      if (!tcs._streamPending){
+        tcs._streamPending = true;
+        var doStream = function(){
+          tcs._streamPending = false;
+          if (!tcs._streamCode) return;
+          /* Limit displayed code to last 8000 chars to keep DOM cheap */
+          var s = tcs._streamBuf;
+          if (s.length > 8000) s = "…\n" + s.slice(-8000);
+          tcs._streamCode.textContent = s;
+          if (pre) pre.scrollTop = pre.scrollHeight;
+        };
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(doStream);
+        else setTimeout(doStream, 16);
+      }
+      ascroll();
+    } else if (m.type === "toolArgsFinal"){
+      var tcF = toolMap[m.id];
+      if (tcF) tcF.args = m.args || tcF.args;
     } else if (m.type === "toolResult"){
       var tc = toolMap[m.id];
-      if (!tc){ tc = { root: addToolCard(m.id, m.name, "{}", {}), body:null, status:null };
-        tc.body = tc.root.querySelector(".b .out"); tc.status = tc.root.querySelector(".st"); }
+      if (!tc){ addToolLine(m.id, m.name || "tool", "{}"); tc = toolMap[m.id]; }
       tc.root.classList.remove("run");
       tc.root.classList.add(m.ok ? "ok" : "err");
+      if (tc._streamPre){
+        tc._streamPre.classList.add("done");
+        if (!m.ok) tc._streamPre.classList.add("err");
+      }
       var out = String(m.output || "");
       var lines = out ? out.split(/\r?\n/).length : 0;
       var bytes = out.length;
-      tc.status.textContent = m.ok ? (lines>1 ? lines + " lines" : (bytes ? bytes + "B" : "ok")) : "failed";
-      tc.body.textContent = out;
+      var resTxt;
+      if (m.ok && (m.name === "write_file" || tc.name === "write_file")){
+        try {
+          var wargs = JSON.parse(tc.args || "{}");
+          var wContent = String(wargs.content || wargs.text || "");
+          var wLines = wContent ? wContent.split(/\r?\n/).length : 0;
+          resTxt = wLines ? "+" + wLines + " lines" : "ok";
+        } catch(e){ resTxt = "ok"; }
+      } else {
+        resTxt = m.ok ? (lines>1 ? lines + " lines" : (bytes ? bytes + "B" : "ok")) : "failed";
+      }
+      tc.status.textContent = resTxt;
+      if (!tc.isLine && tc.body) {
+        tc.root.classList.remove("open");
+        tc.body.textContent = out;
+      }
       ascroll();
     } else if (m.type === "plan"){
       renderPlan(m.steps || [], m.todos || []);
@@ -1027,6 +1332,7 @@
     } else if (m.type === "replyEnd"){
       hideCursor();
       setBusy(false);
+      flushRender();
       if (curBubble) {
         /* Aggregate raw text from all flow segments for copy / regenerate. */
         var segs = curBubble.querySelectorAll(".flow .msgC.seg");
@@ -1037,6 +1343,7 @@
           if (si < segs.length-1) rawAll += "\n";
         }
         if (cur && cur.classList && cur.classList.contains("seg")){
+          flushRender();
           cur.setAttribute("data-raw", curText || "");
         }
         if (m.empty && !rawAll.trim() && !curBubble.querySelector(".tool")){
@@ -1047,6 +1354,9 @@
         var prev = msgs.querySelectorAll(".msgA .msgActs");
         for (var pi=0; pi<prev.length; pi++) prev[pi].parentNode.removeChild(prev[pi]);
         curBubble.insertAdjacentHTML("beforeend", actionBarHtml());
+        /* Group any trailing consecutive prose tool lines (handles tool-only
+           responses or responses that end with tool calls and no trailing text). */
+        groupTrailingToolLines();
       }
       curBubble = null; cur = null; curThk = null; curText = "";
     } else if (m.type === "reply"){
@@ -1062,9 +1372,7 @@
         if (modelSel) modelSel.value = m.model;
         ftMode.textContent = "agent · " + m.model;
       }
-      if (m.approvalMode){
-        if (modeSel){ modeSel.value = m.approvalMode; modeSel.dataset.m = m.approvalMode; }
-      }
+      if (m.approvalMode){ setModeUI(m.approvalMode); }
     } else if (m.type === "status"){
       if (m.text){ sb.textContent = m.text; sb.style.display = "block"; } else sb.style.display = "none";
     } else if (m.type === "sessions"){
@@ -1152,44 +1460,230 @@
     if (scopeMode === "ws" && currentWs) list = list.filter(function(s){ return (s.ws||"") === currentWs; });
     if (q) list = list.filter(function(s){ return (s.title||"").toLowerCase().indexOf(q) >= 0 || (s.preview||"").toLowerCase().indexOf(q) >= 0; });
     if (!list.length){ dlist.innerHTML = '<div class="empty">' + (q ? "无匹配" : (scopeMode==="ws" ? "本工作区暂无会话" : "暂无会话")) + '</div>'; return; }
+    // Pinned first, then by time
+    list.sort(function(a,b){ return (b.pinned?1:0)-(a.pinned?1:0) || (b.updatedAt||0)-(a.updatedAt||0); });
     var html = "", lastBucket = "";
     list.forEach(function(s){
-      var b = dayBucket(s.updatedAt || s.createdAt || 0);
+      var b = s.pinned ? "📌 已固定" : dayBucket(s.updatedAt || s.createdAt || 0);
       if (b !== lastBucket){ html += '<div class="grp">' + b + '</div>'; lastBucket = b; }
       var act = (s.id === activeSessionId) ? " active" : "";
       var bsy = s.busy ? " busy" : "";
-      html += '<div class="si' + act + bsy + '" data-id="' + s.id + '">' +
+      var pnd = s.pinned ? " pinned" : "";
+      var unr = s.unread ? " unread" : "";
+      html += '<div class="si' + act + bsy + pnd + unr + '" data-id="' + s.id + '">' +
         '<div class="ti">' +
           (s.busy ? '<span class="busy-dot" title="思考中…"></span>' : '') +
+          (s.unread ? '<span class="unread-dot"></span>' : '') +
           escHtml(s.title || "Untitled") +
         '</div>' +
-        '<div class="meta">' + escHtml(s.model || "") + " · " + (s.msgCount||0) + " msg · " + escHtml(relTime(s.updatedAt)) + '</div>' +
-        (s.preview ? '<div class="pv">' + escHtml(s.preview) + '</div>' : "") +
-        '<div class="ops"><button class="rn" title="重命名">✏</button><button class="dl" title="删除">🗑</button></div>' +
+        '<div class="si-time">' + escHtml(relTime(s.updatedAt || s.createdAt || 0)) + '</div>' +
+        '<div class="ops">' +
+          '<button class="op-pin" title="' + (s.pinned ? '取消固定' : '固定') + '">' + (s.pinned ? '📌' : '📍') + '</button>' +
+          '<button class="op-dl" title="删除">🗑</button>' +
+        '</div>' +
       '</div>';
     });
     dlist.innerHTML = html;
   }
   if (dsearch) dsearch.addEventListener("input", renderSessions);
-  dlist.addEventListener("click", function(e){
-    var btnRn = e.target.closest && e.target.closest("button.rn");
-    var btnDl = e.target.closest && e.target.closest("button.dl");
-    var item  = e.target.closest && e.target.closest(".si");
-    if (!item) return;
-    var id = item.dataset.id;
-    if (btnDl){ e.stopPropagation(); if (confirm("删除该会话？")) vscode.postMessage({type:"sessionDelete", id:id}); return; }
-    if (btnRn){
-      e.stopPropagation();
-      var cur = item.querySelector(".ti").textContent;
-      var nv = prompt("重命名会话：", cur); if (nv != null) vscode.postMessage({type:"sessionRename", id:id, title:nv});
+  // ── Inline rename ─────────────────────────────────────────────────────
+  function startInlineRename(id){
+    var si = dlist.querySelector('.si[data-id="'+id+'"]');
+    if (!si) return;
+    var tiEl = si.querySelector(".ti");
+    var curTitle = "";
+    tiEl.childNodes.forEach(function(n){ if (n.nodeType === 3) curTitle += n.nodeValue; });
+    curTitle = curTitle.trim();
+    var inp = document.createElement("input");
+    inp.className = "si-rename-inp";
+    inp.value = curTitle;
+    tiEl.innerHTML = "";
+    tiEl.appendChild(inp);
+    inp.focus(); inp.select();
+    var committed = false;
+    function commit(){
+      if (committed) return; committed = true;
+      var nv = inp.value.trim();
+      if (nv && nv !== curTitle) vscode.postMessage({type:"sessionRename", id:id, title:nv});
+      else renderSessions();
+    }
+    inp.addEventListener("keydown", function(e){
+      if (e.key === "Enter"){ e.preventDefault(); commit(); }
+      else if (e.key === "Escape"){ e.preventDefault(); committed = true; renderSessions(); }
+    });
+    inp.addEventListener("blur", commit);
+  }
+
+  // ── right-click context menu ──────────────────────────────────────
+  // ── Two-step delete: track pending state in JS (not DOM) since renderSessions() re-creates HTML ──
+  var _pendingDeleteId = null, _pendingDeleteTimer = null;
+  function deleteSession(id) {
+    if (_pendingDeleteId === id) {
+      clearTimeout(_pendingDeleteTimer); _pendingDeleteId = null; _pendingDeleteTimer = null;
+      vscode.postMessage({type: "sessionDelete", id: id});
       return;
     }
+    if (_pendingDeleteTimer) { clearTimeout(_pendingDeleteTimer); _pendingDeleteTimer = null; }
+    var prevId = _pendingDeleteId;
+    _pendingDeleteId = id;
+    // Reset previous button if still in DOM
+    if (prevId) {
+      var pb = dlist.querySelector('.si[data-id="' + prevId + '"] .op-dl');
+      if (pb) { pb.textContent = "\uD83D\uDDD1"; pb.title = "\u5220\u9664"; pb.style.color = ""; }
+    }
+    // Mark the target button
+    var btn = dlist.querySelector('.si[data-id="' + id + '"] .op-dl');
+    if (btn) { btn.textContent = "\u2713?"; btn.title = "\u518D\u6B21\u70B9\u51FB\u786E\u8BA4\u5220\u9664"; btn.style.color = "var(--vscode-errorForeground, #f44)"; }
+    _pendingDeleteTimer = setTimeout(function() {
+      _pendingDeleteId = null; _pendingDeleteTimer = null;
+      var b = dlist.querySelector('.si[data-id="' + id + '"] .op-dl');
+      if (b) { b.textContent = "\uD83D\uDDD1"; b.title = "\u5220\u9664"; b.style.color = ""; }
+    }, 2500);
+  }
+
+  var ctxMenu = document.createElement("div");
+  ctxMenu.id = "sess-ctx";
+  ctxMenu.className = "sess-ctx";
+  ctxMenu.style.display = "none";
+  document.body.appendChild(ctxMenu);
+  var _ctxId = null, _ctxPinned = false;
+  function openCtx(e, id, pinned){
+    _ctxId = id; _ctxPinned = pinned;
+    ctxMenu.innerHTML =
+      '<div class="ctx-item" data-action="pin">' + (pinned ? '📌 取消固定' : '📍 固定') + '</div>' +
+      '<div class="ctx-item" data-action="unread">🔵 标记为未读</div>' +
+      '<div class="ctx-sep"></div>' +
+      '<div class="ctx-item" data-action="rename">✏️ 重命名</div>' +
+      '<div class="ctx-item" data-action="archive">📦 存档</div>' +
+      '<div class="ctx-sep"></div>' +
+      '<div class="ctx-item danger" data-action="delete">🗑 删除</div>';
+    var x = e.clientX, y = e.clientY;
+    ctxMenu.style.display = "block";
+    var mw = ctxMenu.offsetWidth, mh = ctxMenu.offsetHeight;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    if (x + mw > vw) x = vw - mw - 4;
+    if (y + mh > vh) y = vh - mh - 4;
+    ctxMenu.style.left = x + "px"; ctxMenu.style.top = y + "px";
+  }
+  function closeCtx(){ ctxMenu.style.display = "none"; _ctxId = null; }
+  ctxMenu.addEventListener("click", function(e){
+    var it = e.target.closest(".ctx-item"); if (!it || !_ctxId) return;
+    var action = it.dataset.action, id = _ctxId;
+    closeCtx();
+    if (action === "pin")     vscode.postMessage({type:"sessionPin", id:id});
+    else if (action === "unread")   vscode.postMessage({type:"sessionUnread", id:id});
+    else if (action === "rename")   { startInlineRename(id); }
+    else if (action === "archive")  vscode.postMessage({type:"sessionArchive", id:id});
+    else if (action === "delete")   { deleteSession(id); }
+  });
+  document.addEventListener("click", closeCtx);
+  document.addEventListener("contextmenu", function(e){
+    var item = e.target.closest && e.target.closest(".si");
+    if (!item) return;
+    e.preventDefault();
+    var pinned = item.classList.contains("pinned");
+    openCtx(e, item.dataset.id, pinned);
+  });
+
+  dlist.addEventListener("click", function(e){
+    var btnPin = e.target.closest && e.target.closest("button.op-pin");
+    var btnDl  = e.target.closest && e.target.closest("button.op-dl");
+    var item   = e.target.closest && e.target.closest(".si");
+    if (!item) return;
+    var id = item.dataset.id;
+    if (btnDl){ e.stopPropagation(); deleteSession(id); return; }
+    if (btnPin){ e.stopPropagation(); vscode.postMessage({type:"sessionPin", id:id}); return; }
     vscode.postMessage({type:"sessionLoad", id:id});
   });
+
+  /* ── Inline user-message edit (GH Copilot style) ──────────────── */
+  function enterEditMode(msgU){
+    if (!msgU || msgU.classList.contains("editing")) return;
+    /* If another bubble is being edited, cancel it first */
+    var open = msgs.querySelector(".msgU.editing");
+    if (open && open !== msgU) exitEditMode(open, false);
+    var orig = msgU.dataset.origText || "";
+    msgU.classList.add("editing");
+    var editor = document.createElement("div");
+    editor.className = "msgU-editor";
+    editor.innerHTML =
+      "<textarea spellcheck=\"false\"></textarea>" +
+      "<div class=\"msgU-editor-bar\">" +
+        "<span class=\"hint\">Enter \u63d0\u4ea4 \u00b7 Shift+Enter \u6362\u884c \u00b7 Esc \u53d6\u6d88</span>" +
+        "<button class=\"btn-cancel\" type=\"button\">\u53d6\u6d88</button>" +
+        "<button class=\"btn-save\" type=\"button\">\u63d0\u4ea4</button>" +
+      "</div>";
+    msgU.appendChild(editor);
+    var ta = editor.querySelector("textarea");
+    ta.value = orig;
+    /* Auto-grow textarea to content */
+    function grow(){
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 240) + "px";
+    }
+    ta.addEventListener("input", grow);
+    setTimeout(function(){ grow(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
+    var btnSave = editor.querySelector(".btn-save");
+    var btnCancel = editor.querySelector(".btn-cancel");
+    btnSave.addEventListener("click", function(){ submitEdit(msgU); });
+    btnCancel.addEventListener("click", function(){ exitEditMode(msgU, false); });
+    ta.addEventListener("keydown", function(e){
+      if (e.key === "Escape"){ e.preventDefault(); exitEditMode(msgU, false); return; }
+      if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); submitEdit(msgU); return; }
+    });
+  }
+  function exitEditMode(msgU, keepText){
+    if (!msgU || !msgU.classList.contains("editing")) return;
+    msgU.classList.remove("editing");
+    var editor = msgU.querySelector(".msgU-editor");
+    if (editor) editor.remove();
+    if (!keepText){
+      /* Restore original bubble content from origText */
+      var body = msgU.querySelector(".msgU-body");
+      if (body) body.textContent = msgU.dataset.origText || "";
+    }
+  }
+  function submitEdit(msgU){
+    var editor = msgU.querySelector(".msgU-editor");
+    if (!editor) return;
+    var ta = editor.querySelector("textarea");
+    var newText = (ta.value || "").trim();
+    if (!newText){ exitEditMode(msgU, false); return; }
+    var idx = Number(msgU.dataset.msgIdx);
+    /* Remove all DOM nodes from this bubble onward (provider replay will rebuild) */
+    var allMsgU = msgs.querySelectorAll(".msgU");
+    for (var i = 0; i < allMsgU.length; i++){
+      if (Number(allMsgU[i].dataset.msgIdx) >= idx){
+        var n = allMsgU[i];
+        while (n){
+          var nx = n.nextSibling;
+          if (n !== thk && n !== jumpBtn && n.parentNode === msgs) msgs.removeChild(n);
+          n = nx;
+        }
+        break;
+      }
+    }
+    _userMsgCount = idx;
+    _editPendingIdx = -1;
+    /* Tell extension to truncate AND resend in one step */
+    vscode.postMessage({ type: "editUserSubmit", index: idx, text: newText });
+  }
 
   /* Click delegation: code-block copy/insert buttons + file path links */
   msgs.addEventListener("click", function(e){
     var t = e.target;
+    /* Ignore clicks inside the active editor (textarea/buttons) */
+    if (t.closest && t.closest(".msgU-editor")) return;
+    /* Edit user message — click on entire bubble.
+       Allowed even during streaming: provider will stop the active run
+       before resending the edited prompt. */
+    if (t.closest(".msgU")){
+      var msgU = t.closest(".msgU");
+      if (!msgU) return;
+      if (msgU.classList.contains("editing")) return;
+      enterEditMode(msgU);
+      return;
+    }
     if (t.classList.contains("cb-copy")){
       var pre = t.closest("pre.cb"); if (!pre) return;
       var code = decodeURIComponent(pre.getAttribute("data-code") || "");
@@ -1285,6 +1779,18 @@
         while (nx){
           var rm = nx; nx = nx.nextSibling;
           if (rm.nodeType === 1 && (rm.classList.contains("msgA") || rm.classList.contains("err"))) rm.parentNode.removeChild(rm);
+        }
+        /* Also remove the preceding user bubble — the provider will re-emit
+           `userEcho` when re-handling the prompt, so leaving the old user
+           bubble would cause it to appear twice. Decrement _userMsgCount so
+           edit-message indexing stays in sync. */
+        var prevU = bub.previousSibling;
+        while (prevU && !(prevU.nodeType === 1 && prevU.classList && prevU.classList.contains("msgU"))) {
+          prevU = prevU.previousSibling;
+        }
+        if (prevU) {
+          prevU.parentNode.removeChild(prevU);
+          if (_userMsgCount > 0) _userMsgCount--;
         }
         bub.parentNode.removeChild(bub);
         vscode.postMessage({type:"regenerate"});

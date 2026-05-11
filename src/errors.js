@@ -1,34 +1,38 @@
 // Friendly error mapping for the chat error card.
 'use strict';
 
+const { t, isZh } = require('./utils/i18n');
+
 function friendlyError(e) {
     const code = e && e.statusCode;
     const raw = (e && e.message) || String(e || '');
-    let title = '请求失败', tip = raw, retryable = true;
+    let title = t('errTitle'), tip = raw, retryable = true;
 
     if (code === 401 || code === 403) {
-        title = 'API Key 无效或已过期';
-        tip = '请打开右上角 🔑 重新设置 DeepSeek API Key,确认密钥未过期且未被禁用。';
+        title = t('errTitle401');
+        tip = t('errTip401');
         retryable = false;
     } else if (code === 402) {
-        title = '账户余额不足';
-        tip = '请前往 DeepSeek 控制台充值后再试。';
+        title = t('errTitle402');
+        tip = t('errTip402');
         retryable = false;
     } else if (code === 429) {
-        title = '请求过于频繁(限流)';
-        tip = '已触发 DeepSeek 限流。请稍候几秒再点击「重试」。';
+        title = t('errTitle429');
+        tip = t('errTip429');
     } else if (code === 400) {
-        title = '请求参数错误';
-        tip = '可能是上下文过长或消息格式异常。可尝试清空会话(Ctrl+K)后重试。';
+        title = t('errTitle400');
+        tip = t('errTip400');
     } else if (code && code >= 500) {
-        title = 'DeepSeek 服务异常';
-        tip = `服务端返回 ${code}。这通常是临时故障,几秒后重试即可。`;
+        title = t('errTitle5xx');
+        tip = isZh()
+            ? `服务端返回 ${code}。这通常是临时故障，几秒后重试即可。`
+            : `Server returned ${code}. This is usually a temporary issue — retry in a few seconds.`;
     } else if (/ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network|fetch failed/i.test(raw)) {
-        title = '网络连接失败';
-        tip = '无法连接 DeepSeek API。请检查网络/代理/防火墙设置。';
+        title = t('errNetwork');
+        tip = t('errTipNetwork');
     } else if (/aborted/i.test(raw)) {
-        title = '已停止生成';
-        tip = '生成被用户中断。';
+        title = t('errAborted');
+        tip = t('errTipAborted');
         retryable = false;
     }
     return { title, tip, code: code || null, retryable, raw };

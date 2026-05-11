@@ -43,4 +43,12 @@ function computeCost(model, usage) {
     };
 }
 
-module.exports = { getModelPricing, computeCost, V4_PRO_DISCOUNT_END };
+module.exports = { getModelPricing, computeCost, V4_PRO_DISCOUNT_END, getDiscountWarning };
+
+function getDiscountWarning() {
+    const now = Date.now();
+    if (now >= V4_PRO_DISCOUNT_END) return { expired: true, expiring: false };
+    const daysLeft = Math.ceil((V4_PRO_DISCOUNT_END - now) / (24 * 60 * 60 * 1000));
+    if (daysLeft <= 7) return { expired: false, expiring: true, days: daysLeft };
+    return { expired: false, expiring: false };
+}

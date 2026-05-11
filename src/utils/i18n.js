@@ -58,6 +58,20 @@ const EN = {
     feedbackUp: 'Feedback recorded.',
     feedbackDown: 'Feedback recorded.',
     sessionUntitled: 'Untitled',
+    errTitle: 'Request failed',
+    errTitle401: 'Invalid or expired API Key',
+    errTip401: 'Click the 🔑 button to re-enter your DeepSeek API key. Make sure the key has not expired or been disabled.',
+    errTitle402: 'Insufficient account balance',
+    errTip402: 'Please top up your DeepSeek account and try again.',
+    errTitle429: 'Rate limit exceeded',
+    errTip429: 'You have hit the DeepSeek rate limit. Wait a few seconds and click Retry.',
+    errTitle400: 'Bad request',
+    errTip400: 'The context may be too long or the message format may be invalid. Try clearing the session (Ctrl+K) and retrying.',
+    errTitle5xx: 'DeepSeek service error',
+    errNetwork: 'Network connection failed',
+    errTipNetwork: 'Cannot reach the DeepSeek API. Check your network, proxy, or firewall settings.',
+    errAborted: 'Generation stopped',
+    errTipAborted: 'Generation was interrupted by the user.',
 };
 
 const ZH = {
@@ -106,6 +120,20 @@ const ZH = {
     feedbackUp: '👍 已记录',
     feedbackDown: '👎 已记录',
     sessionUntitled: '未命名',
+    errTitle: '请求失败',
+    errTitle401: 'API Key 无效或已过期',
+    errTip401: '请打开右上角 🔑 重新设置 DeepSeek API Key，确认密钥未过期且未被禁用。',
+    errTitle402: '账户余额不足',
+    errTip402: '请前往 DeepSeek 控制台充值后再试。',
+    errTitle429: '请求过于频繁(限流)',
+    errTip429: '已触发 DeepSeek 限流。请稍候几秒再点击「重试」。',
+    errTitle400: '请求参数错误',
+    errTip400: '可能是上下文过长或消息格式异常。可尝试清空会话(Ctrl+K)后重试。',
+    errTitle5xx: 'DeepSeek 服务异常',
+    errNetwork: '网络连接失败',
+    errTipNetwork: '无法连接 DeepSeek API。请检查网络/代理/防火墙设置。',
+    errAborted: '已停止生成',
+    errTipAborted: '生成被用户中断。',
 };
 
 function t(key) {
