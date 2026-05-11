@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://code.visualstudio.com/"><img src="https://img.shields.io/badge/VS%20Code-%E2%89%A51.95.0-blue" alt="VS Code"/></a>
-  <a href="https://github.com/ZhouChaunge/DeepCopilot/releases"><img src="https://img.shields.io/badge/version-0.24.2-success" alt="Version"/></a>
+  <a href="https://github.com/ZhouChaunge/DeepCopilot/releases"><img src="https://img.shields.io/badge/version-0.28.0-success" alt="Version"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"/></a>
 </p>
 
@@ -43,9 +43,15 @@
 | 🇬🇧 EN | 🇨🇳 中文 |
 |---|---|
 | **Agentic loop** with multi-turn tool calling on DeepSeek V4 (Pro / Flash / Reasoner) | 与 DeepSeek V4（Pro / Flash / Reasoner）多轮 **tool-calling 循环** |
-| **File tools**: read, write, list directory, ripgrep-style full-text search | **文件工具**：读 / 写 / 列目录 / 全文搜索 |
+| **File tools**: read, write, str-replace, apply_patch, list dir, find files, ripgrep search | **文件工具**：读 / 写 / 精准替换 / apply_patch / 列目录 / 查找 / 全文搜索 |
 | **Shell tool** with configurable approval policy | **终端工具**，按审批策略弹窗确认 |
+| **Web search** via Tavily (optional API key) | **网络搜索**（Tavily，可选 Key） |
 | **Plan & Todos** panel — agent maintains a structured plan you can watch tick off | **Plan & Todos** 面板，Agent 自维护结构化任务并实时勾选 |
+| **Revert last turn** — one-click rollback of all file edits in the current agent turn | **一键回滚**当前 Agent 轮次对文件的所有修改 |
+| **User memory** (`~/.deepcopilot/memory.md`) — cross-project preferences in every system prompt | **用户记忆**（`~/.deepcopilot/memory.md`），跨项目偏好自动注入系统提示词 |
+| **MCP client** — connect any MCP-compatible tool server via `deepseekAgent.mcp.servers` | **MCP 客户端**，通过 `deepseekAgent.mcp.servers` 连接任意 MCP 工具服务器 |
+| **Post-tool hooks** — run scripts after any tool call; output injected into model context | **工具后置钩子**，工具调用后自动执行脚本，输出注入模型上下文 |
+| **Post-edit LSP diagnostics** appended to every edit so the model can self-verify | 每次编辑后自动附加 **LSP 诊断**，模型可自行校验 |
 | **Per-workspace session history** with search, rename, delete | 每工作区独立的**会话历史**，可搜索 / 重命名 / 删除 |
 | **Parallel sessions** — switch away from a running task and start another; live replay on return | **多会话并行**：任务跑着可以切走开新对话，回来自动回放进度 |
 | **Streaming output** with reasoning expander, blinking cursor, top progress bar | **流式输出**：思维链可展开、闪烁光标、顶部进度条 |
@@ -114,16 +120,16 @@ npm install
 
 # 3. Build the bundle · 编译为单文件
 npm run build
-# → outputs out/extension.js (≈ 58 KB minified)
-# → 产出 out/extension.js（约 58KB，已压缩）
+# -> outputs out/extension.js (approx 94 KB minified)
+# -> 产出 out/extension.js（约94KB，已压缩）
 
 # 4. Package as VSIX · 打包 VSIX
 npm run package
-# → outputs release/deep-copilot-0.24.2.vsix
-# → 产出 release/deep-copilot-0.24.2.vsix
+# -> outputs release/deep-copilot-0.28.0.vsix
+# -> 产出 release/deep-copilot-0.28.0.vsix
 
 # 5. Install locally · 本地安装
-code --install-extension release/deep-copilot-0.24.2.vsix --force
+code --install-extension release/deep-copilot-0.28.0.vsix --force
 ```
 
 ### Watch mode · 监听模式（开发期）
@@ -169,6 +175,8 @@ All settings live under the `deepseekAgent.*` namespace in `settings.json`.
 | `deepseekAgent.denyTools` | `[]` | Tool names to always deny | 始终拒绝的工具名 |
 | `deepseekAgent.maxIterations` | `15` | Hard ceiling on tool-call rounds | 单次发送的工具调用迭代上限 |
 | `deepseekAgent.compactBudgetTokens` | `96000` | Token budget before auto-compaction | 自动压缩历史前的 token 预算 |
+| `deepseekAgent.postEditDiagnostics` | `true` | Append LSP diagnostics after every file edit | 每次编辑后追加 LSP 诊断结果 |
+| `deepseekAgent.mcp.servers` | `[]` | MCP server list (see MCP section below) | MCP 工具服务器列表（见下方 MCP 小节） |
 | `deepseekAgent.enableDebugLog` | `true` | Log thought / tool / API events to `.deep-copilot/logs/` | 写思维链 / 工具 / API 事件日志 |
 
 ### Approval Modes · 审批模式
@@ -208,11 +216,16 @@ Deep Copilot 给模型暴露的工具集刻意保持精简：
 | `read_file`            | Read part / all of a file with optional line range | 按行号区间读取文件 |
 | `write_file`           | Create or overwrite a file (gated by approval) | 新建 / 覆盖文件（受审批控制） |
 | `str_replace_in_file`  | Targeted in-place edit by exact string match | 通过字符串精确替换原地编辑 |
+| `apply_patch`          | Apply a unified-diff patch (multi-hunk, multi-file) | 应用统一格式补丁（多 hunk / 多文件） |
 | `list_dir`             | List directory entries (depth-limited) | 列出目录（限制深度） |
+| `find_files`           | Glob-pattern file search | Glob 模式文件搜索 |
 | `grep_search`          | Ripgrep-style regex search across the workspace | 工作区级正则搜索 |
 | `run_shell`            | Run a shell command (gated by approval) | 执行 Shell 命令（受审批控制） |
+| `web_search`           | Web search via Tavily (requires Tavily API key) | 网络搜索（需 Tavily Key） |
 | `update_plan`          | Push / update structured plan & todos to left panel | 更新左侧 Plan / Todos |
 | `open_file_in_editor`  | Reveal a file at a given line in the editor | 在编辑器中打开文件并跳到指定行 |
+| `revert_last_turn`     | Restore all files to their pre-turn state | 将本轮所有文件修改回滚到初始状态 |
+| `mcp__<server>__<tool>`| Any tool exposed by a connected MCP server | 已连接 MCP 服务器暴露的任意工具 |
 
 > **🇬🇧** Tool definitions live in [`src/tools/schema.js`](src/tools/schema.js); execution in [`src/tools/exec.js`](src/tools/exec.js).
 >
@@ -265,8 +278,8 @@ Deep Copilot 给模型暴露的工具集刻意保持精简：
 
 ### Key design points · 关键设计
 
-- **🇬🇧 No backend.** Everything runs inside the VS Code extension host. The single bundle `out/extension.js` is ≈58 KB.
-  **🇨🇳 无后端。** 全部跑在 VS Code 扩展主机里，单文件构建产物 `out/extension.js` 仅约 58KB。
+- **🇬🇧 No backend.** Everything runs inside the VS Code extension host. The single bundle `out/extension.js` is approx 94 KB.
+  **🇨🇳 无后端。** 全部跑在 VS Code 扩展主机里，单文件构建产物 `out/extension.js` 仅约94KB。
 - **🇬🇧 Per-session run map.** `provider._runs: Map<sessionId, Run>` lets you switch sessions while a task is running; the run keeps producing events that get buffered and replayed when you return.
   **🇨🇳 按会话隔离的 run 表。** `provider._runs` 让你在任务跑着时切到别的会话，事件继续缓冲，切回来自动回放。
 - **🇬🇧 Streaming via SSE.** `src/api/deepseek.js` parses `data:` frames and forwards `delta`, `reasoning`, `tool_calls`, `usage` to the provider.
@@ -299,13 +312,15 @@ Deep Copilot 给模型暴露的工具集刻意保持精简：
     ├── errors.js              #   ↳ error → friendly bilingual card
     ├── logger.js              #   ↳ debug log writer (.deep-copilot/logs/)
     ├── pricing.js             #   ↳ token → CNY cost calculator
+    ├── hooks.js               #   ↳ post-tool hooks runner (.deepcopilot/hooks.json)
+    ├── mcp.js                 #   ↳ MCP stdio client (McpClient + McpManager)
     ├── api/
     │   └── deepseek.js        #   ↳ SSE chat client (OpenAI-compatible)
     ├── chat/
     │   ├── provider.js        #   ↳ ChatViewProvider (the brain)
     │   └── openFile.js        #   ↳ "open file at line" helper
     ├── prompts/
-    │   └── system.js          #   ↳ system prompt builder (+DEEPCOPILOT.md merge)
+    │   └── system.js          #   ↳ system prompt builder (+DEEPCOPILOT.md +user memory)
     ├── tools/
     │   ├── schema.js          #   ↳ tool JSON-schema definitions
     │   └── exec.js            #   ↳ tool runtime (file IO, ripgrep, shell)
@@ -358,6 +373,41 @@ Create a `DEEPCOPILOT.md` at the workspace root and Deep Copilot will inject its
 
 在工作区根目录新建 `DEEPCOPILOT.md`，其内容会自动并入系统提示词，用来声明项目约定、构建命令、do/don't 等。
 
+### User memory · 用户记忆
+
+Create `~/.deepcopilot/memory.md` for cross-project preferences that apply everywhere — preferred coding style, always/never rules, personal shortcuts. It is injected (capped at 4 KB) into every system prompt.
+
+在家目录新建 `~/.deepcopilot/memory.md`，写入跨项目的个人偏好（代码风格、禁忌事项等），Deep Copilot 会在每次对话时自动注入（最多 4KB）。
+
+### MCP servers · MCP 工具服务器
+
+Add external tool servers via VS Code settings:
+
+```json
+"deepseekAgent.mcp.servers": [
+  { "name": "my-db", "command": "npx", "args": ["my-db-mcp-server"] }
+]
+```
+
+Tools appear as `mcp__my-db__<toolName>` alongside built-in tools. Any MCP-compatible stdio server works.
+
+通过 VS Code 设置连接外部 MCP 工具服务器，工具以 `mcp__<server>__<toolName>` 格式出现。任何兼容 MCP stdio 协议的服务器均可接入。
+
+### Post-tool hooks · 工具后置钩子
+
+Create `.deepcopilot/hooks.json` in your workspace:
+
+```json
+{ "hooks": [
+  { "event": "after_tool", "tool": "write_file",
+    "run": "npm test", "on_failure": "inject_error", "timeout_ms": 30000 }
+]}
+```
+
+The hook's stdout/stderr is appended to the tool result so the model can react — e.g., auto-fix test failures immediately after writing a file.
+
+在工作区创建 `.deepcopilot/hooks.json`，每次写文件后自动跑 `npm test`，测试输出注入模型上下文让其自动修复。
+
 ### Style & conventions · 代码风格
 
 - Plain JavaScript (no TypeScript) — keep the bundle tiny.
@@ -386,21 +436,37 @@ Create a `DEEPCOPILOT.md` at the workspace root and Deep Copilot will inject its
 
 ## 📜 Changelog · 更新日志
 
+### v0.28.0 — MCP · Hooks · User Memory · Revert Last Turn
+- 🇬🇧 **MCP client** (`src/mcp.js`): connect any MCP stdio tool server; tools appear as `mcp__<server>__<tool>`. Configure via `deepseekAgent.mcp.servers`.
+- 🇨🇳 **MCP 客户端**（`src/mcp.js`）：连接任意 MCP stdio 工具服务器，工具以 `mcp__<server>__<tool>` 并列出现，通过 `deepseekAgent.mcp.servers` 配置。
+- 🇬🇧 **Post-tool hooks** (`src/hooks.js`): run custom scripts after any tool call. Configure via `.deepcopilot/hooks.json`. Output injected into model context.
+- 🇨🇳 **工具后置钩子**（`src/hooks.js`）：任意工具调用后自动执行用户脚本，输出注入模型上下文。
+- 🇬🇧 **User memory**: `~/.deepcopilot/memory.md` is injected (capped 4 KB) into every system prompt as "User preferences".
+- 🇨🇳 **用户记忆**：`~/.deepcopilot/memory.md`（最多 4KB）注入每次对话的系统提示词。
+- 🇬🇧 **Revert last turn**: `revert_last_turn` tool + `deepseekAgent.revertLastTurn` command — roll back all file changes from the current agent turn in one click.
+- 🇨🇳 **一键回滚**：`revert_last_turn` 工具与 `deepseekAgent.revertLastTurn` 命令，一键撤销当前轮次所有文件改动。
+- 🇬🇧 **Post-edit LSP diagnostics**: errors & warnings auto-appended after every file edit so the model can self-verify.
+- 🇨🇳 **编辑后 LSP 诊断**：每次文件编辑后自动追加错误与警告，模型可据此自行修复。
+
+### v0.26.0 — Parallel tools · @file attach · apply_patch · Tool cache
+- 🇬🇧 Multiple independent tool calls in one model turn (parallel execution). `@filename` attachment. `apply_patch` for multi-hunk edits. Tool result caching.
+- 🇨🇳 单轮多工具并行执行；`@文件名` 附件；`apply_patch` 多 hunk 编辑；工具结果缓存。
+
+### v0.25.0 — Web search
+- 🇬🇧 Added `web_search` tool powered by Tavily API.
+- 🇨🇳 新增 `web_search` 工具，基于 Tavily API。
+
 ### v0.24.2 — Flat tool UI · 工具卡片扁平化
 - 🇬🇧 Tool rows are now hairline-bordered, no fill, GitHub-Copilot-Chat style.
 - 🇨🇳 工具行改为细线分隔 + 无填充，接近 GitHub Copilot Chat 视觉。
 
-### v0.24.1 — No more "思考中" banner · 取消顶部"思考中"
-- 🇬🇧 Removed the global `⚡ 思考中…` status banner. Per-session busy is shown as a pulsing blue dot in the Sessions list (Copilot-style).
-- 🇨🇳 移除全局"⚡ 思考中…"状态条。会话级忙碌通过 Sessions 列表里的呼吸蓝点呈现。
-
 ### v0.24.0 — Parallel sessions · 多会话并行
-- 🇬🇧 Switch sessions while a run is in flight; events buffer and replay on return. Refactored monolithic `extension.js` into modular `src/`.
-- 🇨🇳 任务运行中可切走开新对话，事件缓冲、切回自动回放。单文件 `extension.js` 拆分为模块化 `src/`。
+- 🇬🇧 Switch sessions while a run is in flight; events buffer and replay on return. Refactored into modular `src/`.
+- 🇨🇳 任务运行中可切走开新对话，事件缓冲、切回自动回放；代码拆分为模块化 `src/`。
 
 ### v0.20.0 — Copilot-grade UX overhaul
-- 🇬🇧 Stop button + Esc, blinking cursor, top progress bar, terminal code blocks with **Run** / **Insert** / **Copy**, syntax highlighter, fold-long-blocks, hover action bar (copy / regenerate / 👍👎), slash-commands, `@` context refs, prompt history (↑/↓), bilingual error cards with retry.
-- 🇨🇳 Stop 按钮 + Esc 中断、闪烁光标、顶部进度条、终端代码块带 **运行/插入/复制**、语法高亮、长代码折叠、悬浮操作栏（复制 / 重新生成 / 👍👎）、斜杠命令、`@` 上下文、↑/↓ 历史召回、双语错误卡 + 重试。
+- 🇬🇧 Stop + Esc, blinking cursor, progress bar, code blocks with Run/Insert/Copy, syntax highlight, fold, hover bar, slash-commands, `@` refs, prompt history, bilingual error cards.
+- 🇨🇳 Stop + Esc 中断、闪烁光标、进度条、代码块操作、语法高亮、折叠、悬浮操作栏、斜杠命令、`@` 上下文、↑/↓ 历史、双语错误卡。
 
 > Full history: see [git log](https://github.com/ZhouChaunge/DeepCopilot/commits/main) and [Releases](https://github.com/ZhouChaunge/DeepCopilot/releases).
 > 完整历史：见 [git log](https://github.com/ZhouChaunge/DeepCopilot/commits/main) 与 [Releases](https://github.com/ZhouChaunge/DeepCopilot/releases)。

@@ -10,7 +10,7 @@ const { TOOL_DEFS } = require('../tools/schema');
 /**
  * @returns Promise<{ toolCalls: Array<{id, name, args}>, usage: object }>
  */
-function streamDeepSeek({ apiKey, baseUrl, messages, model, noTools, toolChoice }, callbacks, abortSignal) {
+function streamDeepSeek({ apiKey, baseUrl, messages, model, noTools, toolChoice, tools }, callbacks, abortSignal) {
     return new Promise((resolve, reject) => {
         const base = (baseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
         const urlObj = new URL('/chat/completions', base);
@@ -23,7 +23,7 @@ function streamDeepSeek({ apiKey, baseUrl, messages, model, noTools, toolChoice 
             max_tokens: 8192,
         };
         if (!noTools) {
-            reqPayload.tools = TOOL_DEFS;
+            reqPayload.tools = tools || TOOL_DEFS;
             // Hard API-level switch: 'none' means the model CANNOT emit tool
             // calls this turn. 'auto' is default. Used by the conversational
             // intent classifier to physically gate exploration on greetings.
@@ -34,6 +34,7 @@ function streamDeepSeek({ apiKey, baseUrl, messages, model, noTools, toolChoice 
             reqPayload.parallel_tool_calls = true;
         }
         const body = JSON.stringify(reqPayload);
+        const bodyBytes = Buffer.byteLength(body);
 
         const reqOpts = {
             hostname: urlObj.hostname,
@@ -44,7 +45,7 @@ function streamDeepSeek({ apiKey, baseUrl, messages, model, noTools, toolChoice 
                 'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
                 'Accept': 'text/event-stream',
-                'Content-Length': Buffer.byteLength(body),
+                'Content-Length': bodyBytes,
             },
         };
 
@@ -82,7 +83,7 @@ function streamDeepSeek({ apiKey, baseUrl, messages, model, noTools, toolChoice 
         }
         let _onAbort = null;
 
-        Logger.info('HTTP_REQUEST', { url: urlObj.href, model, msg_count: messages.length, body_bytes: Buffer.byteLength(body) });
+        Logger.info('HTTP_REQUEST', { url: urlObj.href, model, msg_count: messages.length, body_bytes: bodyBytes });
 
         const req = mod.request(reqOpts, (res) => {
             if (res.statusCode !== 200) {
@@ -123,7 +124,16 @@ function streamDeepSeek({ apiKey, baseUrl, messages, model, noTools, toolChoice 
                             if (!toolCalls[i]) toolCalls[i] = { id: '', name: '', args: '' };
                             if (tc.id)                  toolCalls[i].id   = tc.id;
                             if (tc.function?.name)      toolCalls[i].name = tc.function.name;
-                            if (tc.function?.arguments) toolCalls[i].args += tc.function.arguments;
+                            if (tc.function?.arguments) {
+                                toolCalls[i].args += tc.function.arguments;
+                                callbacks.onToolArgsDelta?.({
+                                    index: i,
+                                    id: toolCalls[i].id,
+                                    name: toolCalls[i].name,
+                                    deltaArgs: tc.function.arguments,
+                                    accArgs: toolCalls[i].args,
+                                });
+                            }
                         }
                     }
                     if (choice.finish_reason === 'stop') { settle({ toolCalls: [], usage }); return; }

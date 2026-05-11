@@ -145,7 +145,7 @@ const TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'web_search',
-            description: 'Search the live web (Tavily) for up-to-date information. Use ONLY when the user asks about recent events, current versions, latest documentation, news, or facts that may have changed after your training data. Do NOT use for code that lives in the workspace (use grep_search/read_file). Returns a list of {title, url, content} snippets and an optional synthesized answer. Requires the user to have configured a Tavily API key (command: "Deep Copilot: Set Tavily API Key").',
+            description: 'Search the live web (Tavily) for up-to-date information. Use ONLY when the user asks about recent events, current versions, latest documentation, news, or facts that may have changed after your training data. Do NOT use for code that lives in the workspace (use grep_search/read_file). Returns a list of {title, url, content} snippets and an optional synthesized answer. Results are returned in Markdown format. Requires the user to have configured a Tavily API key (command: "Deep Copilot: Set Tavily API Key").',
             parameters: {
                 type: 'object',
                 properties: {
@@ -158,30 +158,43 @@ const TOOL_DEFS = [
             },
         },
     },
+    // ─── workspace rollback ─────────────────────────────────────────────
+    {
+        type: 'function',
+        function: {
+            name: 'revert_last_turn',
+            description: 'Revert ALL file changes made during this agent turn back to their pre-turn state. Use when you realise your edits went in the wrong direction and you want a clean slate. Restores every file that was modified (via write_file, str_replace_in_file, or apply_patch) since the user\'s last message.',
+            parameters: {
+                type: 'object',
+                properties: {},
+                required: [],
+            },
+        },
+    },
     // ─── meta / UI tool ─────────────────────────────────────────────────
     {
         type: 'function',
         function: {
             name: 'update_plan',
-            description: 'Update the Plan and Todos panels visible to the user in the sidebar. Use ONLY for non-trivial multi-step tasks where the user benefits from seeing the breakdown. Do not use for one-shot edits or simple questions.',
+            description: 'Show or update the Plan/Todos checklist in the user\'s sidebar. CALL THIS FIRST — before any reads or edits — whenever the request has 3+ steps, multiple files, sequential phases (explore→design→edit→verify), a refactor/migration/multi-file feature, or multiple bundled user requests. Then call it again to flip the current step to in_progress and the previous one to done as you make progress. Exactly one step should be in_progress at a time. Skip only for one-shot edits, single-file reads, greetings, or pure Q&A — do not pad trivial tasks with a fake plan.',
             parameters: {
                 type: 'object',
                 properties: {
                     plan: {
                         type: 'array',
-                        description: 'List of plan steps',
+                        description: 'Ordered list of high-level steps for the current task. Each step should be short (3–8 words), action-oriented, and verifiable. Required for any multi-step task.',
                         items: {
                             type: 'object',
                             properties: {
-                                text: { type: 'string' },
-                                status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'blocked'] },
+                                text: { type: 'string', description: 'Short imperative step description, e.g. "Read provider.js tool loop".' },
+                                status: { type: 'string', enum: ['pending', 'in_progress', 'done', 'blocked'], description: 'Step status. Exactly one step should be in_progress at a time.' },
                             },
                             required: ['text'],
                         },
                     },
                     todos: {
                         type: 'array',
-                        description: 'List of todo items',
+                        description: 'Optional fine-grained todo items inside the current step (for very granular work). Most tasks only need `plan`.',
                         items: {
                             type: 'object',
                             properties: {
@@ -197,4 +210,13 @@ const TOOL_DEFS = [
     },
 ];
 
-module.exports = { TOOL_DEFS };
+module.exports = { TOOL_DEFS, getToolDefs };
+
+/**
+ * Return the full tool list, optionally merged with extra tools (e.g. from MCP servers).
+ * @param {Array} [extra=[]] - Additional tool definitions to append.
+ */
+function getToolDefs(extra = []) {
+    if (!extra || !extra.length) return TOOL_DEFS;
+    return [...TOOL_DEFS, ...extra];
+}

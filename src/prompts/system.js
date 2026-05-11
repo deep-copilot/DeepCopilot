@@ -8,9 +8,12 @@
 //      training bias toward aggressive function-calling.
 //   5. Workspace instructions (DEEPCOPILOT.md) are LAZY — only injected
 //      when the caller has decided the turn is workspace-relevant.
+//   6. User memory (~/.deepcopilot/memory.md) is ALWAYS injected when present —
+//      it records cross-project preferences set by the user.
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { wsRoot } = require('../utils/paths');
 
@@ -18,7 +21,7 @@ const { wsRoot } = require('../utils/paths');
 
 function getCorePrompt(osName) {
     return `You are Deep Copilot, an expert AI coding agent embedded in VS Code.
-You have tools to read files, list directories, search code, write files, edit in place, and run shell commands.
+You have tools to read files, list directories, search code, write files, edit in place, run shell commands, and update a Plan/Todos panel visible to the user.
 
 # Decision rules — apply BEFORE every response
 
@@ -28,6 +31,21 @@ You have tools to read files, list directories, search code, write files, edit i
 4. **Task that asks you to change something** → read the relevant files first, then edit.
 5. If the user attached file context (see <attachments> if present), prefer that over scanning the workspace.
 6. If unsure between (1) and (3), ask one clarifying question instead of exploring.
+
+# Plan & Todos — make multi-step work visible
+
+The user sees a live Plan/Todos panel in the sidebar. Use \`update_plan\` to drive it.
+
+- **CALL \`update_plan\` FIRST** when the task involves any of:
+  - 3 or more distinct steps,
+  - 2 or more files to read or edit,
+  - sequential phases (explore → design → edit → verify),
+  - a refactor, migration, multi-file feature, or bug hunt with unclear root cause,
+  - the user lists multiple requests in one message (numbered or comma-separated).
+- Keep each step short (3–8 words), action-oriented, and verifiable.
+- **Update the plan as you go**: mark the current step \`in_progress\` before starting it, then \`done\` immediately after finishing. Exactly one step should be \`in_progress\` at a time.
+- Add or revise steps when the task scope changes — do not silently drift.
+- **Skip \`update_plan\`** for: one-shot edits, single-file reads, greetings, or pure Q&A. Do not pad trivial tasks with a fake plan.
 
 # Tool usage essentials
 
@@ -50,8 +68,7 @@ You have tools to read files, list directories, search code, write files, edit i
 # Doing tasks
 
 - Read files before proposing edits. Do not edit code you have not read.
-- No unrequested refactors, comments, docstrings, or "improvements". Match the user's scope.
-- After a task, briefly state what changed. Reference files as \`path:line\`.
+- No unrequested refactors, comments, docstrings, or "improvements". Match the user's scope.- After editing code, check the post-edit diagnostics block (it is appended automatically to edit-tool results). If new errors appear, fix them before reporting success.- After a task, briefly state what changed. Reference files as \`path:line\`.
 - If you cannot verify a result, say so. Do not claim success without evidence.
 
 # Style
@@ -71,7 +88,7 @@ You have tools to read files, list directories, search code, write files, edit i
 function getDeepSeekReminder() {
     return `# Reminder before each turn
 
-Before calling ANY tool, ask yourself: "Does answering THIS user message REQUIRE information I don't already have?"
+Before calling any INFORMATION-GATHERING tool (\`read_file\`, \`list_dir\`, \`grep_search\`, \`find_files\`, \`web_search\`), ask yourself: "Does answering THIS user message REQUIRE information I don't already have?"
 
 - "What is a closure?" → no, you know this. Answer directly.
 - "Explain async/await" → no, you know this. Answer directly.
@@ -79,7 +96,28 @@ Before calling ANY tool, ask yourself: "Does answering THIS user message REQUIRE
 - "Fix the bug in foo.js" → yes, read foo.js first.
 - "你好" / "thanks" → no tool. Just respond.
 
-If the answer to the question above is "no", DO NOT call any tool. Calling \`list_dir\` or \`read_file\` to "get familiar with the project" the user did not ask about is unhelpful and wastes their time.`;
+If the answer is "no", DO NOT call an info-gathering tool. Scanning the workspace the user did not ask about wastes their time.
+
+This rule does NOT apply to \`update_plan\` — it is a UI tool, not information gathering. Call it whenever the Plan & Todos rules above say to, even early in the turn before any reads.`;
+}
+
+// ---------- user memory (always included when present) ----------
+
+/**
+ * Read persistent user preferences from ~/.deepcopilot/memory.md.
+ * This file survives across all projects and workspaces.
+ */
+function readUserMemory() {
+    try {
+        const memPath = path.join(os.homedir(), '.deepcopilot', 'memory.md');
+        if (!fs.existsSync(memPath)) return null;
+        const content = fs.readFileSync(memPath, 'utf8').trim();
+        if (!content) return null;
+        const capped = content.length > 4000
+            ? content.slice(0, 4000) + '\n... [user memory truncated at 4 KB]'
+            : content;
+        return `# User preferences (from ~/.deepcopilot/memory.md)\n\n${capped}`;
+    } catch { return null; }
 }
 
 // ---------- workspace instructions (lazy) ----------
@@ -122,6 +160,9 @@ function buildSystemPrompt(opts = {}) {
         ? 'Windows'
         : (process.platform === 'darwin' ? 'macOS' : 'Linux');
     const sections = [getCorePrompt(osName), getDeepSeekReminder()];
+    // User memory is always injected when the file exists (cross-project preferences).
+    const mem = readUserMemory();
+    if (mem) sections.push(mem);
     if (opts.includeWorkspaceInstructions) {
         const ws = readWorkspaceInstructions();
         if (ws) sections.push(ws);

@@ -3,17 +3,21 @@
 
 const vscode = require('vscode');
 const path = require('path');
+const fs = require('fs');
 
 const { Logger } = require('../logger');
 const { friendlyError } = require('../errors');
 const { computeCost } = require('../pricing');
 const { buildSystemPrompt } = require('../prompts/system');
 const { streamDeepSeek } = require('../api/deepseek');
-const { wsRoot } = require('../utils/paths');
+const { wsRoot, resolvePath } = require('../utils/paths');
 const {
     toolReadFile, toolListDir, toolGrepSearch, toolFindFiles,
     toolWriteFile, toolStrReplaceInFile, toolApplyPatch, toolRunShell, toolWebSearch,
 } = require('../tools/exec');
+const { runHooks }   = require('../hooks');
+const { mcpManager } = require('../mcp');
+const { getToolDefs } = require('../tools/schema');
 const { t, isZh } = require('../utils/i18n');
 const { openFile } = require('./openFile');
 const { buildWebviewHtml } = require('../webview/html');
@@ -81,6 +85,88 @@ function autoCompactIfNeeded(messages, budgetTokens) {
     return { messages: out, compacted: true, dropped: head.length - (firstUser ? 1 : 0) };
 }
 
+/**
+ * Incrementally extracts `path` and the body of `content` (or `new_string` /
+ * `new_content` / `text`) fields from a tool-call arguments JSON string that
+ * arrives in chunks. Lets us surface "Editing foo.py" the instant the path
+ * field is finished streaming and then forward the file body as it streams —
+ * mirroring GitHub Copilot's live edit preview. */
+class ToolArgsStreamer {
+    constructor() {
+        this.acc = '';
+        this.pathEmitted = false;
+        this.path = '';
+        this.inContent = false;
+        this.contentEnded = false;
+        this.contentReadPos = 0;
+        this.escapePending = false;
+    }
+    feed(chunk) {
+        this.acc += chunk;
+        const out = { newPath: null, contentDelta: '' };
+        if (!this.pathEmitted) {
+            const m = this.acc.match(/"(?:path|file|file_path|filename)"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+            if (m) {
+                let p;
+                try { p = JSON.parse('"' + m[1] + '"'); } catch { p = m[1]; }
+                this.pathEmitted = true;
+                this.path = p;
+                out.newPath = p;
+            }
+        }
+        if (!this.inContent && !this.contentEnded) {
+            const sm = this.acc.match(/"(?:content|new_string|new_content|text)"\s*:\s*"/);
+            if (sm) {
+                this.inContent = true;
+                this.contentReadPos = sm.index + sm[0].length;
+            }
+        }
+        if (this.inContent && !this.contentEnded) {
+            let i = this.contentReadPos;
+            let buf = '';
+            const len = this.acc.length;
+            while (i < len) {
+                if (this.escapePending) {
+                    const c = this.acc[i];
+                    let resolved = c;
+                    if      (c === 'n') resolved = '\n';
+                    else if (c === 't') resolved = '\t';
+                    else if (c === 'r') resolved = '\r';
+                    else if (c === '"') resolved = '"';
+                    else if (c === '\\') resolved = '\\';
+                    else if (c === '/') resolved = '/';
+                    else if (c === 'b') resolved = '\b';
+                    else if (c === 'f') resolved = '\f';
+                    else if (c === 'u') {
+                        if (i + 4 >= len) break;
+                        const hex = this.acc.slice(i + 1, i + 5);
+                        const code = parseInt(hex, 16);
+                        resolved = Number.isNaN(code) ? '' : String.fromCharCode(code);
+                        i += 4;
+                    }
+                    buf += resolved;
+                    this.escapePending = false;
+                    i++;
+                    continue;
+                }
+                const c = this.acc[i];
+                if (c === '\\') {
+                    if (i + 1 >= len) break;
+                    this.escapePending = true;
+                    i++;
+                    continue;
+                }
+                if (c === '"') { this.contentEnded = true; i++; break; }
+                buf += c;
+                i++;
+            }
+            this.contentReadPos = i;
+            out.contentDelta = buf;
+        }
+        return out;
+    }
+}
+
 class ChatViewProvider {
     static viewType = 'deepseek.chatView';
 
@@ -95,13 +181,16 @@ class ChatViewProvider {
         // when the agentic loop completes or the user explicitly stops it.
         // Map<sessionId, { sessionId, messages, abortCtrl, reply, busy, events, toolCache }>
         this._runs       = new Map();
+        // Initialize MCP servers in background (non-blocking).
+        const _wsR = wsRoot();
+        if (_wsR) mcpManager.init(_wsR).catch(e => Logger.info('MCP_INIT_ERROR', { message: e.message }));
     }
 
     // ─── Run helpers ───────────────────────────────────────────────────
-    _newRun(sessionId) {
+    _newRun(sessionId, seedMessages = []) {
         const run = {
             sessionId,
-            messages: [],
+            messages: seedMessages.length ? seedMessages.slice() : [],
             abortCtrl: null,
             reply: { user: '', asst: '', thoughts: '' },
             busy: false,
@@ -110,6 +199,14 @@ class ChatViewProvider {
             // Read-only tools (read_file, grep_search, find_files, list_dir, web_search)
             // are cached; mutating tools invalidate relevant entries.
             toolCache: new Map(),
+            // Per-turn file snapshots for revert_last_turn.
+            // Key: absolute path, Value: original content string | null (null = file didn't exist).
+            turnSnapshots: new Map(),
+            // Latest plan/todos the model published via update_plan. Reinjected
+            // as a <system-reminder> when the model goes ≥ N iterations without
+            // touching it, so it does not forget the active checklist.
+            plan: null,             // { steps:[{title,status}], todos:[{title,status}] } | null
+            planUpdatedIter: -1,    // iter index when plan was last updated
         };
         this._runs.set(sessionId, run);
         return run;
@@ -143,7 +240,7 @@ class ChatViewProvider {
         const list = this._sessionsAll();
         let s = list.find(x => x.id === sid);
         if (!s) {
-            s = { id: sid, title: (userText || t('sessionUntitled')).slice(0, 40), createdAt: Date.now(), updatedAt: Date.now(), ws: this._currentWs(), messages: [] };
+            s = { id: sid, title: (userText || t('sessionUntitled')).slice(0, 15), createdAt: Date.now(), updatedAt: Date.now(), ws: this._currentWs(), messages: [] };
             list.unshift(s);
         } else if (!s.ws) {
             s.ws = this._currentWs();
@@ -154,6 +251,17 @@ class ChatViewProvider {
         if (userText) s.messages.push({ role: 'user', text: userText });
         if (asstText || thoughts) s.messages.push({ role: 'assistant', text: asstText || '', thoughts: thoughts || '' });
         if (s.messages.length > 200) s.messages = s.messages.slice(-200);
+        // Persist API-format messages so next turn restores full history for the model.
+        if (arguments[5] !== undefined) {
+            const apiMsgs = arguments[5];
+            const MAX_API = 200;
+            const stripped = Array.isArray(apiMsgs) ? apiMsgs.map(m => {
+                if (!m.reasoning_content) return m;
+                const { reasoning_content, ...rest } = m; // eslint-disable-line no-unused-vars
+                return rest;
+            }) : [];
+            s.apiMessages = stripped.length > MAX_API ? stripped.slice(-MAX_API) : stripped;
+        }
         const last = s.messages[s.messages.length - 1];
         s.preview   = (last && last.text || '').replace(/\s+/g, ' ').slice(0, 80);
         s.msgCount  = s.messages.length;
@@ -172,13 +280,19 @@ class ChatViewProvider {
     }
     // Create an empty session record up front so that long-running tasks have
     // a stable id even when the user switches away before completion.
+    // Return persisted API-format messages for a session (for cross-turn context restore).
+    _loadApiMessages(sid) {
+        const s = this._sessionsAll().find(x => x.id === sid);
+        return (s && Array.isArray(s.apiMessages)) ? s.apiMessages : [];
+    }
+
     async _ensureSession(initialUserText) {
         if (this._sessionId) return this._sessionId;
         const id = 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
         const list = this._sessionsAll();
         const s = {
             id,
-            title: (initialUserText || t('sessionUntitled')).slice(0, 40),
+            title: (initialUserText || t('sessionUntitled')).slice(0, 15),
             createdAt: Date.now(),
             updatedAt: Date.now(),
             ws: this._currentWs(),
@@ -196,10 +310,11 @@ class ChatViewProvider {
         const runs = this._runs;
         this._post({
             type: 'sessions', currentWs: this._currentWs(),
-            items: this._sessionsAll().map(s => ({
+            items: this._sessionsAll().filter(s => !s.archived).map(s => ({
                 id: s.id, title: s.title, preview: s.preview, msgCount: s.msgCount,
                 model: s.model, mode: s.mode, ws: s.ws || '', createdAt: s.createdAt, updatedAt: s.updatedAt,
-                busy: !!(runs.get(s.id) && runs.get(s.id).busy),
+                busy: !!runs.get(s.id)?.busy,
+                pinned: !!s.pinned, unread: !!s.unread,
             })),
             activeId: this._sessionId,
         });
@@ -249,6 +364,34 @@ class ChatViewProvider {
         await this._sessionsSet(list);
         this._postSessionList();
     }
+    async _sessionPin(id) {
+        const list = this._sessionsAll();
+        const s = list.find(x => x.id === id);
+        if (!s) return;
+        s.pinned = !s.pinned;
+        await this._sessionsSet(list);
+        this._postSessionList();
+    }
+    async _sessionUnread(id) {
+        const list = this._sessionsAll();
+        const s = list.find(x => x.id === id);
+        if (!s) return;
+        s.unread = !s.unread;
+        await this._sessionsSet(list);
+        this._postSessionList();
+    }
+    async _sessionArchive(id) {
+        const list = this._sessionsAll();
+        const s = list.find(x => x.id === id);
+        if (!s) return;
+        s.archived = !s.archived;
+        if (this._sessionId === id && s.archived) {
+            this._sessionId = null;
+            this._post({ type: 'sessionLoaded', id: null, messages: [] });
+        }
+        await this._sessionsSet(list);
+        this._postSessionList();
+    }
 
     // ─── Webview wiring ────────────────────────────────────────────────
     get _activeWebview() {
@@ -294,6 +437,9 @@ class ChatViewProvider {
             case 'sessionNew':    this._sessionNew(); break;
             case 'sessionDelete': this._sessionDelete(msg.id); break;
             case 'sessionRename': this._sessionRename(msg.id, msg.title); break;
+            case 'sessionPin':    this._sessionPin(msg.id); break;
+            case 'sessionUnread': this._sessionUnread(msg.id); break;
+            case 'sessionArchive': this._sessionArchive(msg.id); break;
             case 'setMode': {
                 const cfg = vscode.workspace.getConfiguration('deepseekAgent');
                 cfg.update('approvalMode', msg.mode, vscode.ConfigurationTarget.Global)
@@ -348,26 +494,172 @@ class ChatViewProvider {
                 this._includeCtx = !!msg.active;
                 break;
             case 'regenerate': {
-                const run = this._activeRun();
+                let run = this._activeRun();
                 if (run && run.busy) break;
-                if (!run) break;
                 let lastUser = '';
-                while (run.messages.length) {
-                    const last = run.messages[run.messages.length - 1];
-                    if (last.role === 'user') {
-                        const c = last.content;
-                        if (typeof c === 'string') lastUser = c;
-                        else if (Array.isArray(c)) {
-                            const t = c.find(p => p && p.type === 'text');
-                            lastUser = t ? (t.text || '') : '';
+                if (run) {
+                    // In-flight run still in memory: pop trailing messages
+                    // until the last user turn (inclusive).
+                    while (run.messages.length) {
+                        const last = run.messages[run.messages.length - 1];
+                        if (last.role === 'user') {
+                            const c = last.content;
+                            if (typeof c === 'string') lastUser = c;
+                            else if (Array.isArray(c)) {
+                                const t = c.find(p => p && p.type === 'text');
+                                lastUser = t ? (t.text || '') : '';
+                            }
+                            run.messages.pop();
+                            break;
                         }
                         run.messages.pop();
-                        break;
                     }
-                    run.messages.pop();
+                } else if (this._sessionId) {
+                    // Run was reaped after replyEnd. Rebuild from persisted session.
+                    const list = this._sessionsAll();
+                    const s = list.find(x => x.id === this._sessionId);
+                    if (!s) break;
+                    // Pop trailing assistant (if any) from UI messages, then the last user.
+                    const uiMsgs = s.messages || [];
+                    if (!uiMsgs.length) break;
+                    const tail = uiMsgs[uiMsgs.length - 1];
+                    if (tail && tail.role === 'assistant') uiMsgs.pop();
+                    const userTail = uiMsgs[uiMsgs.length - 1];
+                    if (!userTail || userTail.role !== 'user') break;
+                    lastUser = userTail.text || '';
+                    uiMsgs.pop();
+                    s.messages = uiMsgs;
+                    s.msgCount = s.messages.length;
+                    s.updatedAt = Date.now();
+                    // Also drop the last user turn from apiMessages (and any trailing
+                    // assistant/tool messages that followed it).
+                    if (Array.isArray(s.apiMessages) && s.apiMessages.length) {
+                        let lastUserIdx = -1;
+                        for (let i = s.apiMessages.length - 1; i >= 0; i--) {
+                            if (s.apiMessages[i].role === 'user') { lastUserIdx = i; break; }
+                        }
+                        if (lastUserIdx >= 0) s.apiMessages = s.apiMessages.slice(0, lastUserIdx);
+                    }
+                    await this._sessionsSet(list);
+                    // Seed a fresh run with the retained API history (includes tool calls).
+                    const seed = Array.isArray(s.apiMessages) ? s.apiMessages : [];
+                    run = this._newRun(this._sessionId, seed);
+                    this._postSessionList();
                 }
-                const stripped = lastUser.replace(/^---\s*\n[\s\S]*?\n---\s*\n\n?/, '');
+                if (!lastUser) break;
+                const stripped = lastUser
+                    .replace(/^---\s*\n[\s\S]*?\n---\s*\n\n?/, '')
+                    .replace(/^<attachments>[\s\S]*?<\/attachments>\s*\n*/, '')
+                    .replace(/^(?:<attachment\b[\s\S]*?<\/attachment>\s*\n*)+/, '');
                 if (stripped.trim()) this._handleSend(stripped);
+                break;
+            }
+            case 'editUserMessage': {
+                // Truncate run.messages to just before the message at the given index,
+                // then echo the original text back to the webview for the user to edit.
+                const run = this._activeRun();
+                if (!run || run.busy) break;
+                const idx = Number(msg.index);
+                if (!Number.isFinite(idx) || idx < 0 || idx >= run.messages.length) break;
+                // Find the idx-th user message in run.messages
+                let userCount = -1;
+                let spliceAt = -1;
+                for (let i = 0; i < run.messages.length; i++) {
+                    if (run.messages[i].role === 'user') {
+                        userCount++;
+                        if (userCount === idx) { spliceAt = i; break; }
+                    }
+                }
+                if (spliceAt < 0) break;
+                const m = run.messages[spliceAt];
+                let text = '';
+                if (typeof m.content === 'string') text = m.content;
+                else if (Array.isArray(m.content)) {
+                    const tp = m.content.find(p => p && p.type === 'text');
+                    text = tp ? (tp.text || '') : '';
+                }
+                // Strip attachment blocks prepended to the content
+                text = text.replace(/^---\s*\n[\s\S]*?\n---\s*\n\n?/, '');
+                text = text.replace(/<attachment path="[^"]*">[\s\S]*?<\/attachment>\n\n?/g, '').trim();
+                // Truncate messages up to (but not including) this user message
+                run.messages.splice(spliceAt);
+                // Clear run events back to just before userEcho for this index so replays are clean
+                this._post({ type: 'editFillInput', text });
+                break;
+            }
+            case 'editUserSubmit': {
+                // Inline edit submission: truncate history at the given user-message
+                // index, then immediately resend with the new text. (GH Copilot inline mode.)
+                const idx = Number(msg.index);
+                const newText = String(msg.text || '').trim();
+                if (!newText) break;
+                if (!Number.isFinite(idx) || idx < 0) break;
+                const run = this._activeRun();
+                // 1) If a run is in flight, stop it first so we can resend cleanly.
+                if (run && run.busy && run.abortCtrl) {
+                    try { run.abortCtrl.abort(); } catch (_) {}
+                    run.busy = false;
+                }
+                // 2) Truncate run.messages (API history) at the edited user index.
+                if (run) {
+                    let userCount = -1;
+                    let spliceAt = -1;
+                    for (let i = 0; i < run.messages.length; i++) {
+                        if (run.messages[i].role === 'user') {
+                            userCount++;
+                            if (userCount === idx) { spliceAt = i; break; }
+                        }
+                    }
+                    if (spliceAt >= 0) run.messages.splice(spliceAt);
+                    // 3) Trim buffered events so session-switch replays are clean.
+                    if (Array.isArray(run.events)) {
+                        let echoCount = -1;
+                        let cutAt = -1;
+                        for (let i = 0; i < run.events.length; i++) {
+                            const ev = run.events[i];
+                            if (ev && ev.type === 'userEcho') {
+                                echoCount++;
+                                if (echoCount === idx) { cutAt = i; break; }
+                            }
+                        }
+                        if (cutAt >= 0) run.events.splice(cutAt);
+                    }
+                }
+                // 4) Also trim the persisted session messages so the DOM-rebuilt
+                //    history on next load matches what the model will see.
+                if (this._sessionId) {
+                    const list = this._sessionsAll();
+                    const s = list.find(x => x.id === this._sessionId);
+                    if (s) {
+                        // Trim UI messages at the edited user-message boundary.
+                        if (Array.isArray(s.messages)) {
+                            let userCount = -1;
+                            let cutAt = -1;
+                            for (let i = 0; i < s.messages.length; i++) {
+                                if (s.messages[i].role === 'user') {
+                                    userCount++;
+                                    if (userCount === idx) { cutAt = i; break; }
+                                }
+                            }
+                            if (cutAt >= 0) s.messages.splice(cutAt);
+                        }
+                        // Trim apiMessages at the same user-message boundary.
+                        if (Array.isArray(s.apiMessages)) {
+                            let apiUserCount = -1;
+                            let apiCutAt = -1;
+                            for (let i = 0; i < s.apiMessages.length; i++) {
+                                if (s.apiMessages[i].role === 'user') {
+                                    apiUserCount++;
+                                    if (apiUserCount === idx) { apiCutAt = i; break; }
+                                }
+                            }
+                            if (apiCutAt >= 0) s.apiMessages.splice(apiCutAt);
+                        }
+                        s.updatedAt = Date.now();
+                        await this._sessionsSet(list);
+                    }
+                }
+                this._handleSend(newText);
                 break;
             }
             case 'feedback':
@@ -394,8 +686,8 @@ class ChatViewProvider {
                 let content = '';
                 let error = '';
                 try {
-                    const abs = require('path').join(wsRoot(), rel);
-                    content = require('fs').readFileSync(abs, 'utf8');
+                    const abs = path.join(wsRoot(), rel);
+                    content = fs.readFileSync(abs, 'utf8');
                     const MAX = 64 * 1024;
                     if (content.length > MAX) content = content.slice(0, MAX) + '\n... [truncated]';
                 } catch (e) { error = e.message; }
@@ -423,7 +715,11 @@ class ChatViewProvider {
         // can find this run in `_runs` and resume rendering it.
         const sid = await this._ensureSession(text);
         let run = this._runs.get(sid);
-        if (!run) run = this._newRun(sid);
+        if (!run) {
+            // Restore persisted API history so the model sees prior turns.
+            const seed = this._loadApiMessages(sid);
+            run = this._newRun(sid, seed);
+        }
         run.busy = true;
 
         const cfg     = vscode.workspace.getConfiguration('deepseekAgent');
@@ -509,12 +805,36 @@ class ChatViewProvider {
         let lastUsage = null;
         try {
             while (iter++ < MAX_ITERS) {
+                run._iter = iter;
                 // autoCompact in place if we are blowing past the budget.
                 const compactRes = autoCompactIfNeeded(run.messages, COMPACT_BUDGET);
                 if (compactRes.compacted) {
                     run.messages = compactRes.messages;
                     Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped });
                     this._runPost(run, { type: 'status', text: isZh() ? '🗜 压缩历史…' : 'Compacting history…' });
+                }
+
+                // Plan reminder: if a plan exists with incomplete steps and the
+                // model has not touched it for ≥ 4 iterations, re-inject the
+                // current checklist so it doesn't drift / forget. Emitted at
+                // most once per stale window via a per-run watermark.
+                if (run.plan && Array.isArray(run.plan.steps) && run.plan.steps.length) {
+                    const hasOpen = run.plan.steps.some(s => s.status !== 'done');
+                    const staleFor = iter - (run.planUpdatedIter || 0);
+                    if (hasOpen && staleFor >= 4 && run._lastPlanNudgeIter !== run.planUpdatedIter) {
+                        run._lastPlanNudgeIter = run.planUpdatedIter;
+                        const lines = run.plan.steps.map((s, i) => {
+                            const mark = s.status === 'done' ? '[x]'
+                                       : s.status === 'in_progress' ? '[~]'
+                                       : s.status === 'blocked' ? '[!]' : '[ ]';
+                            return `  ${i + 1}. ${mark} ${s.title}`;
+                        }).join('\n');
+                        run.messages.push({
+                            role: 'user',
+                            content: `<system-reminder>\nActive plan (you set this earlier):\n${lines}\n\nUpdate it via \`update_plan\` whenever you finish a step or change scope. Exactly one step should be \`in_progress\`. If the plan is complete, mark all steps \`done\` and produce the final user-facing reply.\n</system-reminder>`,
+                        });
+                        Logger.info('PLAN_NUDGE_INJECTED', { sid, iter, staleFor });
+                    }
                 }
 
                 const msgs = [{ role: 'system', content: sysPrompt }, ...run.messages];
@@ -527,8 +847,17 @@ class ChatViewProvider {
                 // Ask mode → no tools at all. Agent mode → all tools, model decides.
                 const noTools = askMode;
 
+                // Per-iteration streaming-args state. Lets us emit `toolStart`
+                // as soon as the model finishes streaming the `path` field
+                // (instead of waiting for the entire arguments JSON to land)
+                // and forward `content` deltas to the webview live.
+                const argStreamers = new Map();
+                if (!run._earlyStartedTools) run._earlyStartedTools = new Set();
+                const STREAMABLE_TOOLS = new Set(['write_file', 'str_replace_in_file', 'apply_patch']);
+
+                const allTools = getToolDefs(mcpManager.getToolDefs());
                 const { toolCalls, usage } = await streamDeepSeek(
-                    { apiKey, baseUrl, messages: msgs, model, noTools },
+                    { apiKey, baseUrl, messages: msgs, model, noTools, tools: allTools },
                     {
                         onDelta: (delta) => {
                             assistantText += delta; run.reply.asst += delta;
@@ -542,6 +871,30 @@ class ChatViewProvider {
                             }
                         },
                         onThinking: (delta) => { reasoningText += delta; run.reply.thoughts += delta; Logger.thinking(delta); this._runPost(run, { type: 'thinkingDelta', text: delta }); },
+                        onToolArgsDelta: (ev) => {
+                            if (!ev || !ev.name || !STREAMABLE_TOOLS.has(ev.name)) return;
+                            let s = argStreamers.get(ev.index);
+                            if (!s) { s = new ToolArgsStreamer(); argStreamers.set(ev.index, s); }
+                            const r = s.feed(ev.deltaArgs || '');
+                            if (r.newPath && ev.id && !run._earlyStartedTools.has(ev.id)) {
+                                run._earlyStartedTools.add(ev.id);
+                                this._runPost(run, {
+                                    type: 'toolStart',
+                                    id: ev.id,
+                                    name: ev.name,
+                                    args: JSON.stringify({ path: r.newPath }),
+                                    streaming: true,
+                                });
+                            }
+                            if (r.contentDelta) {
+                                this._runPost(run, {
+                                    type: 'toolArgsDelta',
+                                    id: ev.id,
+                                    name: ev.name,
+                                    contentDelta: r.contentDelta,
+                                });
+                            }
+                        },
                     },
                     signal,
                 );
@@ -595,20 +948,14 @@ class ChatViewProvider {
                 for (let i = 0; i < toolCalls.length; i++) {
                     const tc = toolCalls[i];
                     if (!READ_ONLY.has(tc.name)) continue;
-                    let args;
-                    try { args = JSON.parse(tc.args || '{}'); } catch { args = {}; }
-                    const argsStr = tc.args || '{}';
-                    Logger.info('TOOL_CALL', { id: tc.id, name: tc.name, args });
-                    this._runPost(run, { type: 'toolStart', id: tc.id, name: tc.name, args: argsStr });
+                    const args = this._logToolStart(run, tc);
                     const tT0 = Date.now();
                     parallelTasks.push(
                         this._executeTool(tc.name, args, mode, run, signal)
                             .catch(e => `Error: ${e.message}`)
                             .then(res => {
-                                if (typeof res !== 'string') { try { res = JSON.stringify(res); } catch { res = String(res); } }
-                                Logger.info('TOOL_RESULT', { id: tc.id, name: tc.name, elapsed_ms: Date.now() - tT0, ok: !String(res).startsWith('Error'), output: String(res).slice(0, 2000) });
-                                this._runPost(run, { type: 'toolResult', id: tc.id, name: tc.name, ok: !res.startsWith('Error'), output: res.slice(0, 600) });
-                                results[i] = { tc, args, result: res };
+                                const result = this._logToolResult(run, tc, res, Date.now() - tT0);
+                                results[i] = { tc, args, result };
                             })
                     );
                 }
@@ -618,18 +965,12 @@ class ChatViewProvider {
                 for (let i = 0; i < toolCalls.length; i++) {
                     const tc = toolCalls[i];
                     if (READ_ONLY.has(tc.name)) continue;
-                    let args;
-                    try { args = JSON.parse(tc.args || '{}'); } catch { args = {}; }
-                    const argsStr = tc.args || '{}';
-                    Logger.info('TOOL_CALL', { id: tc.id, name: tc.name, args });
+                    const args = this._logToolStart(run, tc);
                     const tT0 = Date.now();
-                    this._runPost(run, { type: 'toolStart', id: tc.id, name: tc.name, args: argsStr });
-                    let result = '';
-                    try { result = await this._executeTool(tc.name, args, mode, run, signal); }
-                    catch (e) { result = `Error: ${e.message}`; }
-                    if (typeof result !== 'string') { try { result = JSON.stringify(result); } catch { result = String(result); } }
-                    Logger.info('TOOL_RESULT', { id: tc.id, name: tc.name, elapsed_ms: Date.now() - tT0, ok: !String(result).startsWith('Error'), output: String(result).slice(0, 2000) });
-                    this._runPost(run, { type: 'toolResult', id: tc.id, name: tc.name, ok: !result.startsWith('Error'), output: result.slice(0, 600) });
+                    let rawResult = '';
+                    try { rawResult = await this._executeTool(tc.name, args, mode, run, signal); }
+                    catch (e) { rawResult = `Error: ${e.message}`; }
+                    const result = this._logToolResult(run, tc, rawResult, Date.now() - tT0);
                     results[i] = { tc, args, result };
                 }
 
@@ -721,7 +1062,7 @@ class ChatViewProvider {
                     usageWithCost = Object.assign({}, lastUsage, { cost_cny });
                 } catch { usageWithCost = lastUsage; }
             }
-            await this._appendToSession(sid, r.user, r.asst, r.thoughts, usageWithCost);
+            await this._appendToSession(sid, r.user, r.asst, r.thoughts, usageWithCost, run.messages);
             // Auto-name the session from the FIRST assistant reply (cheap,
             // local heuristic — no extra API call).
             this._maybeAutoName(sid, r.user, r.asst).catch(() => {});
@@ -778,6 +1119,37 @@ class ChatViewProvider {
         }
     }
 
+    // ─── Tool logging helpers ──────────────────────────────────────────
+    // Parse tc.args JSON, emit TOOL_CALL log + toolStart webview event.
+    // Returns the parsed args object (used by both parallel and serial phases).
+    _logToolStart(run, tc) {
+        let args;
+        try { args = JSON.parse(tc.args || '{}'); } catch { args = {}; }
+        Logger.info('TOOL_CALL', { id: tc.id, name: tc.name, args });
+        const already = run._earlyStartedTools && run._earlyStartedTools.has(tc.id);
+        if (already) {
+            // We already opened the tool card from the streaming args. Just
+            // ship the finalized full args so the webview can refresh any
+            // display that depends on them (line counts, target, etc).
+            this._runPost(run, { type: 'toolArgsFinal', id: tc.id, name: tc.name, args: tc.args || '{}' });
+        } else {
+            this._runPost(run, { type: 'toolStart', id: tc.id, name: tc.name, args: tc.args || '{}' });
+        }
+        return args;
+    }
+
+    // Normalize result to string, emit TOOL_RESULT log + toolResult webview event.
+    // Returns the normalized string so callers can store it in results[].
+    _logToolResult(run, tc, result, elapsedMs) {
+        if (typeof result !== 'string') {
+            try { result = JSON.stringify(result); } catch { result = String(result); }
+        }
+        const ok = !result.startsWith('Error');
+        Logger.info('TOOL_RESULT', { id: tc.id, name: tc.name, elapsed_ms: elapsedMs, ok, output: result.slice(0, 2000) });
+        this._runPost(run, { type: 'toolResult', id: tc.id, name: tc.name, ok, output: result.slice(0, 600) });
+        return result;
+    }
+
     async _executeTool(name, args, approvalMode, run, abortSignal) {
         // Per-extension auto-approve / deny lists override approvalMode.
         const cfg = vscode.workspace.getConfiguration('deepseekAgent');
@@ -814,8 +1186,6 @@ class ChatViewProvider {
                 // File-based tools: revalidate via mtime
                 if (name === 'read_file' && args.path) {
                     try {
-                        const fs = require('fs');
-                        const { resolvePath } = require('../utils/paths');
                         const mtime = fs.statSync(resolvePath(args.path)).mtimeMs;
                         if (entry.mtime === mtime) {
                             return entry.result + '\n(cached)';
@@ -829,6 +1199,12 @@ class ChatViewProvider {
             }
         }
 
+        // ── Pre-edit snapshot for revert_last_turn ──────────────────
+        if (run && run.turnSnapshots &&
+            (name === 'write_file' || name === 'str_replace_in_file' || name === 'apply_patch')) {
+            this._snapshotForEdit(run, name, args);
+        }
+
         const result = await this._dispatchTool(name, args, run, abortSignal);
 
         // ── Cache store ───────────────────────────────────────────────
@@ -837,8 +1213,6 @@ class ChatViewProvider {
             const entry = { result };
             if (name === 'read_file' && args.path) {
                 try {
-                    const fs = require('fs');
-                    const { resolvePath } = require('../utils/paths');
                     entry.mtime = fs.statSync(resolvePath(args.path)).mtimeMs;
                 } catch { /* ignore */ }
             }
@@ -850,7 +1224,117 @@ class ChatViewProvider {
             this._invalidateCacheForMutation(run, name, args);
         }
 
+        // ── After-tool hooks ──────────────────────────────────────────
+        if (typeof result === 'string' && !result.startsWith('Error')) {
+            const wsR = wsRoot();
+            if (wsR) {
+                try {
+                    const hookOut = await runHooks('after_tool', name, wsR);
+                    if (hookOut) return result + '\n\n[hooks]\n' + hookOut;
+                } catch (e) {
+                    Logger.info('HOOK_ERROR', { name, message: e.message });
+                }
+            }
+        }
+
+        // ── Post-edit diagnostics (best-effort) ───────────────────────
+        // After a successful edit, append the current Error/Warning
+        // diagnostics so the model can self-verify before reporting success.
+        // Disabled via setting `deepseekAgent.postEditDiagnostics: false`.
+        if (typeof result === 'string'
+            && !result.startsWith('Error')
+            && (name === 'write_file' || name === 'str_replace_in_file' || name === 'apply_patch')) {
+            const cfg2 = vscode.workspace.getConfiguration('deepseekAgent');
+            if (cfg2.get('postEditDiagnostics', true)) {
+                try {
+                    const diagBlock = await this._collectPostEditDiagnostics(name, args);
+                    if (diagBlock) return result + '\n\n' + diagBlock;
+                } catch (e) {
+                    Logger.info('POST_EDIT_DIAG_ERROR', { message: e.message });
+                }
+            }
+        }
+
         return result;
+    }
+
+    // Collect VS Code language-server diagnostics for files just edited.
+    // Returns a compact markdown block or '' if no notable issues.
+    async _collectPostEditDiagnostics(name, args) {
+        const paths = [];
+        if (name === 'write_file' || name === 'str_replace_in_file') {
+            if (args && args.path) paths.push(args.path);
+        } else if (name === 'apply_patch') {
+            const patch = String(args && args.patch || '');
+            const re = /^\+\+\+ (?:b\/)?(\S+)/gm;
+            let m;
+            while ((m = re.exec(patch)) !== null) {
+                if (m[1] && m[1] !== '/dev/null') paths.push(m[1]);
+                if (paths.length >= 6) break;
+            }
+        }
+        if (!paths.length) return '';
+
+        // Give language servers a moment to reanalyze the file.
+        await new Promise(r => setTimeout(r, 500));
+
+        const sevName = (s) => ['Error', 'Warning', 'Info', 'Hint'][s] || 'Info';
+        const lines = [];
+        let totalErr = 0, totalWarn = 0;
+        for (const rel of paths) {
+            let abs;
+            try { abs = resolvePath(rel); } catch { continue; }
+            let uri;
+            try { uri = vscode.Uri.file(abs); } catch { continue; }
+            const diags = vscode.languages.getDiagnostics(uri) || [];
+            if (!diags.length) continue;
+            // Keep only Errors and Warnings; cap at 8 per file.
+            const filt = diags
+                .filter(d => d.severity === vscode.DiagnosticSeverity.Error
+                          || d.severity === vscode.DiagnosticSeverity.Warning)
+                .slice(0, 8);
+            if (!filt.length) continue;
+            lines.push(`- ${rel}:`);
+            for (const d of filt) {
+                const sev = sevName(d.severity);
+                const ln = (d.range && d.range.start && (d.range.start.line + 1)) || '?';
+                const src = d.source ? `[${d.source}] ` : '';
+                const msg = String(d.message || '').replace(/\s+/g, ' ').slice(0, 200);
+                if (d.severity === vscode.DiagnosticSeverity.Error) totalErr++;
+                else totalWarn++;
+                lines.push(`    L${ln} ${sev}: ${src}${msg}`);
+            }
+        }
+        if (!lines.length) return '';
+        const header = `--- post-edit diagnostics (${totalErr} error, ${totalWarn} warning) ---`;
+        const footer = totalErr > 0
+            ? 'ACTION: fix the errors above before reporting the task complete.'
+            : 'Warnings only — review and fix if related to your change.';
+        return [header, ...lines, footer].join('\n');
+    }
+
+    // Snapshot file content before a mutating edit so revert_last_turn can restore it.
+    // Called once per file per turn — subsequent edits to the same file keep the original.
+    _snapshotForEdit(run, name, args) {
+        const paths = [];
+        if ((name === 'write_file' || name === 'str_replace_in_file') && args && args.path) {
+            paths.push(String(args.path));
+        } else if (name === 'apply_patch' && args && args.patch) {
+            const re = /^\+\+\+ (?:b\/)?(\S+)/gm;
+            let m;
+            while ((m = re.exec(String(args.patch))) !== null) {
+                const p = m[1].trimEnd();
+                if (p && p !== '/dev/null') paths.push(p);
+                if (paths.length >= 20) break;
+            }
+        }
+        for (const rel of paths) {
+            let abs;
+            try { abs = resolvePath(rel); } catch { continue; }
+            if (run.turnSnapshots.has(abs)) continue; // already captured this turn
+            try { run.turnSnapshots.set(abs, fs.readFileSync(abs, 'utf8')); }
+            catch { run.turnSnapshots.set(abs, null); } // null = file didn't exist
+        }
     }
 
     async _dispatchTool(name, args, run, abortSignal) {
@@ -896,10 +1380,88 @@ class ChatViewProvider {
 
                 if (run) this._runPost(run, { type: 'plan', steps, todos });
                 else this._post({ type: 'plan', steps, todos });
+                if (run) {
+                    run.plan = { steps, todos };
+                    run.planUpdatedIter = run._iter ?? -1;
+                }
                 return 'Plan updated.';
             }
+            case 'revert_last_turn': {
+                if (!run || !run.turnSnapshots || run.turnSnapshots.size === 0) {
+                    return 'No file changes recorded for this turn. Nothing to revert.';
+                }
+                const reverted = [], failed = [];
+                const root = wsRoot() || process.cwd();
+                for (const [absPath, original] of run.turnSnapshots) {
+                    try {
+                        if (original === null) {
+                            if (fs.existsSync(absPath)) fs.unlinkSync(absPath);
+                        } else {
+                            fs.writeFileSync(absPath, original, 'utf8');
+                        }
+                        reverted.push(path.relative(root, absPath));
+                    } catch (e) {
+                        failed.push(`${path.relative(root, absPath)}: ${e.message}`);
+                    }
+                }
+                run.turnSnapshots.clear();
+                let revertMsg = `Reverted ${reverted.length} file(s) to pre-turn state: ${reverted.join(', ')}`;
+                if (failed.length) revertMsg += `\nFailed to revert: ${failed.join('; ')}`;
+                return revertMsg;
+            }
             default:
+                if (mcpManager.isMcpTool(name)) {
+                    try { return await mcpManager.callTool(name, args); }
+                    catch (e) { return `Error: ${e.message}`; }
+                }
                 return `Unknown tool: ${name}`;
+        }
+    }
+
+    // Public: prompt user to confirm and revert all file edits made in the current agent turn.
+    async revertLastTurn() {
+        const run = this._activeRun();
+        if (!run || !run.turnSnapshots || run.turnSnapshots.size === 0) {
+            vscode.window.showInformationMessage(
+                isZh() ? 'Deep Copilot：本轮没有可回滚的文件修改。'
+                       : 'Deep Copilot: No file changes to revert in this turn.'
+            );
+            return;
+        }
+        const count = run.turnSnapshots.size;
+        const ok = await vscode.window.showWarningMessage(
+            isZh() ? `回滚本轮 Agent 对 ${count} 个文件的修改？`
+                   : `Revert ${count} file change(s) from this agent turn?`,
+            { modal: true },
+            isZh() ? '确认回滚' : 'Revert All',
+        );
+        const confirmLabel = isZh() ? '确认回滚' : 'Revert All';
+        if (ok !== confirmLabel) return;
+
+        const reverted = [], failed = [];
+        for (const [absPath, original] of run.turnSnapshots) {
+            try {
+                if (original === null) {
+                    if (fs.existsSync(absPath)) fs.unlinkSync(absPath);
+                } else {
+                    fs.writeFileSync(absPath, original, 'utf8');
+                }
+                reverted.push(path.basename(absPath));
+            } catch (e) {
+                failed.push(path.basename(absPath));
+            }
+        }
+        run.turnSnapshots.clear();
+
+        const msg = isZh()
+            ? `已回滚 ${reverted.length} 个文件：${reverted.join('、')}`
+            : `Reverted ${reverted.length} file(s): ${reverted.join(', ')}`;
+        if (failed.length) {
+            vscode.window.showWarningMessage(
+                msg + (isZh() ? `；失败：${failed.join('、')}` : `; Failed: ${failed.join(', ')}`)
+            );
+        } else {
+            vscode.window.showInformationMessage(msg);
         }
     }
 
@@ -932,11 +1494,9 @@ class ChatViewProvider {
     }
 
     /**
-     * Produce a human-readable session title from the first turn, without
-     * spending an extra API call. Heuristic:
-     *  - Take the first non-trivial sentence of the assistant reply.
-     *  - If too short, fall back to the user's first sentence.
-     *  - Cap at 60 chars.
+     * Produce a human-readable session title from the first turn.
+     * Strategy: fire a tiny non-streaming LLM call (max_tokens=20) to get a
+     * concise Chinese title; fall back to heuristic if the call fails/times out.
      */
     async _maybeAutoName(sid, userText, asstText) {
         const list = this._sessionsAll();
@@ -944,27 +1504,108 @@ class ChatViewProvider {
         if (!s) return;
         // Only auto-name on the first turn (1 user + 1 assistant just stored).
         if (s.msgCount > 2) return;
-        // Respect manually-renamed titles: skip if title differs from the original prefix.
+        // Respect manually-renamed titles.
         const originalPrefix = (userText || '').slice(0, 40);
         if (s.title && s.title !== originalPrefix && s.title !== t('sessionUntitled')) return;
 
-        const stripCode = (txt) => String(txt || '')
-            .replace(/```[\s\S]*?```/g, ' ')
-            .replace(/`[^`]*`/g, ' ');
-        const firstSentence = (txt) => {
-            const cleaned = stripCode(txt).replace(/\s+/g, ' ').trim();
-            if (!cleaned) return '';
-            const m = cleaned.match(/^(.{8,80}?)([。.!?！？\n]|$)/);
-            return m ? m[1].trim() : cleaned.slice(0, 60);
-        };
-        let title = firstSentence(asstText);
-        if (title.length < 8) title = firstSentence(userText);
-        title = title.slice(0, 60).trim();
+        let title = null;
+
+        // ── LLM-powered title (small agent) ──────────────────────────────
+        try {
+            const apiKey = await this._context.secrets.get('deepseekAgent.apiKey');
+            if (apiKey) {
+                const cfg = vscode.workspace.getConfiguration('deepseekAgent');
+                const baseUrl = (cfg.get('apiBaseUrl') || '').trim() || 'https://api.deepseek.com';
+                title = await this._llmTitle(apiKey, baseUrl, userText, asstText);
+            }
+        } catch (_) { /* fall through to heuristic */ }
+
+        // ── Heuristic fallback ────────────────────────────────────────────
+        if (!title) {
+            const stripCode = (txt) => String(txt || '')
+                .replace(/```[\s\S]*?```/g, ' ')
+                .replace(/`[^`]*`/g, ' ');
+            const firstSentence = (txt) => {
+                const cleaned = stripCode(txt).replace(/\s+/g, ' ').trim();
+                if (!cleaned) return '';
+                const m = cleaned.match(/^(.{8,80}?)([。.!?！？\n]|$)/);
+                return m ? m[1].trim() : cleaned.slice(0, 60);
+            };
+            title = firstSentence(asstText);
+            if (title.length < 8) title = firstSentence(userText);
+            title = title.slice(0, 15).trim();
+        }
+
         if (!title) return;
         s.title = title;
         s.updatedAt = Date.now();
         await this._sessionsSet(list);
         this._postSessionList();
+    }
+
+    /**
+     * Fire a tiny non-streaming API call to generate a ≤15-char session title.
+     * Uses deepseek-chat (fast/cheap). Resolves with null on any error.
+     */
+    async _llmTitle(apiKey, baseUrl, userText, asstText) {
+        const https = require('https');
+        const http  = require('http');
+        const base  = (baseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
+        const urlObj = new URL('/chat/completions', base);
+        const isHttps = urlObj.protocol === 'https:';
+
+        const strip = (t) => String(t || '')
+            .replace(/```[\s\S]*?```/g, '')
+            .replace(/`[^`]*`/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 300);
+
+        const prompt =
+            '请用不超过10个汉字概括下方对话的主题，只输出标题，不加任何标点和解释：\n' +
+            `用户：${strip(userText)}\n助手：${strip(asstText)}`;
+
+        const body = JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [{ role: 'user', content: prompt }],
+            stream: false,
+            max_tokens: 20,
+            temperature: 0.3,
+        });
+
+        return new Promise((resolve) => {
+            const mod = isHttps ? https : http;
+            const req = mod.request({
+                hostname: urlObj.hostname,
+                port:     urlObj.port || (isHttps ? 443 : 80),
+                path:     urlObj.pathname + (urlObj.search || ''),
+                method:   'POST',
+                headers: {
+                    'Authorization':  `Bearer ${apiKey}`,
+                    'Content-Type':   'application/json',
+                    'Content-Length': Buffer.byteLength(body),
+                },
+                timeout: 8000,
+            }, (res) => {
+                let raw = '';
+                res.on('data', (d) => { raw += d; });
+                res.on('end', () => {
+                    try {
+                        const data = JSON.parse(raw);
+                        const text = (data?.choices?.[0]?.message?.content || '').trim();
+                        // Strip punctuation & limit length
+                        const clean = text
+                            .replace(/["""''「」『』【】《》<>（）()\[\]{}\.\!\?。！？，,、；;：:\-—\s]/g, '')
+                            .slice(0, 15);
+                        resolve(clean || null);
+                    } catch (_) { resolve(null); }
+                });
+            });
+            req.on('error',   () => resolve(null));
+            req.on('timeout', () => { req.destroy(); resolve(null); });
+            req.write(body);
+            req.end();
+        });
     }
 
     // ─── Helpers ───────────────────────────────────────────────────────

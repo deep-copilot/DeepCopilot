@@ -6,11 +6,28 @@ const vscode = require('vscode');
 const { Logger } = require('./logger');
 const { ChatViewProvider } = require('./chat/provider');
 const { t, isZh } = require('./utils/i18n');
+const { getDiscountWarning } = require('./pricing');
 
 function activate(context) {
     Logger.init(context);
     Logger.info('ACTIVATE', { version: (context.extension && context.extension.packageJSON && context.extension.packageJSON.version) || 'unknown' });
     const chatProvider = new ChatViewProvider(context);
+
+    // ─── Discount expiry warning (shown once per state change) ────────────
+    const dw = getDiscountWarning();
+    const dwState = dw.expired ? 'expired' : dw.expiring ? `expiring-${dw.days}` : '';
+    const dwKey = 'deepseekAgent.discountWarnShown';
+    if (dwState && context.globalState.get(dwKey) !== dwState) {
+        context.globalState.update(dwKey, dwState);
+        const msg = dw.expired
+            ? (isZh()
+                ? 'Deep Copilot：DeepSeek v4-pro 折扣已结束，当前正价为 ¥12 / ¥0.1 / ¥24（输入/缓存命中/输出，每百万 token）。'
+                : 'Deep Copilot: The DeepSeek v4-pro discount has ended. Full pricing ¥12 / ¥0.1 / ¥24 per 1M tokens is now active.')
+            : (isZh()
+                ? `Deep Copilot：DeepSeek v4-pro 折扣将在 ${dw.days} 天后到期（2026-05-31 23:59 北京时间）。`
+                : `Deep Copilot: The DeepSeek v4-pro discount expires in ${dw.days} day(s) (2026-05-31 23:59 CST).`);
+        setTimeout(() => vscode.window.showWarningMessage(msg), 2000);
+    }
 
     // ─── API key / base URL management ────────────────────────────────────
     context.subscriptions.push(
@@ -119,6 +136,13 @@ function activate(context) {
                 vscode.window.showWarningMessage(t('logNotInit'));
             }
         }),
+    );
+
+    // Revert last turn command (#25)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('deepseekAgent.revertLastTurn', async () => {
+            await chatProvider.revertLastTurn();
+        })
     );
 
     // Sidebar WebviewView
