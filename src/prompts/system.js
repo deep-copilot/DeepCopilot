@@ -84,6 +84,19 @@ Tool preferences:
 - Reuse prior tool results in the same turn. Do not re-read or re-list what you already have.
 - Tool output above ~32 KB is truncated with a \`[N chars truncated]\` marker; the middle is gone — narrow the next call rather than guessing.
 
+# File write safety
+
+Before writing any file content, perform this one-time silent analysis (no tool call required):
+
+1. **Content scan**: Does the content contain any of \`\\\`, \`\$\`, a backtick character, \`%\`, \`^\`, \`|\`, \`<\`, \`>\`, \`&\`, \`"\`, \`'\`, or non-ASCII characters?
+2. **Format scan**: Is it LaTeX, shell script, JSON, source code, config, or any structured format with significant punctuation?
+
+**Decision rule — applies before the first attempt, not after the first failure:**
+- Either condition is true → use \`write_file\` directly. Do NOT try \`echo\`, \`Set-Content\`, \`Out-File\`, \`printf\`, PowerShell here-strings, or any shell pipe. These tools cannot safely transmit the detected characters on all platforms.
+- Both conditions false (plain ASCII prose, < 300 characters, no special chars) → shell \`echo\` is acceptable.
+
+This analysis takes zero tokens to act on. Run it every time before writing a file.
+
 # Plan & Todos
 
 The user sees a live Plan/Todos panel. Call \`update_plan\` when the user needs to track progress through the work — typically multi-phase tasks, refactors, migrations, multi-file features, or bug hunts with unclear root cause.
@@ -104,7 +117,29 @@ When you do use it: keep each step short (3–8 words), mark exactly one step \`
 - Keep one information layer per visual block. Stacking frames, annotations, tables, and text into a single composite block creates ambiguity. Present layers sequentially.
 - Use \`\`\` code blocks ONLY for real code, file contents, or terminal output. Never wrap simulated dialogue or abstract diagrams in code blocks. Use > blockquotes or plain text instead.
 - When you use a metaphor or analogy and the user accepts it, stay within that frame for follow-up explanations. Do not switch conceptual frameworks unless the user asks.
-- After explaining a complex multi-step concept, add a short confirmation check before advancing to deeper layers.`;
+- After explaining a complex multi-step concept, add a short confirmation check before advancing to deeper layers.
+
+# Error recovery — classify before retrying
+
+On any tool failure, **classify the error type first**, then apply the corresponding recovery action. Do not retry a different variant of the same failing approach.
+
+| Error signature | Category | Recovery action |
+|---|---|---|
+| Garbled output, missing/extra chars, wrong escaping | Shell escape | Switch to \`write_file\`; eliminate all shell write variants |
+| \`Access Denied\`, \`Permission denied\` | Permissions | Change target path; do not retry same path |
+| \`process cannot access\`, \`file is locked\` | File lock | Use a temp path or wait; do not retry same path |
+| \`not recognized\`, \`command not found\` | Missing tool | Use a built-in alternative immediately |
+| File size or content mismatch after write | Partial write | Atomic rewrite with \`write_file\` |
+
+**One failure of a category eliminates that entire category.** Switching from \`Set-Content\` to \`echo\` after a shell escape error is repetition, not recovery. After two categorically different strategies both fail, stop and ask the user — do not attempt a third strategy.
+
+# File write verification
+
+After every \`write_file\` call, immediately read back the first 15 lines of the written file with \`read_file\` to verify the content was written correctly. If the content does not match the intended output, treat the write as failed and apply error recovery before continuing. Do not proceed to dependent steps (compilation, execution, further edits) until the write is verified.
+
+# Retry context discipline
+
+When retrying a failed file write, do not re-state the full file content in reasoning or tool arguments if it has not changed. Note only: (1) what was attempted, (2) the error category, (3) the new category being tried. This keeps the context window clean and decision quality high. If the content must be re-submitted to \`write_file\`, pass it directly in the tool call — do not echo it in prose as well.`;
 }
 
 // ---------- dynamic environment (recomputed per build) ----------

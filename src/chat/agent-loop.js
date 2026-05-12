@@ -117,6 +117,7 @@ class AgentLoop {
         let iter = 0;
         const recentToolSig   = [];
         const repeatHintEmitted = new Set();
+        let writeErrorCount   = 0;   // consecutive write-category failures (#40)
         let lastDeltaFlush = 0;
         let pendingDelta   = '';
         const flushDelta = () => {
@@ -162,6 +163,49 @@ class AgentLoop {
                 let assistantText = '';
                 let reasoningText = '';
                 Logger.info('ITER_START', { sid, iter, msg_count: msgs.length, est_tokens: estimateMessagesTokens(msgs) });
+
+                // Pre-flight hard token cap — prevents HTTP 400 context-too-long errors.
+                // DeepSeek context window is 128K tokens. We guard at 60K (conservative)
+                // to leave room for the response. If still over after regular compaction,
+                // run an aggressive pass (keepTail=6), then an emergency pass (keepTail=3).
+                const MODEL_CTX_HARD_LIMIT = 60000;
+                let preflightTokens = estimateMessagesTokens(msgs);
+                let ctxLimitHit = false;
+                if (preflightTokens > MODEL_CTX_HARD_LIMIT) {
+                    for (const emergencyKeepTail of [6, 3]) {
+                        const agg = autoCompactIfNeeded(run.messages, Math.floor(MODEL_CTX_HARD_LIMIT * 0.7), emergencyKeepTail);
+                        if (agg.compacted) {
+                            run.messages = agg.messages;
+                            Logger.info('PREFLIGHT_COMPACT', { sid, iter, before: preflightTokens, keepTail: emergencyKeepTail, dropped: agg.dropped });
+                            this._postToRun(run, { type: 'status', text: isZh() ? '⚠️ 上下文接近上限，已紧急压缩历史…' : 'Context near limit — emergency compaction applied…' });
+                        }
+                        const newTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
+                        if (newTokens <= MODEL_CTX_HARD_LIMIT) break;
+                        preflightTokens = newTokens;
+                    }
+
+                    // Last resort: if still over the limit, refuse to call the API and tell the user
+                    const finalTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
+                    if (finalTokens > MODEL_CTX_HARD_LIMIT) {
+                        Logger.info('CTX_HARD_LIMIT_EXCEEDED', { sid, iter, tokens: finalTokens });
+                        this._postToRun(run, {
+                            type: 'error',
+                            title: isZh() ? '上下文已达上限' : 'Context limit reached',
+                            text: isZh()
+                                ? `当前会话内容约 ${Math.round(finalTokens / 1000)}K tokens，超出模型上下文窗口。请按 Ctrl+K 清空会话后重新提问。`
+                                : `Session is ~${Math.round(finalTokens / 1000)}K tokens — exceeds the model context window. Press Ctrl+K to clear the session and try again.`,
+                            code: 'CTX_LIMIT',
+                            retryable: false,
+                        });
+                        iter = MAX_ITERS + 1; // skip the force-final-summary path too
+                        ctxLimitHit = true;
+                    }
+                }
+                if (ctxLimitHit) break; // break while loop — do not call the API
+
+                // Rebuild msgs in case pre-flight compaction modified run.messages
+                const finalMsgs = [{ role: 'system', content: sysPrompt }, ...run.messages];
+
                 const iterT0 = Date.now();
 
                 const argStreamers = new Map();
@@ -170,7 +214,7 @@ class AgentLoop {
                 const allTools = getToolDefs(mcpManager.getToolDefs());
 
                 const { toolCalls, usage } = await streamDeepSeek(
-                    { apiKey, baseUrl, messages: msgs, model, noTools: askMode, tools: allTools },
+                    { apiKey, baseUrl, messages: finalMsgs, model, noTools: askMode, tools: allTools },
                     {
                         onDelta: (delta) => {
                             assistantText += delta; run.reply.asst += delta;
@@ -304,6 +348,41 @@ class AgentLoop {
                                 content: `<system-reminder>\nYou are oscillating between two tool calls without making progress. Stop the cycle. Either commit to one path with a fundamentally different argument set, or write a plain-text reply explaining what you found and ask the user how to proceed.\n</system-reminder>`,
                             });
                             Logger.info('CYCLE_HINT_INJECTED', { keys: [ks[0], ks[1]] });
+                        }
+                    }
+
+                    // (c) Write-category error classification (#40)
+                    // Detect consecutive failures across write-class tools and inject a
+                    // categorical-switch hint instead of letting the model try another variant.
+                    const WRITE_TOOLS = new Set(['write_file', 'run_shell']);
+                    const SHELL_ERROR_PAT = /error|failed|exception|unrecognized|unexpected token|cannot|access.?denied|not recognized|garbled|malformed/i;
+                    if (WRITE_TOOLS.has(tc.name) && SHELL_ERROR_PAT.test(resStr)) {
+                        writeErrorCount++;
+                        if (writeErrorCount >= 2 && !repeatHintEmitted.has('__write_category__')) {
+                            repeatHintEmitted.add('__write_category__');
+                            run.messages.push({
+                                role: 'user',
+                                content: `<system-reminder>\nMultiple write operations have failed in a row. This is a CATEGORY failure — do not try another shell or write variant.\n\nClassify the error and switch category:\n- Garbled / missing chars / bad escaping → shell escape issue → use \`write_file\` (dedicated tool) with the exact content string\n- "Access Denied" / "Permission denied" → permissions → change the target path\n- "file in use" / "cannot access" → file lock → use a temp path\n- "not recognized" / "command not found" → missing tool → use a built-in alternative\n\nOne failure = entire category eliminated. If two categories have already failed, stop and ask the user.\n</system-reminder>`,
+                            });
+                            Logger.info('WRITE_CATEGORY_HINT_INJECTED', { tool: tc.name, writeErrorCount });
+                        }
+                    } else if (!SHELL_ERROR_PAT.test(resStr) && WRITE_TOOLS.has(tc.name)) {
+                        // Successful write resets the counter
+                        writeErrorCount = 0;
+                    }
+
+                    // (d) Context compression for large error results (#44)
+                    // When a failed tool result is very large (e.g. file content echoed back with
+                    // corruption), replace the stored message content with a compact summary so the
+                    // context window does not fill with repeated identical payload.
+                    const COMPRESS_THRESHOLD = 2000;
+                    if (resStr.length > COMPRESS_THRESHOLD && SHELL_ERROR_PAT.test(resStr)) {
+                        const lastMsg = run.messages[run.messages.length - 1];
+                        if (lastMsg && lastMsg.role === 'tool' && lastMsg.tool_call_id === tc.id) {
+                            const head = resStr.slice(0, 300);
+                            const tail = resStr.slice(-100);
+                            lastMsg.content = `${head}\n...[error output compressed: ${resStr.length} chars total]...\n${tail}`;
+                            Logger.info('TOOL_RESULT_COMPRESSED', { tool: tc.name, original: resStr.length, compressed: lastMsg.content.length });
                         }
                     }
                 }

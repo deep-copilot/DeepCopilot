@@ -1,23 +1,23 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--vscode-font-family);font-size:13px;color:var(--vscode-foreground);background:var(--vscode-sideBar-background);height:100vh;overflow:hidden;position:relative;
-  display:grid;grid-template-columns:220px 1fr 280px;grid-template-rows:auto auto 1fr auto auto;
-  grid-template-areas:"tb tb tb" "sb sb sb" "left main right" "left composer right" "foot foot foot"}
+  display:grid;grid-template-columns:220px 1fr 280px;grid-template-rows:auto 1fr auto auto;
+  grid-template-areas:"sb sb sb" "left main right" "left composer right" "foot foot foot"}
 body.no-left{grid-template-columns:0 1fr 280px}
 body.no-left #left{display:none}
 body.no-right{grid-template-columns:220px 1fr 0}
 body.no-right #right{display:none}
 body.no-left.no-right{grid-template-columns:0 1fr 0}
-body.narrow{grid-template-columns:1fr;grid-template-areas:"tb" "sb" "main" "composer" "foot"}
+body.narrow{grid-template-columns:1fr;grid-template-areas:"sb" "main" "composer" "foot"}
 body.narrow #left,body.narrow #right{display:none}
 /* CSS-only fallback: force narrow layout when webview viewport < 600px (independent of JS) */
 @media (max-width: 599px){
-  body{grid-template-columns:1fr !important;grid-template-areas:"tb" "sb" "main" "composer" "foot" !important}
+  body{grid-template-columns:1fr !important;grid-template-areas:"sb" "main" "composer" "foot" !important}
   body #left,body #right{display:none !important}
   .edge-toggle{display:none !important}
 }
-#tb{grid-area:tb;display:flex;align-items:center;padding:6px 10px;gap:6px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-titleBar-activeBackground)}
+#tb{display:none}
 #tb .logo{flex:1;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px}
-#tb .logo-img{width:18px;height:18px;display:block;opacity:.9}
+#tb .logo-img{width:22px;height:22px;display:block;opacity:1;border-radius:4px;background:transparent}
 #tb .logo .badge{font-size:10px;padding:1px 6px;border-radius:8px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);font-weight:500}
 #tb .logo .model{opacity:.65;font-weight:400;font-size:11px}
 .tbsel{background:var(--vscode-input-background);color:var(--vscode-foreground);border:1px solid var(--vscode-input-border);border-radius:3px;font-size:11px;padding:2px 4px;cursor:pointer;outline:none}
@@ -295,7 +295,9 @@ body.narrow #ia{padding-left:8px;padding-right:8px}
 }
 #foot{grid-area:foot;padding:3px 12px;font-size:10px;border-top:1px solid var(--vscode-panel-border);color:var(--vscode-descriptionForeground);background:var(--vscode-statusBar-background,var(--vscode-titleBar-activeBackground));display:flex;align-items:center;gap:12px;height:22px}
 #foot .ft-left{flex:1;display:flex;align-items:center;gap:8px}
-#foot .ft-right{display:flex;align-items:center;gap:10px}
+#foot .ft-right{display:flex;align-items:center;gap:6px}
+#foot .ft-btn{background:none;border:none;cursor:pointer;font-size:12px;padding:0 3px;opacity:.75;line-height:1;color:inherit}
+#foot .ft-btn:hover{opacity:1}
 #foot .dot{width:6px;height:6px;border-radius:50%;background:#7ec99a;display:inline-block}
 #foot .dot.warn{background:#e8b86d}
 #foot .dot.err{background:var(--vscode-errorForeground)}
@@ -307,8 +309,8 @@ body.narrow #ia{padding-left:8px;padding-right:8px}
 #foot .pill#ft-balance.balance-unavail{color:var(--vscode-notificationsErrorIcon-foreground,#f48771)}
 @keyframes balance-warn{0%,100%{opacity:1}50%{opacity:.45}}
 #es{padding:24px;text-align:center;opacity:.85;align-self:center;margin:auto}
-#es .big{font-size:32px;margin-bottom:8px}
-#es .big img{width:34px;height:34px;display:block;margin:0 auto}
+#es .big{font-size:32px;margin-bottom:16px}
+#es .big img{width:160px;height:160px;display:block;margin:0 auto;opacity:1;filter:drop-shadow(0 2px 12px rgba(0,0,0,.35))}
 #es strong{font-size:24px;font-weight:600;letter-spacing:.5px;display:inline-block;margin-bottom:6px}
 #es p{font-size:14px;line-height:1.7;margin:0}
 #es p.hint{font-size:12px;margin-top:14px;opacity:.85}

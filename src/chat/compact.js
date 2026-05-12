@@ -35,11 +35,11 @@ function estimateMessagesTokens(messages) {
 //   - Replace older tool result bodies with a compact placeholder.
 //   - Always keep the FIRST user message (anchors the task).
 
-function autoCompactIfNeeded(messages, budgetTokens) {
+function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12) {
     const total = estimateMessagesTokens(messages);
     if (total <= budgetTokens) return { messages, compacted: false, dropped: 0 };
 
-    const KEEP_TAIL = 12;
+    const KEEP_TAIL = keepTail;
     if (messages.length <= KEEP_TAIL + 2) return { messages, compacted: false, dropped: 0 };
 
     const tail = messages.slice(-KEEP_TAIL);

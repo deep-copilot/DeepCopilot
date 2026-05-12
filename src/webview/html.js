@@ -6,7 +6,8 @@ const vscode = require('vscode');
 function buildWebviewHtml(webview, extensionUri) {
     const cssUri      = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'chat.css'));
     const jsUri       = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'chat.js'));
-    const logoUri     = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logo.png'));
+    const logoUri     = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logo_black_bg.png'));
+    const welcomeLogoUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logo_black_bg.png'));
     const codiconUri  = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'codicon.css'));
     const katexCssUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'katex.min.css'));
     const katexJsUri  = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'katex.min.js'));
@@ -30,14 +31,8 @@ function buildWebviewHtml(webview, extensionUri) {
 <link rel="stylesheet" href="${cssUri}">
 </head><body>
 <div id="prog" class="prog"></div>
-<div id="tb">
-  <span class="logo">
-    <img class="logo-img" src="${logoUri}" alt="logo"/>
-    <span style="font-weight:600">Deep Copilot</span>
-  </span>
-  <button class="tbb" id="apibt" title="API 设置（Key / Base URL）">🔑</button>
-  <button class="tbb" id="cbt" title="清空当前会话(不存档)">🗑</button>
-</div>
+<!-- #cbt kept hidden: chat.js references it for /clear command & Ctrl+K shortcut -->
+<button id="cbt" style="display:none" aria-hidden="true"></button>
 <button id="edgeL" class="edge-toggle edge-l" title="Plan / Todos" aria-label="toggle left panel"></button>
 <button id="edgeR" class="edge-toggle edge-r" title="历史会话" aria-label="toggle right panel"></button>
 <div id="sb"></div>
@@ -57,7 +52,8 @@ function buildWebviewHtml(webview, extensionUri) {
 </aside>
 <div id="main">
   <div id="es">
-    <p><strong>Deep Copilot</strong><br>让高质量 AI 生产力开放、公平、可负担地惠及每个人</p>
+    <div class="big"><img class="welcome-logo" src="${welcomeLogoUri}" alt="Deep Copilot"/></div>
+    <p><strong>Deep Copilot</strong><br>让高质量 AI 生产力开放、公平、普惠</p>
     <p class="hint">输入消息，按 Enter 发送</p></div>
   <div id="thk">● ● ● 思考中...</div>
 </div>
@@ -83,7 +79,7 @@ function buildWebviewHtml(webview, extensionUri) {
   <div id="pop" class="pop" style="display:none"></div>
   <div id="at-chips"></div>
   <div id="composer-card">
-    <textarea id="inp" rows="1" placeholder="向 Deep Copilot 提问... (Enter 发送 / Shift+Enter 换行 / / 命令 / @ 上下文 / Ctrl+K 清空)"></textarea>
+    <textarea id="inp" rows="1" placeholder="描述要构建的内容"></textarea>
     <div id="composer-bar">
       <div class="cb-left">
         <button id="cxbt" class="cbtn" title="包含当前文件 / 选中代码">📎</button>
@@ -107,6 +103,7 @@ function buildWebviewHtml(webview, extensionUri) {
     <span id="ft-mode">agent · deepseek-v4-pro</span>
   </div>
   <div class="ft-right">
+    <button class="ft-btn" id="apibt" title="API 设置（Key / Base URL）">🔑</button>
     <span class="pill" id="ft-cache" title="prompt 缓存命中率（越高越省钱）">💾 0%</span>
     <span class="pill" id="ft-tokens">0 tokens</span>
     <span class="pill" id="ft-cost" style="color:#e8b86d">¥0.0000</span>

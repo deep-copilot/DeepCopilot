@@ -11,6 +11,28 @@ const { getDiscountWarning } = require('./pricing');
 function activate(context) {
     Logger.init(context);
     Logger.info('ACTIVATE', { version: (context.extension && context.extension.packageJSON && context.extension.packageJSON.version) || 'unknown' });
+
+    // ─── Status bar button (registered FIRST so it shows even if anything below throws) ──
+    // VS Code persists per-user "hide" state for status bar items keyed by `id`.
+    // We use a stable id + explicit `name` so users can find & re-enable it via
+    // right-click on the status bar → toggle "Deep Copilot".
+    try {
+        const statusItem = vscode.window.createStatusBarItem(
+            'deepseekAgent.statusBar',
+            vscode.StatusBarAlignment.Left,
+            100
+        );
+        statusItem.name    = 'Deep Copilot';
+        statusItem.text    = '$(robot) Deep Copilot';
+        statusItem.tooltip = isZh() ? '点击打开 Deep Copilot' : 'Click to open Deep Copilot';
+        statusItem.command = 'deepseekAgent.openInTab';
+        statusItem.show();
+        context.subscriptions.push(statusItem);
+        Logger.info('STATUSBAR_REGISTERED', { id: 'deepseekAgent.statusBar' });
+    } catch (e) {
+        Logger.info('STATUSBAR_FAILED', { err: String(e && e.message || e) });
+    }
+
     const chatProvider = new ChatViewProvider(context);
 
     // ─── Discount expiry warning (shown once per state change) ────────────
@@ -157,7 +179,7 @@ function activate(context) {
     // Open sidebar command
     context.subscriptions.push(
         vscode.commands.registerCommand('deepseekAgent.open', () => {
-            vscode.commands.executeCommand('workbench.view.extension.deeppilot-sidebar');
+            vscode.commands.executeCommand('workbench.view.extension.deepseek-sidebar');
         })
     );
 
@@ -178,7 +200,7 @@ function activate(context) {
         }),
         vscode.commands.registerCommand('deepseekAgent.moveToRight', async () => {
             try { await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar'); } catch (_) {}
-            try { await vscode.commands.executeCommand('workbench.view.extension.deeppilot-sidebar'); } catch (_) {}
+            try { await vscode.commands.executeCommand('workbench.view.extension.deepseek-sidebar'); } catch (_) {}
             vscode.window.showInformationMessage(
                 isZh()
                     ? '把活动栏的 ⚡ 图标拖到右侧 Secondary Side Bar 即可，VS Code 会记住位置。'
@@ -187,13 +209,7 @@ function activate(context) {
         }),
     );
 
-    // Status bar button
-    const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    statusItem.text    = '$(robot) Deep Copilot';
-    statusItem.tooltip = isZh() ? '点击打开 Deep Copilot' : 'Click to open Deep Copilot';
-    statusItem.command = 'deepseekAgent.openInTab';
-    statusItem.show();
-    context.subscriptions.push(statusItem);
+    // Status bar button (already registered at top of activate; nothing to do here).
 
     // First-run: prompt for API key
     context.secrets.get('deepseekAgent.apiKey').then(key => {
