@@ -10,6 +10,7 @@ function buildWebviewHtml(webview, extensionUri) {
     const codiconUri  = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'codicon.css'));
     const katexCssUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'katex.min.css'));
     const katexJsUri  = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'katex.min.js'));
+    const dompurifyUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'purify.min.js'));
     const nonce   = Buffer.from(Date.now().toString() + Math.random().toString()).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
     const csp = [
         `default-src 'none'`,
@@ -109,9 +110,11 @@ function buildWebviewHtml(webview, extensionUri) {
     <span class="pill" id="ft-cache" title="prompt 缓存命中率（越高越省钱）">💾 0%</span>
     <span class="pill" id="ft-tokens">0 tokens</span>
     <span class="pill" id="ft-cost" style="color:#e8b86d">¥0.0000</span>
+    <span class="pill" id="ft-balance" title="账户余额（点击刷新）" style="display:none">💰 查询中…</span>
   </div>
 </div>
 <script nonce="${nonce}" src="${katexJsUri}"></script>
+<script nonce="${nonce}" src="${dompurifyUri}"></script>
 <script nonce="${nonce}" src="${jsUri}"></script>
 </body></html>`;
 }

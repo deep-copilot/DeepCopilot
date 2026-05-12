@@ -2,7 +2,7 @@
   "name": "deep-copilot",
   "displayName": "Deep Copilot",
   "description": "Deep Copilot — AI coding agent embedded in VS Code. Powered by DeepSeek V4, with file editing, terminal, search, and plan/todos. Standalone, no backend required.",
-  "version": "0.28.1",
+  "version": "0.28.3",
   "publisher": "ZhouChaunge",
   "repository": {
     "type": "git",
@@ -256,6 +256,8 @@
     "@types/vscode": "^1.95.0",
     "@vscode/codicons": "^0.0.45",
     "@vscode/vsce": "^2.24.0",
+    "danger": "^13.0.7",
+    "dompurify": "^3.4.2",
     "esbuild": "^0.28.0",
     "katex": "^0.16.45"
   }

@@ -16,6 +16,15 @@ function syncCodicons() {
         if (fs.existsSync(s)) fs.copyFileSync(s, d);
     }
 }
+// Keep DOMPurify distributable in sync with node_modules on every build.
+// Used by media/chat.js to sanitize whitelisted HTML passthrough in
+// markdown rendering (see Issue #35 / RFC: HTML-capable rendering).
+function syncDomPurify() {
+    const src = path.join(__dirname, 'node_modules', 'dompurify', 'dist', 'purify.min.js');
+    const dst = path.join(__dirname, 'media', 'purify.min.js');
+    if (fs.existsSync(src)) fs.copyFileSync(src, dst);
+}
+
 // Keep KaTeX distributable in sync with node_modules on every build.
 function syncKatex() {
     const src = path.join(__dirname, 'node_modules', 'katex', 'dist');
@@ -35,6 +44,7 @@ function syncKatex() {
 }
 syncCodicons();
 syncKatex();
+syncDomPurify();
 
 const watch = process.argv.includes('--watch');
 const isProd = !watch && process.env.NODE_ENV !== 'development';

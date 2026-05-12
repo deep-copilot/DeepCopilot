@@ -320,6 +320,23 @@
   }
 
   function renderMd(s){
+    /* ─── Whitelisted HTML passthrough (Issue #35) ───────────────
+       Park raw <tag>/</tag> tokens for safe tags BEFORE any escaping
+       so users / the model can use <details>, <kbd>, <mark>, etc.
+       DOMPurify (loaded globally) sanitizes the final HTML as a
+       defense-in-depth net for anything that slipped through. */
+    var SAFE_HTML_TAGS = "details|summary|kbd|mark|sub|sup|abbr|ins|del|dfn|samp|var|br|hr|u|small|s|q|cite|figure|figcaption";
+    var SAFE_TAG_RE = new RegExp(
+      "<\\/?(?:" + SAFE_HTML_TAGS + ")(?:\\s+[a-zA-Z_:][\\w:.-]*(?:\\s*=\\s*(?:\"[^\"]*\"|'[^']*'|[^\\s>]+))?)*\\s*\\/?>",
+      "gi"
+    );
+    var htmlToks = [];
+    function parkHtml(tok){
+      htmlToks.push(tok);
+      return "\u0000HTML" + (htmlToks.length - 1) + "\u0000";
+    }
+    s = String(s||"").replace(SAFE_TAG_RE, function(tok){ return parkHtml(tok); });
+
     /* Step 0: extract display math $$...$$, \[...\] and inline \(...\) as
        placeholders (before code blocks so that math inside ``` isn't touched). */
     var maths = [];
@@ -342,6 +359,43 @@
       codes.push({L:L, raw:raw});
       return "\u0000CB" + (codes.length-1) + "\u0000";
     });
+    /* Step 1.5: extract raw HTML blocks as placeholders.
+       When a line starts with a structural block-level HTML element
+       (<table>, <ul>, <ol>, <dl>, <div>, <section>, <article>, <aside>,
+       <header>, <footer>, <main>, <nav>, <blockquote>, <fieldset>)
+       we collect lines until the root tag depth returns to 0, then park
+       the whole block as \u0000HB{n}\u0000.  The Markdown line processor
+       never sees the raw HTML; DOMPurify sanitises it in the final pass. */
+    var htmlBlocks = [];
+    var HB_TAGS = "table|ul|ol|dl|div|section|article|aside|header|footer|main|nav|blockquote|fieldset";
+    var HB_START = new RegExp("^\\s*<(" + HB_TAGS + ")(\\s[^>]*)?>" , "i");
+    (function(){
+      var srcArr = src.split(/\r?\n/);
+      var newArr = [];
+      var si = 0;
+      while (si < srcArr.length) {
+        var sln = srcArr[si];
+        var hbm = HB_START.exec(sln.trim());
+        if (hbm) {
+          var rtag = hbm[1].toLowerCase();
+          var openRe  = new RegExp("<" + rtag + "[\\s>]", "gi");
+          var closeRe = new RegExp("</" + rtag + "\\s*>", "gi");
+          var bBuf = [sln];
+          openRe.lastIndex = 0; closeRe.lastIndex = 0;
+          var dep = (sln.match(openRe)||[]).length - (sln.match(closeRe)||[]).length;
+          si++;
+          while (si < srcArr.length && dep > 0) {
+            var slk = srcArr[si];
+            openRe.lastIndex = 0; closeRe.lastIndex = 0;
+            dep += (slk.match(openRe)||[]).length - (slk.match(closeRe)||[]).length;
+            bBuf.push(slk); si++;
+          }
+          htmlBlocks.push(bBuf.join("\n"));
+          newArr.push("\u0000HB" + (htmlBlocks.length - 1) + "\u0000");
+        } else { newArr.push(sln); si++; }
+      }
+      src = newArr.join("\n");
+    })();
     var lines = src.split(/\r?\n/);
     var out = [];
     var paraBuf = [];
@@ -390,6 +444,13 @@
         flushPara();
         var midx = +ln.match(/\u0000MATH(\d+)\u0000/)[1];
         out.push(renderMathBlock(maths[midx]));
+        i++; continue;
+      }
+      /* Standalone HTML-block placeholder line */
+      if (/^\s*\u0000HB\d+\u0000\s*$/.test(ln)){
+        flushPara();
+        var hbIdx = +ln.match(/\u0000HB(\d+)\u0000/)[1];
+        out.push("\u0000HBRAW" + hbIdx + "\u0000");
         i++; continue;
       }
       /* Table: header | sep */
@@ -445,6 +506,37 @@
         ? "<div class=\"math-block\">" + renderMathSafe(m.tex.trim(), true) + "</div>"
         : renderMathSafe(m.tex.trim(), false);
     });
+    /* Restore whitelisted HTML tag tokens (Issue #35). */
+    finalHtml = finalHtml.replace(/\u0000HTML(\d+)\u0000/g, function(_, idx){
+      return htmlToks[+idx] || "";
+    });
+    /* Restore raw HTML blocks; DOMPurify sanitises them in the next step. */
+    finalHtml = finalHtml.replace(/\u0000HBRAW(\d+)\u0000/g, function(_, idx){
+      return htmlBlocks[+idx] || "";
+    });
+    /* Defense-in-depth: DOMPurify strips anything not in the whitelist
+       (scripts, event handlers, javascript: URIs, etc.). Code blocks and
+       math output use plain tags & classes already on the allow-list. */
+    if (typeof DOMPurify !== "undefined" && DOMPurify && DOMPurify.sanitize){
+      try {
+        finalHtml = DOMPurify.sanitize(finalHtml, {
+          ADD_TAGS: ["details", "summary", "kbd", "mark", "sub", "sup", "abbr",
+                     "ins", "del", "dfn", "samp", "var", "figure", "figcaption",
+                     "math", "annotation", "semantics", "mrow", "mi", "mo", "mn",
+                     "msup", "msub", "mfrac", "msqrt", "mtext", "munder", "mover"],
+          ADD_ATTR: ["open", "colspan", "rowspan", "data-path", "data-line",
+                     "data-code", "data-lang", "data-lines", "data-keep",
+                     "aria-hidden", "aria-label", "viewBox", "stroke", "stroke-width",
+                     "stroke-linecap", "stroke-linejoin", "fill", "d"],
+          FORBID_TAGS: ["script", "iframe", "object", "embed",
+                        "style", "link", "meta", "base"],
+          FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover",
+                        "onfocus", "onblur", "onchange", "onsubmit",
+                        "srcdoc", "formaction"],
+          ALLOW_DATA_ATTR: true,
+        });
+      } catch(e){ /* fall through with unsanitized html */ }
+    }
     return finalHtml;
   }
 
@@ -861,6 +953,35 @@
       ftCost.title = tip;
       if (ftCache) ftCache.title = tip;
     }
+  }
+
+  /* ─── Account balance display ────────────────────────────────────────── */
+  var ftBalance = document.getElementById("ft-balance");
+  function updateBalance(b){
+    if (!ftBalance) return;
+    if (b.unsupported){ ftBalance.style.display = "none"; return; }
+    ftBalance.style.display = "";
+    if (!b.available){
+      ftBalance.textContent = "⛔ 账户不可用";
+      ftBalance.className = "pill balance-unavail";
+      ftBalance.title = "账户不可用，请检查 API Key";
+      return;
+    }
+    var cny = b.balance_cny || 0;
+    var low = cny < 5;
+    ftBalance.textContent = (low ? "⚠️ " : "💰 ") + fmtCny(cny);
+    ftBalance.className = "pill" + (low ? " balance-low" : " balance-ok");
+    ftBalance.title = "账户余额: " + fmtCny(cny)
+      + "\n充值: " + fmtCny(b.topped_up_cny || 0)
+      + "  赠送: " + fmtCny(b.granted_cny || 0)
+      + "\n本次会话消耗: " + fmtCny(sess.cost)
+      + "\n点击刷新";
+  }
+  if (ftBalance){
+    ftBalance.addEventListener("click", function(){
+      ftBalance.textContent = "💰 查询中…";
+      vscode.postMessage({ type: "balanceRefresh" });
+    });
   }
 
   /* ─── Composer ─────────────────────────────────────────────────────── */
@@ -1373,6 +1494,8 @@
         ftMode.textContent = "agent · " + m.model;
       }
       if (m.approvalMode){ setModeUI(m.approvalMode); }
+    } else if (m.type === "balanceUpdate"){
+      updateBalance(m);
     } else if (m.type === "status"){
       if (m.text){ sb.textContent = m.text; sb.style.display = "block"; } else sb.style.display = "none";
     } else if (m.type === "sessions"){

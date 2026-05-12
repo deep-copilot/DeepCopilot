@@ -1,0 +1,36 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    name: Build & Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package VSIX
+        run: npx vsce package --out /tmp/test.vsix
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-copilot-pr-${{ github.event.pull_request.number }}
+          path: /tmp/test.vsix
+          retention-days: 7

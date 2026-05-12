@@ -1,0 +1,30 @@
+name: Danger Review
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  danger:
+    name: Danger.js Code Review
+    runs-on: ubuntu-latest
+    # 只在非 fork 的 PR 上运行（fork PR 没有 GITHUB_TOKEN 写权限）
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Danger
+        run: npx danger ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

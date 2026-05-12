@@ -25,6 +25,7 @@ const { mcpManager }       = require('../mcp');
 const { SessionStore } = require('./session-store');
 const { ToolExecutor } = require('./tool-executor');
 const { AgentLoop }    = require('./agent-loop');
+const { fetchBalance } = require('../api/deepseek');
 
 class ChatViewProvider {
     static viewType = 'deepseek.chatView';
@@ -50,6 +51,8 @@ class ChatViewProvider {
             postToRun: (run, msg) => this._runPost(run, msg),
             post:      (msg)      => this._post(msg),
         });
+
+        this._balanceLastAt = 0; // timestamp of last successful balance fetch
 
         this._loop = new AgentLoop({
             context,
@@ -89,6 +92,7 @@ class ChatViewProvider {
     _runPost(run, msg) {
         run.events.push(msg);
         if (run.sessionId === this._store.sessionId) this._post(msg);
+        if (msg.type === 'usage') this._refreshBalance(false);
     }
 
     _activeRun() {
@@ -131,8 +135,10 @@ class ChatViewProvider {
                 this._post({ type: 'modelInfo', model: cfg.get('defaultModel') || 'deepseek-v4-pro', approvalMode: cfg.get('approvalMode') || 'manual' });
                 this._store.postList();
                 if (!this._store.sessionId) this._post({ type: 'sessionLoaded', id: null, messages: [] });
+                this._refreshBalance(false);
                 break;
             }
+            case 'balanceRefresh': this._refreshBalance(true); break;
             case 'sessionList':    this._store.postList(); break;
             case 'sessionLoad':    await this._loadSession(msg.id); break;
             case 'sessionNew':     this._store.newSession(); break;
@@ -424,6 +430,19 @@ class ChatViewProvider {
         failed.length
             ? vscode.window.showWarningMessage(msg + (isZh() ? `；失败：${failed.join('、')}` : `; Failed: ${failed.join(', ')}`))
             : vscode.window.showInformationMessage(msg);
+    }
+
+    async _refreshBalance(force) {
+        const now = Date.now();
+        if (!force && now - this._balanceLastAt < 30_000) return;
+        const cfg     = vscode.workspace.getConfiguration('deepseekAgent');
+        const apiKey  = await this._context.secrets.get('deepseekAgent.apiKey') || '';
+        const baseUrl = cfg.get('baseUrl') || '';
+        if (!apiKey) { this._post({ type: 'balanceUpdate', unsupported: true }); return; }
+        const result = await fetchBalance({ apiKey, baseUrl });
+        if (result === null) { this._post({ type: 'balanceUpdate', unsupported: true }); return; }
+        this._balanceLastAt = Date.now();
+        this._post({ type: 'balanceUpdate', ...result });
     }
 
     _post(msg) {

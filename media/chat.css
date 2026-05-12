@@ -75,6 +75,20 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .msgC ul.mul li::marker{color:var(--vscode-descriptionForeground)}
 .msgC hr.mhr{border:none;border-top:1px solid var(--vscode-panel-border);margin:12px 0}
 .msgC blockquote.mbq{margin:6px 0;padding:4px 10px;border-left:3px solid var(--vscode-panel-border);color:var(--vscode-descriptionForeground);background:rgba(255,255,255,.02)}
+/* Whitelisted HTML elements (Issue #35) */
+.msgC details{margin:6px 0;padding:4px 8px;border:1px solid var(--vscode-panel-border);border-radius:4px;background:rgba(255,255,255,.02)}
+.msgC details>summary{cursor:pointer;font-weight:600;color:var(--vscode-foreground);outline:none;user-select:none;padding:2px 0}
+.msgC details>summary:hover{color:var(--vscode-textLink-foreground)}
+.msgC details[open]>summary{margin-bottom:6px;border-bottom:1px dashed var(--vscode-panel-border);padding-bottom:4px}
+.msgC kbd{display:inline-block;padding:1px 6px;margin:0 2px;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;line-height:1.4;color:var(--vscode-foreground);background:var(--vscode-textCodeBlock-background);border:1px solid var(--vscode-panel-border);border-bottom-width:2px;border-radius:3px;vertical-align:1px}
+.msgC mark{background:rgba(255,210,80,.28);color:inherit;padding:0 2px;border-radius:2px}
+.msgC sub,.msgC sup{font-size:75%;line-height:0}
+.msgC abbr[title]{border-bottom:1px dotted var(--vscode-descriptionForeground);cursor:help;text-decoration:none}
+.msgC ins{text-decoration:none;background:rgba(126,201,154,.18);color:inherit;padding:0 2px;border-radius:2px}
+.msgC del{text-decoration:line-through;color:var(--vscode-descriptionForeground);opacity:.8}
+.msgC samp,.msgC var{font-family:var(--vscode-editor-font-family,monospace);font-size:90%}
+.msgC figure{margin:8px 0;padding:0}
+.msgC figcaption{font-size:11px;color:var(--vscode-descriptionForeground);margin-top:4px;text-align:center}
 .msgC table.mtbl{border-collapse:collapse;margin:6px 0 10px 0;font-size:12px;width:auto;max-width:100%}
 .msgC table.mtbl th,.msgC table.mtbl td{border:1px solid var(--vscode-panel-border);padding:4px 10px;text-align:left;vertical-align:top}
 .msgC table.mtbl th{background:var(--vscode-textCodeBlock-background);font-weight:600;font-size:11.5px}
@@ -287,6 +301,11 @@ body.narrow #ia{padding-left:8px;padding-right:8px}
 #foot .dot.err{background:var(--vscode-errorForeground)}
 #foot .pill{padding:1px 6px;border-radius:8px;background:rgba(255,255,255,.05)}
 #foot .pill#ft-cache.good{color:#7ec99a}
+#foot .pill#ft-balance{cursor:pointer}
+#foot .pill#ft-balance.balance-ok{color:#7ec99a}
+#foot .pill#ft-balance.balance-low{color:var(--vscode-notificationsWarningIcon-foreground,#e8b86d);animation:balance-warn 1.6s ease-in-out infinite}
+#foot .pill#ft-balance.balance-unavail{color:var(--vscode-notificationsErrorIcon-foreground,#f48771)}
+@keyframes balance-warn{0%,100%{opacity:1}50%{opacity:.45}}
 #es{padding:24px;text-align:center;opacity:.85;align-self:center;margin:auto}
 #es .big{font-size:32px;margin-bottom:8px}
 #es .big img{width:34px;height:34px;display:block;margin:0 auto}

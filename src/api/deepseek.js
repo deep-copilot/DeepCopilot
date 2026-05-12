@@ -158,4 +158,56 @@ function streamDeepSeek({ apiKey, baseUrl, messages, model, noTools, toolChoice,
     });
 }
 
-module.exports = { streamDeepSeek };
+/**
+ * Query account balance from DeepSeek /user/balance.
+ * Returns null silently for non-deepseek.com base URLs (3rd-party compatible APIs).
+ * @returns {Promise<{available: boolean, balance_cny: number, balance_usd: number, topped_up_cny: number, granted_cny: number}|null>}
+ */
+function fetchBalance({ apiKey, baseUrl }) {
+    return new Promise((resolve) => {
+        const base = (baseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
+        // Only query official DeepSeek endpoint; 3rd-party APIs may not support this route.
+        if (!base.includes('deepseek.com')) { resolve(null); return; }
+        let urlObj;
+        try { urlObj = new URL('/user/balance', base); } catch { resolve(null); return; }
+        const isHttps = urlObj.protocol === 'https:';
+        const reqOpts = {
+            hostname: urlObj.hostname,
+            port: urlObj.port || (isHttps ? 443 : 80),
+            path: urlObj.pathname,
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Accept': 'application/json',
+            },
+            timeout: 8000,
+        };
+        const mod = isHttps ? https : http;
+        const req = mod.request(reqOpts, (res) => {
+            let raw = '';
+            res.on('data', (c) => { raw += c; });
+            res.on('end', () => {
+                try {
+                    const data = JSON.parse(raw);
+                    if (!data || typeof data.is_available === 'undefined') { resolve(null); return; }
+                    const infos = Array.isArray(data.balance_infos) ? data.balance_infos : [];
+                    const cnyInfo = infos.find(i => i.currency === 'CNY') || {};
+                    const usdInfo = infos.find(i => i.currency === 'USD') || {};
+                    resolve({
+                        available:    !!data.is_available,
+                        balance_cny:  parseFloat(cnyInfo.total_balance  || '0'),
+                        topped_up_cny: parseFloat(cnyInfo.topped_up_balance || '0'),
+                        granted_cny:  parseFloat(cnyInfo.granted_balance || '0'),
+                        balance_usd:  parseFloat(usdInfo.total_balance  || '0'),
+                    });
+                } catch { resolve(null); }
+            });
+            res.on('error', () => resolve(null));
+        });
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.end();
+    });
+}
+
+module.exports = { streamDeepSeek, fetchBalance };
