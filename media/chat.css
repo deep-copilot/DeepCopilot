@@ -267,9 +267,6 @@ body.narrow #ia{padding-left:8px;padding-right:8px}
 #composer-bar .cbtn{background:none;border:none;color:var(--vscode-icon-foreground);cursor:pointer;padding:3px 7px;border-radius:6px;font-size:13px;line-height:1;height:24px;display:inline-flex;align-items:center;justify-content:center;opacity:.85}
 #composer-bar .cbtn:hover{background:var(--vscode-toolbar-hoverBackground);opacity:1}
 #composer-bar .cbtn.active{color:var(--vscode-button-background);background:rgba(100,160,255,.10);opacity:1}
-#composer-bar .cbsel{appearance:none;-webkit-appearance:none;background:var(--vscode-dropdown-background,var(--vscode-editor-background));color:var(--vscode-dropdown-foreground,var(--vscode-foreground));border:1px solid var(--vscode-dropdown-border,transparent);border-radius:6px;font-size:11px;padding:2px 20px 2px 6px;cursor:pointer;outline:none;height:24px;max-width:130px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 5px center}
-#composer-bar .cbsel:hover{background:var(--vscode-toolbar-hoverBackground)}
-#composer-bar .cbsel:focus{border-color:var(--vscode-focusBorder)}
 /* ── Mode Picker (custom dropdown) ── */
 .mode-picker{position:relative;display:inline-flex;align-items:center}
 .mode-trigger{font-size:11px;padding:2px 7px;height:24px;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;border-radius:6px;border:1px solid transparent}
@@ -296,7 +293,6 @@ body.narrow #ia{padding-left:8px;padding-right:8px}
 #sbtn:disabled{opacity:.38;cursor:default}
 /* Extra-narrow: hide model select label, keep mode + attach + send */
 @media (max-width: 380px){
-  #composer-bar .cbsel{max-width:80px;font-size:10px}
 }
 #foot{grid-area:foot;padding:3px 12px;font-size:10px;border-top:1px solid var(--vscode-panel-border);color:var(--vscode-descriptionForeground);background:var(--vscode-statusBar-background,var(--vscode-titleBar-activeBackground));display:flex;align-items:center;gap:12px;height:22px}
 #foot .ft-left{flex:1;display:flex;align-items:center;gap:8px}

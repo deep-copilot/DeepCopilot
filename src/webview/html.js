@@ -83,11 +83,10 @@ function buildWebviewHtml(webview, extensionUri) {
     <div id="composer-bar">
       <div class="cb-left">
         <button id="cxbt" class="cbtn" title="包含当前文件 / 选中代码">📎</button>
-        <select class="cbsel" id="modelSel" title="模型">
-          <option value="deepseek-v4-pro">v4-pro</option>
-          <option value="deepseek-v4-flash">v4-flash</option>
-          <option value="deepseek-reasoner">reasoner</option>
-        </select>
+        <div id="modelPicker" class="mode-picker" data-model="deepseek-v4-pro">
+          <button id="modelBtn" class="cbtn mode-trigger" title="切换模型">⚡ v4-pro <span class="mode-chev">▾</span></button>
+          <div id="modelDrop" class="mode-drop" style="display:none"></div>
+        </div>
         <div id="modePicker" class="mode-picker" data-m="manual">
           <button id="modeBtn" class="cbtn mode-trigger" title="批准策略 (Approval Mode)">🛡 Manual <span class="mode-chev">▾</span></button>
           <div id="modeDrop" class="mode-drop" style="display:none"></div>

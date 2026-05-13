@@ -17,7 +17,44 @@
   var dlist  = document.getElementById("dlist");
   var dsearch = document.getElementById("dsearch");
   var cbt  = document.getElementById("cbt");
-  var modelSel = document.getElementById("modelSel");
+  var modelPicker = document.getElementById("modelPicker");
+  var modelBtn   = document.getElementById("modelBtn");
+  var modelDrop  = document.getElementById("modelDrop");
+  var _modelOpen = false;
+  var MODELS = [
+    { value: "deepseek-v4-pro",   icon: "⚡", name: "v4-pro",    desc: "DeepSeek V4 Pro — 旗舰推理模型" },
+    { value: "deepseek-v4-flash", icon: "🔥", name: "v4-flash",  desc: "DeepSeek V4 Flash — 快速轻量模型" },
+    { value: "deepseek-reasoner", icon: "🧠", name: "reasoner",  desc: "DeepSeek Reasoner — 深度思维链模型" },
+  ];
+  function setModelUI(model){
+    var md = MODELS.find(function(x){ return x.value === model; }) || MODELS[0];
+    if (modelPicker) modelPicker.dataset.model = md.value;
+    if (modelBtn) modelBtn.innerHTML = md.icon + " " + md.name + " <span class='mode-chev'>\u25BE</span>";
+    if (modelDrop){ var opts = modelDrop.querySelectorAll(".mo"); for (var i=0;i<opts.length;i++) opts[i].classList.toggle("sel", opts[i].dataset.model === md.value); }
+  }
+  function getSelectedModel(){
+    return modelPicker ? (modelPicker.dataset.model || "deepseek-v4-pro") : "deepseek-v4-pro";
+  }
+  function openModelDrop(){
+    if (!modelDrop || _modelOpen) return;
+    var cur = getSelectedModel();
+    var h = "<div class='mode-drop-hd'>切换模型</div>";
+    for (var i=0;i<MODELS.length;i++){
+      var md = MODELS[i];
+      h += "<div class='mo" + (md.value === cur ? " sel" : "") + "' data-model='" + md.value + "'>" +
+           "<span class='mo-icon'>" + md.icon + "</span>" +
+           "<span class='mo-body'><span class='mo-name'>" + md.name + "</span><span class='mo-desc'>" + md.desc + "</span></span>" +
+           "<span class='mo-chk'>✓</span></div>";
+    }
+    modelDrop.innerHTML = h;
+    modelDrop.style.display = "block";
+    _modelOpen = true;
+  }
+  function closeModelDrop(){
+    if (!modelDrop || !_modelOpen) return;
+    modelDrop.style.display = "none";
+    _modelOpen = false;
+  }
   var modePicker = document.getElementById("modePicker");
   var modeBtn    = document.getElementById("modeBtn");
   var modeDrop   = document.getElementById("modeDrop");
@@ -1285,8 +1322,16 @@
     cxb.style.display = cxOn ? "block" : "none";
     vscode.postMessage({type:"contextToggle", active:cxOn});
   });
-  modelSel.addEventListener("change", function(){
-    vscode.postMessage({type:"setModel", model: modelSel.value});
+  modelBtn && modelBtn.addEventListener("click", function(e){
+    e.stopPropagation();
+    _modelOpen ? closeModelDrop() : openModelDrop();
+  });
+  modelDrop && modelDrop.addEventListener("click", function(e){
+    var opt = e.target.closest(".mo"); if (!opt) return;
+    var model = opt.dataset.model;
+    setModelUI(model);
+    vscode.postMessage({type:"setModel", model: model});
+    closeModelDrop();
   });
   modeBtn && modeBtn.addEventListener("click", function(e){
     e.stopPropagation();
@@ -1300,6 +1345,7 @@
     closeModeDrop();
   });
   document.addEventListener("click", function(e){
+    if (modelPicker && !modelPicker.contains(e.target)) closeModelDrop();
     if (modePicker && !modePicker.contains(e.target)) closeModeDrop();
   });
   apibt.addEventListener("click", function(){ vscode.postMessage({type:"openApiSettings"}); });
@@ -1516,7 +1562,7 @@
       dot.className = "dot" + (m.running ? "" : " err");
     } else if (m.type === "modelInfo"){
       if (m.model){
-        if (modelSel) modelSel.value = m.model;
+        setModelUI(m.model);
         ftMode.textContent = "agent · " + m.model;
       }
       if (m.approvalMode){ setModeUI(m.approvalMode); }
