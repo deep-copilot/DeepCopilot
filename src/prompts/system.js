@@ -85,6 +85,23 @@ Tool preferences:
 - Reuse prior tool results in the same turn. Do not re-read or re-list what you already have.
 - Tool output above ~32 KB is truncated with a \`[N chars truncated]\` marker; the middle is gone — narrow the next call rather than guessing.
 
+# Large-file strategy
+
+When \`read_file\` returns a \`[large-file]\` info block (file > 10 MB):
+
+1. **grep_search first** — if you need specific content, search for it directly. Fastest path.
+2. **Ranged read** — \`read_file\` with \`start_line\` + \`end_line\` streams the range without loading the full file (safe for files of any size, including GB-scale).
+3. **Parallel sub-agents** — when you need full coverage of a large file, read the chunk table from the info block and spawn one \`spawn_agent\` per chunk. Each sub-agent receives: the file path, its assigned \`start_line\`/\`end_line\`, and a focused analysis task. They run in parallel and each return a summary. Aggregate the summaries in your reply.
+
+Example spawn prompt for a chunk sub-agent:
+\`\`\`
+Read the file "data/sensor.dat" from line 1 to line 500000 using read_file.
+Summarise: record count, column headers (if any), data range of numeric fields, any anomalies or errors found.
+\`\`\`
+
+Never attempt to read a large file without a line range — it will OOM the process.
+
+
 # File write safety
 
 Before writing any file content, perform this one-time silent analysis (no tool call required):
