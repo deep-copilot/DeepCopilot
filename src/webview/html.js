@@ -105,7 +105,7 @@ function buildWebviewHtml(webview, extensionUri) {
     <span id="ft-mode">agent · deepseek-v4-pro</span>
   </div>
   <div class="ft-right">
-    <button class="ft-btn" id="apibt" title="API 设置（Key / Base URL）">🔑</button>
+    <button class="ft-btn" id="apibt" title="API 设置 · DeepSeek / Tavily / Base URL">🔑</button>
     <span class="pill" id="ft-cache" title="prompt 缓存命中率（越高越省钱）">💾 0%</span>
     <span class="pill" id="ft-tokens">0 tokens</span>
     <span class="pill" id="ft-cost" style="color:#e8b86d">¥0.0000</span>

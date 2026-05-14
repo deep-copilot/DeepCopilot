@@ -32,7 +32,8 @@ class ChatViewProvider {
 
     constructor(context) {
         this._context    = context;
-        this._view       = null;
+        this._view       = null;       // most-recently-active WebviewView
+        this._views      = new Set();  // all live WebviewView instances
         this._panel      = null;
         this._includeCtx = false;
         this._runs       = new Map();
@@ -109,6 +110,7 @@ class ChatViewProvider {
 
     resolveWebviewView(webviewView) {
         this._view = webviewView;
+        this._views.add(webviewView);
         webviewView.webview.options = {
             enableScripts: true,
             localResourceRoots: [
@@ -118,6 +120,12 @@ class ChatViewProvider {
         };
         webviewView.webview.html = buildWebviewHtml(webviewView.webview, this._context.extensionUri);
         webviewView.webview.onDidReceiveMessage(msg => this._onMessage(msg));
+        webviewView.onDidDispose(() => {
+            this._views.delete(webviewView);
+            if (this._view === webviewView) {
+                this._view = this._views.size ? [...this._views][this._views.size - 1] : null;
+            }
+        });
     }
 
     bindPanel(panel) {
@@ -501,8 +509,14 @@ class ChatViewProvider {
     }
 
     _post(msg) {
-        const wv = this._activeWebview;
-        if (wv) wv.postMessage(msg);
+        // Broadcast to dedicated editor tab (if open) and every registered
+        // WebviewView (sidebar + auxiliary bar) so both instances stay in sync.
+        if (this._panel && this._panel.webview) {
+            try { this._panel.webview.postMessage(msg); } catch { /* ignore */ }
+        }
+        for (const v of this._views) {
+            try { v.webview.postMessage(msg); } catch { /* ignore */ }
+        }
     }
 
     postToWebview(type, payload) {

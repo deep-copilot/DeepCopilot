@@ -127,17 +127,74 @@ function activate(context) {
             }
         }),
         vscode.commands.registerCommand('deepseekAgent.showApiStatus', async () => {
-            const cfg = vscode.workspace.getConfiguration('deepseekAgent');
-            const key = await context.secrets.get('deepseekAgent.apiKey');
-            const lines = [
-                `**${t('statusKey')}**：${key ? '✅ ' + t('statusKeyOn') : '❌ ' + t('statusKeyOff')}`,
-                `**${t('statusBaseUrl')}**：${cfg.get('apiBaseUrl') || 'https://api.deepseek.com'}`,
-                `**${t('statusModel')}**：${cfg.get('defaultModel') || 'deepseek-v4-pro'}`,
-                `**${t('statusMode')}**：${cfg.get('approvalMode') || 'manual'}`,
-            ];
-            const action = await vscode.window.showInformationMessage(lines.join(' · '), t('statusBtnSetKey'), t('statusBtnSwitchUrl'));
-            if      (action === t('statusBtnSetKey'))     vscode.commands.executeCommand('deepseekAgent.setApiKey');
-            else if (action === t('statusBtnSwitchUrl')) vscode.commands.executeCommand('deepseekAgent.setBaseUrl');
+            // Looped QuickPick: shows all key/URL settings with live status in one place.
+            // Users can configure DeepSeek key, Tavily key, and Base URL without hunting
+            // through the command palette. Re-opens after each action until dismissed.
+            const zh = isZh();
+            while (true) {
+                const cfg       = vscode.workspace.getConfiguration('deepseekAgent');
+                const dsKey     = await context.secrets.get('deepseekAgent.apiKey');
+                const tvKey     = await context.secrets.get('deepseekAgent.tavilyKey');
+                const baseUrl   = cfg.get('apiBaseUrl') || 'https://api.deepseek.com';
+                const model     = cfg.get('defaultModel') || 'deepseek-v4-pro';
+                const mode      = cfg.get('approvalMode') || 'manual';
+
+                const dsLabel   = zh ? 'DeepSeek API Key' : 'DeepSeek API Key';
+                const dsTag     = zh ? '（必填）' : ' (required)';
+                const tvLabel   = zh ? 'Tavily API Key' : 'Tavily API Key';
+                const tvTag     = zh ? '（可选）' : ' (optional)';
+
+                const items = [
+                    {
+                        label: `$(${dsKey ? 'pass-filled' : 'circle-large-outline'}) ${dsLabel}${dsTag}`,
+                        description: dsKey
+                            ? (zh ? '已配置 · ' : 'Configured · ') + dsKey.slice(0, 6) + '…' + dsKey.slice(-4)
+                            : (zh ? '未配置' : 'Not set'),
+                        detail: zh
+                            ? '驱动 AI 对话与工具调用 · 获取地址：platform.deepseek.com/api_keys'
+                            : 'Powers AI chat & tool calls · Get one at platform.deepseek.com/api_keys',
+                        action: 'deepseekAgent.setApiKey',
+                    },
+                    {
+                        label: `$(${tvKey ? 'pass-filled' : 'circle-large-outline'}) ${tvLabel}${tvTag}`,
+                        description: tvKey
+                            ? (zh ? '已配置 · ' : 'Configured · ') + tvKey.slice(0, 6) + '…' + tvKey.slice(-4)
+                            : (zh ? '未配置（联网搜索不可用）' : 'Not set (web_search disabled)'),
+                        detail: zh
+                            ? '启用 web_search 联网搜索工具 · 获取地址：app.tavily.com（免费 1000 次/月）'
+                            : 'Enables the web_search tool · Get one at app.tavily.com (1000 free/month)',
+                        action: 'deepseekAgent.setTavilyKey',
+                    },
+                    {
+                        label: `$(globe) ${zh ? 'Base URL' : 'Base URL'}`,
+                        description: baseUrl,
+                        detail: zh
+                            ? '国内网络不稳定时切换到 api.deepseeki.com'
+                            : 'Switch to api.deepseeki.com if your connection is slow',
+                        action: 'deepseekAgent.setBaseUrl',
+                    },
+                    {
+                        label: `$(info) ${zh ? '当前配置' : 'Current config'}`,
+                        description: `${model} · ${mode}`,
+                        detail: zh
+                            ? `模型：${model} · 审批模式：${mode}（在 VS Code 设置中修改）`
+                            : `Model: ${model} · Approval mode: ${mode} (change in VS Code settings)`,
+                        action: '__noop__',
+                    },
+                ];
+
+                const pick = await vscode.window.showQuickPick(items, {
+                    title: zh ? 'Deep Copilot · API 设置' : 'Deep Copilot · API Settings',
+                    placeHolder: zh
+                        ? '选择要配置的项目（按 Esc 关闭）'
+                        : 'Pick an item to configure (Esc to close)',
+                    ignoreFocusOut: false,
+                });
+                if (!pick) return;
+                if (pick.action === '__noop__') continue;
+                await vscode.commands.executeCommand(pick.action);
+                // Loop back to show updated status
+            }
         }),
         vscode.commands.registerCommand('deepseekAgent.restartServer', () => {
             vscode.window.showInformationMessage(t('standaloneNoServer'));
@@ -176,7 +233,7 @@ function activate(context) {
         })
     );
 
-    // Sidebar WebviewView
+    // Sidebar WebviewView (Activity Bar — left)
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(
             ChatViewProvider.viewType,
@@ -184,6 +241,39 @@ function activate(context) {
             { webviewOptions: { retainContextWhenHidden: true } }
         )
     );
+
+    // Secondary Sidebar WebviewView (Auxiliary Bar — right). Same provider
+    // instance broadcasts to both, so state stays in sync wherever the user
+    // pins it.
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(
+            'deepseek.chatViewAux',
+            chatProvider,
+            { webviewOptions: { retainContextWhenHidden: true } }
+        )
+    );
+
+    // First-launch auto-reveal in the Secondary Side Bar so users discover the
+    // new auxiliary view (mirrors how Codex/Copilot Chat surface themselves).
+    // We only do this ONCE per machine (flag stored in globalState) to avoid
+    // hijacking the user's layout on every window open.
+    try {
+        const REVEAL_FLAG = 'deepseekAgent.auxRevealed.v0313';
+        if (!context.globalState.get(REVEAL_FLAG)) {
+            // Defer slightly so VS Code finishes registering the contributed
+            // viewsContainer before we ask it to switch to it.
+            setTimeout(() => {
+                // `workbench.view.extension.<containerId>` is auto-generated by
+                // VS Code for every contributed viewsContainer and reliably
+                // switches the host side bar (primary or auxiliary) to that
+                // container regardless of what was previously shown there.
+                vscode.commands.executeCommand('workbench.view.extension.deepseek-aux').then(
+                    () => { context.globalState.update(REVEAL_FLAG, true); },
+                    () => { /* ignore — user may have customized the layout */ }
+                );
+            }, 800);
+        }
+    } catch { /* non-fatal */ }
 
     // Open sidebar command
     context.subscriptions.push(
@@ -208,13 +298,7 @@ function activate(context) {
             chatProvider.bindPanel(panel);
         }),
         vscode.commands.registerCommand('deepseekAgent.moveToRight', async () => {
-            try { await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar'); } catch (_) {}
-            try { await vscode.commands.executeCommand('workbench.view.extension.deepseek-sidebar'); } catch (_) {}
-            vscode.window.showInformationMessage(
-                isZh()
-                    ? '把活动栏的 ⚡ 图标拖到右侧 Secondary Side Bar 即可，VS Code 会记住位置。'
-                    : 'Drag the ⚡ icon from the activity bar to the Secondary Side Bar on the right; VS Code will remember the position.'
-            );
+            try { await vscode.commands.executeCommand('workbench.view.extension.deepseek-aux'); } catch (_) {}
         }),
     );
 
