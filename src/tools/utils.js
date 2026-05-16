@@ -31,6 +31,15 @@ async function ensurePathAllowed(absPath, intent /* 'read' | 'write' */) {
     const { isInsideWorkspace } = require('../utils/paths');
     if (isInsideWorkspace(absPath)) return true;
     if (_outsideWsApprovals.has(absPath)) return true;
+
+    // In autopilot mode silently allow all out-of-workspace access —
+    // the user has already granted blanket approval by choosing that mode.
+    const mode = vscode.workspace.getConfiguration('deepseekAgent').get('approvalMode') || 'manual';
+    if (mode === 'autopilot') {
+        _outsideWsApprovals.add(absPath);
+        return true;
+    }
+
     try {
         const choice = await vscode.window.showWarningMessage(
             `${t('pathOutsideWsConfirm')}\n\n${absPath}\n\n(${intent})`,
