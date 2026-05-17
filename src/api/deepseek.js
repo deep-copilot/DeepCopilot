@@ -225,12 +225,21 @@ function fetchBalance({ apiKey, baseUrl }) {
 function fimComplete({ apiKey, baseUrl, model, prefix, suffix, maxTokens, temperature }, abortSignal) {
     return new Promise((resolve) => {
         const base = (baseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
-        // FIM is only documented for the official DeepSeek API; third-party
-        // proxies may not implement /beta/completions.
-        if (!base.includes('deepseek.com')) { resolve(null); return; }
 
+        // Parse the URL first so we can do hostname-based whitelisting.
+        // FIM is only documented for the official DeepSeek API; third-party
+        // proxies may not implement /beta/completions. We MUST check the
+        // parsed hostname rather than a substring of the raw string — see
+        // CodeQL js/incomplete-url-substring-sanitization: a substring check
+        // would falsely accept hosts like `deepseek.com.attacker.com`,
+        // `evil.com/?x=deepseek.com`, etc., leaking the API key.
         let urlObj;
         try { urlObj = new URL('/beta/completions', base); } catch { resolve(null); return; }
+        const host = (urlObj.hostname || '').toLowerCase();
+        if (host !== 'deepseek.com' && host !== 'api.deepseek.com' && !host.endsWith('.deepseek.com')) {
+            resolve(null);
+            return;
+        }
         const isHttps = urlObj.protocol === 'https:';
 
         const body = JSON.stringify({
@@ -262,7 +271,14 @@ function fimComplete({ apiKey, baseUrl, model, prefix, suffix, maxTokens, temper
                 let errBody = '';
                 res.on('data', c => { errBody += c; });
                 res.on('end', () => {
-                    Logger.info('FIM_HTTP_ERROR', { status: res.statusCode, body: errBody.slice(0, 300) });
+                    // Sanitize untrusted upstream body before logging
+                    // (CodeQL js/http-to-file-access): strip CR/LF/control
+                    // chars so a malicious proxy cannot inject log lines,
+                    // and cap length so logs cannot be ballooned.
+                    const safeBody = String(errBody)
+                        .slice(0, 300)
+                        .replace(/[\r\n\x00-\x1f\x7f]+/g, ' ');
+                    Logger.info('FIM_HTTP_ERROR', { status: res.statusCode, body: safeBody });
                     resolve(null);
                 });
                 return;
