@@ -30,7 +30,7 @@ const {
 // Each call uses a unique tool_call_id (`synthetic_skill_read_<rand>`) so
 // nested or repeated skill loads in the same turn do not collide.
 //
-// @param {string[]} messages  - run.messages array to push into
+// @param {Array<{role:string, content:*}>} messages - run.messages array to push into
 // @param {string}   skillName - human-readable skill name for the path
 // @param {string}   body      - skill body (SKILL.md contents)
 // @param {string}   [skillPath] - real on-disk SKILL.md path; if omitted,
@@ -147,8 +147,9 @@ class AgentLoop {
         // The synthetic messages are inserted into run.messages BEFORE the user turn.
         if (skillContent) {
             const skillName = skillContent._skillName || 'skill';
+            const skillPath = skillContent._skillPath || null;
             const body      = typeof skillContent === 'string' ? skillContent : skillContent.body;
-            injectSyntheticSkillRead(run.messages, skillName, body);
+            injectSyntheticSkillRead(run.messages, skillName, body, skillPath);
         }
         const fullText = attachmentBlocks ? attachmentBlocks + text : text;
 

@@ -119,7 +119,9 @@ function matchesWorkspace(fm, wsRoot) {
     if (!list.length) return true;
     for (const rule of list) {
         if (typeof rule !== 'string' || !rule) continue;
-        const globExt = rule.match(/^\*{1,2}\/?\*\.([\w.-]+)$/);
+        // Match both "*.ext" (single-star) and "**/*.ext" (double-star recursive).
+        // Regex: optional (**/ or */) prefix, then *.ext
+        const globExt = rule.match(/^(?:\*{1,2}\/)?\*\.([\w.-]+)$/);
         if (globExt) {
             if (hasFileWithExt(wsRoot, '.' + globExt[1])) return true;
             continue;

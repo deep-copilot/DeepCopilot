@@ -301,7 +301,7 @@ class ToolExecutor {
         // Skill creation writes outside the workspace (~/.deepcopilot/skills/...).
         // Always confirm with the user unless explicitly auto-approved.
         if (name === 'skill_create' && approvalMode === 'manual' && !skipApproval) {
-            const desc = `Create skill "${args && args.name || '?'}" — ${args && args.description || ''}`;
+            const desc = `${t('createSkillLabel')}"${args && args.name || '?'}" — ${args && args.description || ''}`;
             if (!await this.requestApproval(desc, abortSignal)) return t('deniedByUser');
         }
 

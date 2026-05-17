@@ -325,7 +325,7 @@ class ChatViewProvider {
                             const body = rawBody.includes('$ARGUMENTS')
                                 ? rawBody.replace(/\$ARGUMENTS/g, userArg)
                                 : rawBody + (userArg ? `\n\nUser argument: ${userArg}` : '');
-                            skillContent = { _skillName: msg.skillName, body };
+                            skillContent = { _skillName: msg.skillName, _skillPath: require('path').join(sk.dir, sk.name, 'SKILL.md'), body };
                         } else {
                             this._post({ type: 'error', text: `Skill "${msg.skillName}" not found — check ~/.deepcopilot/skills (or ~/.claude/skills)` });
                         }
