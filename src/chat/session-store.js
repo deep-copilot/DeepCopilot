@@ -79,7 +79,12 @@ class SessionStore {
     /** Return persisted API-format messages for cross-turn context restore. */
     loadApiMessages(sid) {
         const s = this.all().find(x => x.id === sid);
-        return (s && Array.isArray(s.apiMessages)) ? s.apiMessages : [];
+        if (!s || !Array.isArray(s.apiMessages)) return [];
+        // Self-heal legacy sessions: skip any orphan `tool` messages at the
+        // start (they would otherwise trigger HTTP 400 — see issue #70).
+        let i = 0;
+        while (i < s.apiMessages.length && s.apiMessages[i].role === 'tool') i++;
+        return i > 0 ? s.apiMessages.slice(i) : s.apiMessages;
     }
 
     /**
@@ -122,7 +127,18 @@ class SessionStore {
                 const { reasoning_content, ...rest } = m; // eslint-disable-line no-unused-vars
                 return rest;
             }) : [];
-            s.apiMessages = stripped.length > MAX_API ? stripped.slice(-MAX_API) : stripped;
+            // Truncate to the last MAX_API messages, but never start with an
+            // orphan `tool` message — DeepSeek requires every tool message to
+            // follow its assistant{tool_calls}. See issue #70.
+            if (stripped.length > MAX_API) {
+                let startIdx = stripped.length - MAX_API;
+                while (startIdx < stripped.length && stripped[startIdx].role === 'tool') {
+                    startIdx++;
+                }
+                s.apiMessages = stripped.slice(startIdx);
+            } else {
+                s.apiMessages = stripped;
+            }
         }
 
         const last = s.messages[s.messages.length - 1];
