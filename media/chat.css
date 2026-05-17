@@ -573,3 +573,8 @@ body.vscode-light .msgC pre.cb code .hk-deco{ color:#af00db }
 .settings-save-btn{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:3px;padding:4px 15px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:600}
 .settings-save-btn:hover{background:var(--vscode-button-hoverBackground,var(--vscode-button-background));opacity:.9}
 body.vscode-light .settings-test-result.ok{color:#267f26}
+
+/* Issue #82: in-conversation system notice (e.g. autoCompact) */
+.sys-notice{align-self:stretch;margin:10px 6px;padding:8px 12px;border-left:3px solid var(--vscode-editorWarning-foreground,#d97706);background:var(--vscode-editorWidget-background,rgba(127,127,127,.08));color:var(--vscode-foreground);border-radius:3px;font-size:12px;line-height:1.45}
+.sys-notice-title{font-weight:600;margin-bottom:4px;color:var(--vscode-editorWarning-foreground,#d97706)}
+.sys-notice-body{opacity:.85}

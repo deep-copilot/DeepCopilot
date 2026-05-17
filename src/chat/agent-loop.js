@@ -231,6 +231,18 @@ class AgentLoop {
                     run.messages = compactRes.messages;
                     Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped });
                     this._postToRun(run, { type: 'status', text: isZh() ? '🗜 压缩历史…' : 'Compacting history…' });
+                    // Issue #82: persistent user-visible bubble so the user knows the
+                    // model's context just changed. Otherwise compaction is invisible
+                    // and the user only notices when the model starts "hallucinating"
+                    // earlier file contents.
+                    this._postToRun(run, {
+                        type: 'systemNotice',
+                        kind: 'autoCompact',
+                        title: isZh() ? '⚠️ 会话历史已自动压缩' : '⚠️ Conversation history auto-compacted',
+                        body:  isZh()
+                            ? `为适应上下文窗口，已折叠 ${compactRes.dropped} 条早期消息（包含工具调用结果与源码内容）。模型可能不再记得早期文件细节 —— 如需要，请重新提供关键文件。`
+                            : `${compactRes.dropped} earlier messages (including tool results and source content) have been collapsed to fit the context window. The model may no longer recall earlier file details — re-attach the key files if needed.`,
+                    });
                     postProgress('compacting');
                 }
                 checkAbort();
@@ -271,16 +283,34 @@ class AgentLoop {
                 let preflightTokens = estimateMessagesTokens(msgs);
                 let ctxLimitHit = false;
                 if (preflightTokens > MODEL_CTX_HARD_LIMIT) {
+                    // Track totals across (possibly two) emergency passes so we only
+                    // surface a single persistent system-notice card to the user.
+                    let emergencyTotalDropped = 0;
+                    let emergencyFinalKeepTail = 0;
                     for (const emergencyKeepTail of [6, 3]) {
                         const agg = autoCompactIfNeeded(run.messages, Math.floor(MODEL_CTX_HARD_LIMIT * 0.7), emergencyKeepTail);
                         if (agg.compacted) {
                             run.messages = agg.messages;
                             Logger.info('PREFLIGHT_COMPACT', { sid, iter, before: preflightTokens, keepTail: emergencyKeepTail, dropped: agg.dropped });
                             this._postToRun(run, { type: 'status', text: isZh() ? '⚠️ 上下文接近上限，已紧急压缩历史…' : 'Context near limit — emergency compaction applied…' });
+                            emergencyTotalDropped += (agg.dropped || 0);
+                            emergencyFinalKeepTail = emergencyKeepTail;
                         }
                         const newTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
                         if (newTokens <= MODEL_CTX_HARD_LIMIT) break;
                         preflightTokens = newTokens;
+                    }
+                    // Single aggregated persistent notice (Issue #82) — avoids
+                    // showing two near-identical cards when both keepTail passes run.
+                    if (emergencyTotalDropped > 0) {
+                        this._postToRun(run, {
+                            type: 'systemNotice',
+                            kind: 'autoCompact',
+                            title: isZh() ? '⚠️ 上下文接近上限，已紧急压缩历史' : '⚠️ Context near limit — emergency compaction applied',
+                            body:  isZh()
+                                ? `会话已接近模型上下文窗口上限，仅保留最近 ${emergencyFinalKeepTail} 条消息与首条用户提问，折叠了 ${emergencyTotalDropped} 条早期消息。如需继续，建议重新提供关键文件或按 Ctrl+K 清理会话后重新提问。`
+                                : `Session is near the model context window limit. Only the most recent ${emergencyFinalKeepTail} messages and the first user prompt are kept; ${emergencyTotalDropped} earlier messages were collapsed. Re-attach key files if needed, or press Ctrl+K to clear and start fresh.`,
+                        });
                     }
 
                     // Last resort: if still over the limit, refuse to call the API and tell the user

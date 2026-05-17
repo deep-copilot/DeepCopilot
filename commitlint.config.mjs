@@ -28,5 +28,9 @@ export default {
     'subject-case': [0],
     // body 每行最大长度宽松设置
     'body-max-line-length': [1, 'always', 200],
+    // footer 每行最大长度同样放宽：当 body 段出现 "Closes #xx" / "BREAKING CHANGE:"
+    // 等关键字时，conventional-commits-parser 会把其后整段当作 footer，默认 100 字符
+    // 上限过于苛刻，且与 body 规则不一致，这里对齐到 200 / warn。
+    'footer-max-line-length': [1, 'always', 200],
   },
 };

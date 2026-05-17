@@ -2202,6 +2202,28 @@
       updateBalance(m);
     } else if (m.type === "status"){
       if (m.text){ sb.textContent = m.text; sb.style.display = "block"; } else sb.style.display = "none";
+    } else if (m.type === "systemNotice"){
+      // Issue #82: render a persistent in-conversation card so the user knows
+      // a context-altering event happened (currently: AUTOCOMPACT). Distinct
+      // from `status` which is transient and shown only in the status bar.
+      // Use textContent + appendChild (no innerHTML) to avoid any XSS risk
+      // from user-provided content flowing into the DOM (CodeQL js/xss).
+      var _sn = document.createElement("div");
+      _sn.className = "sys-notice" + (m.kind ? " sys-notice-" + m.kind : "");
+      if (m.title){
+        var _snTitleEl = document.createElement("div");
+        _snTitleEl.className = "sys-notice-title";
+        _snTitleEl.textContent = String(m.title);
+        _sn.appendChild(_snTitleEl);
+      }
+      if (m.body){
+        var _snBodyEl = document.createElement("div");
+        _snBodyEl.className = "sys-notice-body";
+        _snBodyEl.textContent = String(m.body);
+        _sn.appendChild(_snBodyEl);
+      }
+      if (thk && thk.parentNode === msgs) msgs.insertBefore(_sn, thk); else msgs.appendChild(_sn);
+      ascroll();
     } else if (m.type === "sessions"){
       sessions = m.items || []; activeSessionId = m.activeId || null;
       if (typeof m.currentWs === "string") currentWs = m.currentWs;
