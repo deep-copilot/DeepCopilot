@@ -306,7 +306,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.95.0",
+    "@types/vscode": "^1.120.0",
     "@vscode/codicons": "^0.0.45",
     "@vscode/vsce": "^2.24.0",
     "danger": "^13.0.7",
