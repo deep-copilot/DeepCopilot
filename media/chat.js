@@ -1652,7 +1652,7 @@
     if (popVisible){
       if (e.key === "ArrowDown"){ e.preventDefault(); movePop(1); return; }
       if (e.key === "ArrowUp")  { e.preventDefault(); movePop(-1); return; }
-      if (e.key === "Tab" || e.key === "Enter"){
+      if (e.key === "Tab" || (e.key === "Enter" && !e.isComposing)){
         e.preventDefault(); applyPop(); return;
       }
       if (e.key === "Escape"){ e.preventDefault(); hidePop(); return; }
@@ -1678,7 +1678,7 @@
       cbt && cbt.click();
       return;
     }
-    if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); doSend(); }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); doSend(); }
     else if (e.key === "Escape" && busy){ e.preventDefault(); _stopping = true; if (_dcSpinner) _dcSpinner.classList.add("stopping"); vscode.postMessage({type:"stop"}); }
   });
   sbtn.addEventListener("click", doSend);
@@ -2411,7 +2411,7 @@
       else renderSessions();
     }
     inp.addEventListener("keydown", function(e){
-      if (e.key === "Enter"){ e.preventDefault(); commit(); }
+      if (e.key === "Enter" && !e.isComposing){ e.preventDefault(); commit(); }
       else if (e.key === "Escape"){ e.preventDefault(); committed = true; renderSessions(); }
     });
     inp.addEventListener("blur", commit);
@@ -2532,7 +2532,7 @@
     btnCancel.addEventListener("click", function(){ exitEditMode(msgU, false); });
     ta.addEventListener("keydown", function(e){
       if (e.key === "Escape"){ e.preventDefault(); exitEditMode(msgU, false); return; }
-      if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); submitEdit(msgU); return; }
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); submitEdit(msgU); return; }
     });
   }
   function exitEditMode(msgU, keepText){
