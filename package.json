@@ -308,7 +308,7 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.95.0",
     "@vscode/codicons": "^0.0.45",
-    "@vscode/vsce": "^2.24.0",
+    "@vscode/vsce": "^3.9.1",
     "danger": "^13.0.7",
     "dompurify": "^3.4.2",
     "esbuild": "^0.28.0",
