@@ -1543,10 +1543,18 @@
     // that the user did NOT commit with a trailing space. We strip them from
     // the visible text and forward them via `pendingRefs` so the extension
     // can resolve them BEFORE invoking the agent loop (race-free).
+    // Trailing punctuation like `.`, `,`, `)`, `]`, `;`, `:` etc. is almost
+    // always sentence punctuation, not part of a symbol/URL, so we trim it
+    // from the captured value (mirrors URL auto-linker behavior).
+    function _trimRefTrail(s){ return String(s).replace(/[.,;:!?)\]}>]+$/, ''); }
     var _pendingRefs = [];
     t = t.replace(/(^|\s)#(symbol|fetch):(\S+)/g, function(_, lead, ref, val){
-      _pendingRefs.push({ refType: ref, value: val });
-      return lead || "";
+      var clean = _trimRefTrail(val);
+      if (!clean) return _;
+      _pendingRefs.push({ refType: ref, value: clean });
+      // Preserve any trailing punctuation as visible text after the ref is dropped.
+      var trail = val.slice(clean.length);
+      return (lead || "") + trail;
     }).trim();
     if (!t) return;
     /* Push to history (dedupe consecutive duplicates) */
@@ -1610,8 +1618,13 @@
       var tokEnd   = m.index + m[0].length; // includes the trailing terminator
       // Skip if the caret is still inside this token — the user is typing.
       if (caret > tokStart && caret <= tokEnd) continue;
-      vscode.postMessage({ type: "resolveContextRef", refType: m[2], value: m[3] });
-      ranges.push({ start: tokStart, end: tokEnd, lead: m[1] || "" });
+      // Strip trailing sentence punctuation from the captured value so
+      // `#fetch:https://example.com.` doesn't send a URL ending in a dot.
+      var rawVal = m[3];
+      var cleanVal = rawVal.replace(/[.,;:!?)\]}>]+$/, '');
+      if (!cleanVal) continue;
+      vscode.postMessage({ type: "resolveContextRef", refType: m[2], value: cleanVal });
+      ranges.push({ start: tokStart, end: tokEnd, lead: m[1] || "", keepTrail: rawVal.slice(cleanVal.length) });
       replaced = true;
     }
     if (replaced) {
@@ -1619,8 +1632,9 @@
       var out = v;
       for (var i = ranges.length - 1; i >= 0; i--) {
         var r = ranges[i];
-        // Keep the leading whitespace, drop the rest of the matched segment.
-        out = out.slice(0, r.start) + out.slice(r.end);
+        // Keep the leading whitespace + any trailing punctuation we stripped
+        // from the value, drop the ref token itself.
+        out = out.slice(0, r.start) + (r.keepTrail || "") + out.slice(r.end);
       }
       inp.value = out;
       var newPos = Math.min(out.length, caret);

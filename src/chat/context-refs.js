@@ -33,6 +33,20 @@ function truncate(s, max = MAX_CONTENT) {
     return s.slice(0, max) + '\n... [truncated]';
 }
 
+// Compute a workspace-relative label for an absolute path.
+// Uses path.relative (which on Windows is case-insensitive for drive
+// letters) instead of a literal `startsWith(root)`, so paths that only
+// differ in drive-letter case (`C:\…` vs `c:\…`) are still treated as
+// inside the workspace. Falls back to the basename when outside.
+function wsRelLabel(abs) {
+    const root = wsRoot();
+    if (root && isInsideWorkspace(abs)) {
+        const rel = path.relative(root, abs).replace(/\\/g, '/');
+        return rel || path.basename(abs);
+    }
+    return path.basename(abs);
+}
+
 // ── selection / editor ────────────────────────────────────────────────
 
 function resolveSelection() {
@@ -42,13 +56,20 @@ function resolveSelection() {
     const sel = editor.selection;
     if (sel.isEmpty) return { error: 'No text selected in the active editor' };
 
-    const abs  = doc.fileName;
-    const root = wsRoot();
-    const rel  = root && abs.startsWith(root)
-        ? path.relative(root, abs).replace(/\\/g, '/')
-        : path.basename(abs);
+    // For real files, require the file to be inside the workspace (mirrors
+    // resolveEditor). For untitled/virtual documents fall back to a
+    // synthetic label so we never leak a host path.
+    let label;
+    if (doc.uri.scheme === 'file') {
+        if (!isInsideWorkspace(doc.fileName)) {
+            return { error: 'Selected file is outside the workspace' };
+        }
+        label = wsRelLabel(doc.fileName);
+    } else {
+        label = `<untitled:${doc.uri.scheme}>`;
+    }
     return {
-        path:      rel,
+        path:      label,
         content:   truncate(doc.getText(sel), 12000),
         startLine: sel.start.line + 1,
         endLine:   sel.end.line + 1,
@@ -73,12 +94,8 @@ function resolveEditor() {
     if (!isInsideWorkspace(abs)) {
         return { error: 'Active file is outside the workspace' };
     }
-    const root = wsRoot();
-    const rel  = root && abs.startsWith(root)
-        ? path.relative(root, abs).replace(/\\/g, '/')
-        : path.basename(abs);
     return {
-        path:    rel,
+        path:    wsRelLabel(abs),
         content: truncate(doc.getText()),
         lang:    doc.languageId,
     };
@@ -87,15 +104,14 @@ function resolveEditor() {
 // ── diagnostics ───────────────────────────────────────────────────────
 
 function resolveProblems() {
-    const root = wsRoot();
     const all  = vscode.languages.getDiagnostics();
     const sevName = { 0: 'error', 1: 'warning', 2: 'info', 3: 'hint' };
     const lines = [];
     let count = 0;
     for (const [uri, diags] of all) {
         if (!diags.length) continue;
-        const rel = root && uri.fsPath.startsWith(root)
-            ? path.relative(root, uri.fsPath).replace(/\\/g, '/')
+        const rel = isInsideWorkspace(uri.fsPath)
+            ? wsRelLabel(uri.fsPath)
             : uri.fsPath;
         for (const d of diags) {
             const ln = d.range.start.line + 1;
@@ -150,7 +166,15 @@ async function resolveTerminal() {
 
     // VS Code does not expose terminal scrollback via the public API. We grab
     // the current terminal selection via copySelection → read clipboard,
-    // then restore the previous clipboard content.
+    // then restore the previous clipboard *text*.
+    //
+    // Caveats (documented for the setting-gated opt-in path):
+    //   - Non-text clipboard payloads (images, files, formatted data) cannot
+    //     be read via `vscode.env.clipboard.readText()` and will be lost
+    //     because we have no way to round-trip them.
+    //   - The previous *text* is restored unconditionally after a short
+    //     delay so a concurrent third-party write between our read and
+    //     restore is the only loss vector (small race window).
     let buffer = '';
     let prev = '';
     let prevReadOk = false;
@@ -160,13 +184,13 @@ async function resolveTerminal() {
         // Give the OS clipboard a moment to settle before reading (issue G1).
         await new Promise(r => setTimeout(r, 50));
         const sel = await vscode.env.clipboard.readText().catch(() => '');
-        // Only restore when we successfully captured the previous value AND
-        // it differs from what we just read, to avoid wiping non-text content
-        // we never saw.
-        if (prevReadOk && prev !== sel) {
+        buffer = sel || '';
+        // Always restore the previously-captured text, even when prev === sel,
+        // so we never leave the user's clipboard in a state we wrote (the
+        // terminal selection). If reading prev failed we cannot restore safely.
+        if (prevReadOk) {
             await vscode.env.clipboard.writeText(prev).catch(() => {});
         }
-        buffer = sel || '';
     } catch { /* ignore */ }
     if (!buffer.trim()) {
         return { error: 'Select text in the terminal first, then re-attach #terminal' };
@@ -191,13 +215,12 @@ async function resolveSymbol(query) {
         return { error: `Symbol search failed: ${e.message}` };
     }
     if (!syms || !syms.length) return { error: `No symbol matched "${q}"` };
-    const root  = wsRoot();
     const lines = syms.slice(0, 20).map(s => {
         const uri = s.location && s.location.uri;
         const ln  = (s.location && s.location.range && s.location.range.start.line + 1) || 1;
-        const rel = uri && root && uri.fsPath.startsWith(root)
-            ? path.relative(root, uri.fsPath).replace(/\\/g, '/')
-            : (uri ? uri.fsPath : '?');
+        const rel = uri
+            ? (isInsideWorkspace(uri.fsPath) ? wsRelLabel(uri.fsPath) : uri.fsPath)
+            : '?';
         return `${rel}:${ln}  ${s.kind != null ? '[' + vscode.SymbolKind[s.kind] + ']' : ''} ${s.name}${s.containerName ? '  (' + s.containerName + ')' : ''}`;
     });
     return {

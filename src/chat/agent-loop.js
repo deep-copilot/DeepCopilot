@@ -31,8 +31,7 @@ class AgentLoop {
      *   postToRun        : (run, msg) => void,
      *   post             : (msg) => void,
      *   postSessionList  : () => void,
-     *   buildAttachment  : (heavy: boolean) => string|null,
-     *   getIncludeCtx    : () => boolean,
+     *   buildAttachment  : () => string|null,
      * }} opts
      */
     constructor(opts) {
@@ -46,7 +45,6 @@ class AgentLoop {
         this._post           = opts.post;
         this._postSessionList = opts.postSessionList;
         this._buildAttachment = opts.buildAttachment;
-        this._getIncludeCtx  = opts.getIncludeCtx;
     }
 
     // ─── Main entry ──────────────────────────────────────────────────────────
@@ -77,7 +75,7 @@ class AgentLoop {
         const mode    = cfg.get('approvalMode') || 'manual';
 
         // Build attachment block (active editor context)
-        const attachment = this._buildAttachment(this._getIncludeCtx());
+        const attachment = this._buildAttachment();
         let attachmentBlocks = attachment ? attachment + '\n\n' : '';
         // Separate text attachments from image attachments (imageData = base64 data URI).
         const imageAttachments = (attachments || []).filter(a => a && a.imageData);

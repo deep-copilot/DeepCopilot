@@ -36,7 +36,6 @@ class ChatViewProvider {
         this._view       = null;       // most-recently-active WebviewView
         this._views      = new Set();  // all live WebviewView instances
         this._panel      = null;
-        this._includeCtx = false;
         this._runs       = new Map();
 
         this._store = new SessionStore(context.globalState, {
@@ -66,8 +65,7 @@ class ChatViewProvider {
             postToRun:       (run, msg) => this._runPost(run, msg),
             post:            (msg) => this._post(msg),
             postSessionList: () => this._store.postList(),
-            buildAttachment: (heavy) => this._buildAttachmentBlock(heavy),
-            getIncludeCtx:   () => this._includeCtx,
+            buildAttachment: () => this._buildAttachmentBlock(),
         });
 
         const wsR = wsRoot();
@@ -379,7 +377,6 @@ class ChatViewProvider {
             case 'codeBlockApply':  await this._applyCodeBlock(msg.code, msg.lang); break;
             case 'codeBlockCreate': await this._createFileFromCodeBlock(msg.code, msg.lang); break;
             case 'clear':           this._store.sessionId = null; break;
-            case 'contextToggle':   this._includeCtx = !!msg.active; break;
             case 'regenerate':      await this._handleRegenerate(); break;
             case 'editUserMessage': this._handleEditUserMessage(msg); break;
             case 'editUserSubmit':  await this._handleEditUserSubmit(msg); break;
@@ -646,7 +643,7 @@ class ChatViewProvider {
         this._post({ type: 'clearLiveSelection' });
     }
 
-    _buildAttachmentBlock(heavy) {
+    _buildAttachmentBlock() {
         const editor = vscode.window.activeTextEditor;
         if (!editor) return null;
         const doc  = editor.document;
@@ -665,11 +662,6 @@ class ChatViewProvider {
             const capped   = selected.length > 4000 ? selected.slice(0, 4000) + '\n... [selection truncated]' : selected;
             lines.push(`Selection (${rel}:${sel.start.line + 1}-${sel.end.line + 1}):`);
             lines.push('`' + '`' + '`' + lang, capped, '`' + '`' + '`');
-        } else if (heavy) {
-            const range   = editor.visibleRanges[0];
-            const visible = doc.getText(range).substring(0, 3000);
-            lines.push(`Visible viewport (${rel}:${range.start.line + 1}-${range.end.line + 1}):`);
-            lines.push('`' + '`' + '`' + lang, visible, '`' + '`' + '`');
         }
         lines.push('Prefer this attachment over scanning the workspace if it answers the question.');
         lines.push('</attachments>');
