@@ -25,7 +25,7 @@ jobs:
     name: "Guard: Webview CSP"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Check CSP in webview HTML
         shell: bash
@@ -54,7 +54,7 @@ jobs:
     name: "Guard: Dangerous APIs"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Grep for dangerous patterns
         shell: bash
@@ -98,7 +98,7 @@ jobs:
     name: "Guard: Path Traversal"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Ensure file-write uses path sanitizer
         shell: bash
@@ -125,7 +125,7 @@ jobs:
     name: "Guard: Hardcoded Secrets"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Grep for inline secrets in source
         shell: bash
