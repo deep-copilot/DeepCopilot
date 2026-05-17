@@ -109,12 +109,12 @@ jobs:
             echo "::warning::$target not found, skipping path-traversal guard"
             exit 0
           fi
-          # file-write.js 必须 import 自己的路径安全工具
+          # file-write.js must import its path safety utility
           if ! grep -qE "require\(['\"]\.\./utils/paths['\"]\)|from\s+['\"]\.\./utils/paths['\"]" "$target"; then
             echo "::error file=$target::file-write.js must require('../utils/paths') and resolve paths through it to prevent traversal."
             exit 1
           fi
-          # 在 file-write.js 中粗筛是否对未经规范化的 path.join 结果直接写入
+          # Check if raw path.join() result is passed directly to fs.write* in file-write.js
           if grep -nE "fs\.(writeFile|writeFileSync|appendFile|appendFileSync)\(\s*path\.join\(" "$target"; then
             echo "::error file=$target::Do not pass raw path.join() to fs.write*; resolve through utils/paths.js first."
             exit 1
@@ -131,8 +131,8 @@ jobs:
         shell: bash
         run: |
           set -e
-          # 常见 key 前缀：DeepSeek (sk-)、OpenAI (sk-proj-/sk-)、GitHub (ghp_/gho_/ghs_/ghr_)
-          # 排除 README、release notes、第三方资源
+          # Common key prefixes: DeepSeek (sk-), OpenAI (sk-proj-/sk-), GitHub (ghp_/gho_/ghs_/ghr_)
+          # Exclude README, release notes, third-party resources
           patterns='(sk-[A-Za-z0-9]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,})'
 
           hits="$(grep -rEn --include='*.js' --include='*.ts' --include='*.json' \
