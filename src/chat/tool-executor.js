@@ -23,12 +23,13 @@ const {
     toolReadFile, toolListDir, toolGrepSearch, toolFindFiles,
     toolWriteFile, toolStrReplaceInFile, toolApplyPatch, toolRunShell, toolWebSearch, toolWebFetch,
 } = require('../tools/exec');
+const { skillInvoke, skillCreate } = require('../tools/skill-tools');
 
 class ToolExecutor {
     // Read-only tools whose results can be cached until workspace changes.
     static CACHEABLE = new Set(['read_file', 'grep_search', 'find_files', 'list_dir', 'web_search', 'web_fetch']);
     // Mutating tools that invalidate the file cache after execution.
-    static MUTATING  = new Set(['write_file', 'str_replace_in_file', 'apply_patch', 'run_shell']);
+    static MUTATING  = new Set(['write_file', 'str_replace_in_file', 'apply_patch', 'run_shell', 'skill_create']);
 
     /**
      * @param {vscode.ExtensionContext} context
@@ -297,6 +298,13 @@ class ToolExecutor {
             if (!await this.requestApproval(`${t('runCmdLabel')}${args.command}`, abortSignal)) return t('deniedByUser');
         }
 
+        // Skill creation writes outside the workspace (~/.deepcopilot/skills/...).
+        // Always confirm with the user unless explicitly auto-approved.
+        if (name === 'skill_create' && approvalMode === 'manual' && !skipApproval) {
+            const desc = `Create skill "${args && args.name || '?'}" — ${args && args.description || ''}`;
+            if (!await this.requestApproval(desc, abortSignal)) return t('deniedByUser');
+        }
+
         // Cache lookup (read-only tools)
         const cache = run && run.toolCache;
         if (cache && ToolExecutor.CACHEABLE.has(name)) {
@@ -389,6 +397,11 @@ class ToolExecutor {
         // Special tools that need run-level state
         if (name === 'update_plan')      return this._handleUpdatePlan(args, run);
         if (name === 'revert_last_turn') return this._handleRevertLastTurn(args, run);
+
+        // Skill subsystem (Issue #61) — skill_invoke needs run.messages to inject
+        // a synthetic read_file pair; skill_create is a pure file write.
+        if (name === 'skill_invoke')     return skillInvoke(args, run);
+        if (name === 'skill_create')     return skillCreate(args);
 
         // Sub-agent dispatch
         if (name === 'spawn_agent')      return this._handleSpawnAgent(args, run, abortSignal);

@@ -19,6 +19,38 @@ const {
     estimateMessagesTokens, autoCompactIfNeeded, ToolArgsStreamer,
 } = require('./compact');
 
+// ─── Skill injection helper (Issue #61 — Step 3) ─────────────────────────────
+//
+// Appends a synthetic `read_file` tool_call + tool_result pair to `messages`.
+// Used by:
+//   1. UI slash-command path (handleSend's `skillContent` parameter), and
+//   2. the `skill_invoke` tool (Issue #61 — Step 4), so an agent-initiated
+//      skill load looks identical to a user-initiated one.
+//
+// Each call uses a unique tool_call_id (`synthetic_skill_read_<rand>`) so
+// nested or repeated skill loads in the same turn do not collide.
+function injectSyntheticSkillRead(messages, skillName, body) {
+    const safeName = String(skillName || 'skill').replace(/[^a-z0-9-]/gi, '-');
+    const callId = `synthetic_skill_read_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    messages.push({
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+            id:       callId,
+            type:     'function',
+            function: {
+                name:      'read_file',
+                arguments: JSON.stringify({ path: `~/.deepcopilot/skills/${safeName}/SKILL.md` }),
+            },
+        }],
+    });
+    messages.push({
+        role:         'tool',
+        tool_call_id: callId,
+        content:      String(body || ''),
+    });
+}
+
 class AgentLoop {
     /**
      * @param {{
@@ -107,25 +139,7 @@ class AgentLoop {
         if (skillContent) {
             const skillName = skillContent._skillName || 'skill';
             const body      = typeof skillContent === 'string' ? skillContent : skillContent.body;
-            // assistant turn: announce reading the skill file
-            run.messages.push({
-                role: 'assistant',
-                content: null,
-                tool_calls: [{
-                    id:       'synthetic_skill_read',
-                    type:     'function',
-                    function: {
-                        name:      'read_file',
-                        arguments: JSON.stringify({ path: `~/.claude/skills/${skillName}/SKILL.md` }),
-                    },
-                }],
-            });
-            // tool result turn: the skill content
-            run.messages.push({
-                role:         'tool',
-                tool_call_id: 'synthetic_skill_read',
-                content:      body,
-            });
+            injectSyntheticSkillRead(run.messages, skillName, body);
         }
         const fullText = attachmentBlocks ? attachmentBlocks + text : text;
 
@@ -566,4 +580,4 @@ class AgentLoop {
     }
 }
 
-module.exports = { AgentLoop };
+module.exports = { AgentLoop, injectSyntheticSkillRead };

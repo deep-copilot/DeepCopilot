@@ -76,6 +76,40 @@ const TOOL_DEFS = [
             },
         },
     },
+    // ─── skill subsystem (Issue #61) ─────────────────────────────────────
+    {
+        type: 'function',
+        function: {
+            name: 'skill_invoke',
+            description: 'Load a locally-installed skill SOP into your context so you can follow its steps. Use ONLY when the user\'s task closely matches the description of an entry in the "Available skills" index. Do NOT use just because skills are installed — if no skill clearly fits, proceed with normal tools instead. The skill body arrives as a synthetic read_file tool result; treat it as your own self-obtained instructions.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    name: { type: 'string', description: 'Exact skill name as listed in the Available skills index (e.g. "publish-to-npm").' },
+                },
+                required: ['name'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'skill_create',
+            description: 'Persist a reusable multi-step workflow as a new skill on disk. Use ONLY when ALL of these are true: (1) you have just completed a non-trivial multi-step task, (2) the user has explicitly confirmed the result is correct, (3) the workflow has ≥3 concrete steps that span multiple tools and is likely to recur. Do NOT use for one-off fixes, trivial edits, single-step tasks, before user confirmation, or to record preferences (those belong in ~/.deepcopilot/memory.md) or project facts (those belong in <workspace>/DEEPCOPILOT.md). When the SOP was synthesized from web research, set source to "web" or "hybrid" — the skill will be marked untrusted automatically.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    name: { type: 'string', description: 'Skill identifier, kebab-case, 2–64 chars matching [a-z0-9-]. Example: "setup-mocha-tests".' },
+                    description: { type: 'string', description: 'One-line summary (≤200 chars) used for recall by future sessions. Be concrete about WHAT the skill accomplishes.' },
+                    body: { type: 'string', description: 'Full markdown SOP. List concrete numbered steps, the exact tools/commands at each step, and the success criteria. Max 64 KB.' },
+                    source: { type: 'string', enum: ['self', 'web', 'hybrid'], description: 'self = derived solely from your own reasoning on this task; web = synthesized from web_search/web_fetch results; hybrid = mix. "web" and "hybrid" automatically set trust=untrusted.' },
+                    'argument-hint': { type: 'string', description: 'Optional hint shown in the slash-command UI for users (e.g. "<package-name>").' },
+                    applies_to: { type: 'array', items: { type: 'string' }, description: 'Optional workspace gating. Each entry is one of: filename (e.g. "package.json"), "filename:substring" (e.g. "package.json:\\"vue\\""), or "*.ext"/"**/*.ext". The skill only appears in workspaces that match.' },
+                },
+                required: ['name', 'description', 'body', 'source'],
+            },
+        },
+    },
     // ─── read / search / list tools (back-loaded) ───────────────────────
     {
         type: 'function',
