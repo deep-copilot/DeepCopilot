@@ -75,7 +75,13 @@ async function toolRunShell(args, ctx = {}) {
     const MAX_BUF       = 10 * 1024 * 1024;
     const MAX_TIMEOUT_MS = 300_000;                                         // 5 min hard cap — issue #69
     const STALL_PROBE_MS = 15_000;                                          // heartbeat every 15s when no output
-    const requestedTimeout = args.timeout_ms || 30000;
+    const KILL_GRACE_MS  = 5_000;                                           // SIGTERM → SIGKILL grace period — issue #69 follow-up
+    // Normalize args.timeout_ms: tolerate strings, NaN, negatives, etc.
+    // Falls back to 30000ms default, clamps to (0, MAX_TIMEOUT_MS].
+    const requestedRaw = Number(args.timeout_ms);
+    const requestedTimeout = (Number.isFinite(requestedRaw) && requestedRaw > 0)
+        ? requestedRaw
+        : 30000;
     const timeoutMs     = Math.min(requestedTimeout, MAX_TIMEOUT_MS);
     const onStreamDelta = typeof ctx.onStreamDelta === 'function' ? ctx.onStreamDelta : null;
     const abortSignal   = ctx.abortSignal;
@@ -117,6 +123,17 @@ async function toolRunShell(args, ctx = {}) {
         const timer = setTimeout(() => {
             killedByTimeout = true;
             try { proc.kill('SIGTERM'); } catch {}
+            // If the process ignores SIGTERM (or kill() failed), escalate
+            // to SIGKILL after a short grace period and force-settle so
+            // run_shell can never hang indefinitely.
+            setTimeout(() => {
+                if (settled) return;
+                try { proc.kill('SIGKILL'); } catch {}
+                // Last-resort settle in case 'close' never fires.
+                setTimeout(() => {
+                    if (!settled) settle(truncate(`Error: command timed out after ${timeoutMs}ms and did not terminate after SIGTERM+SIGKILL`));
+                }, 1000);
+            }, KILL_GRACE_MS);
         }, timeoutMs);
 
         // Stall heartbeat: when the process produces no output for STALL_PROBE_MS,
