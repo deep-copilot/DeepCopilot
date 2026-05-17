@@ -11,10 +11,14 @@ function getModelPricing(model) {
     if (model === 'deepseek-v4-flash' || model === 'deepseek-reasoner' || model === 'deepseek-chat') {
         return { input: 1.0, cache_hit: 0.02, output: 2.0 };
     }
-    if (Date.now() < V4_PRO_DISCOUNT_END) {
-        return { input: 3.0, cache_hit: 0.025, output: 6.0, discount: '2.5折' };
+    if (typeof model === 'string' && model.startsWith('deepseek-')) {
+        if (Date.now() < V4_PRO_DISCOUNT_END) {
+            return { input: 3.0, cache_hit: 0.025, output: 6.0, discount: '2.5折' };
+        }
+        return { input: 12.0, cache_hit: 0.1, output: 24.0 };
     }
-    return { input: 12.0, cache_hit: 0.1, output: 24.0 };
+    // Unknown / non-DeepSeek model — no pricing data available.
+    return null;
 }
 
 function computeCost(model, usage) {
@@ -26,6 +30,20 @@ function computeCost(model, usage) {
     const cacheMiss = (usage.prompt_cache_miss_tokens != null)
         ? usage.prompt_cache_miss_tokens
         : Math.max(prompt - cacheHit, 0);
+    // No pricing table for this model — report token counts but zero cost.
+    if (!p) {
+        return {
+            cost_cny: 0,
+            breakdown: {
+                cache_hit_tokens:  cacheHit,
+                cache_miss_tokens: cacheMiss,
+                completion_tokens: completion,
+                prompt_tokens:     prompt,
+                total_tokens:      usage.total_tokens || (prompt + completion),
+                pricing:           null,
+            },
+        };
+    }
     const cost =
         (cacheHit  / 1e6) * p.cache_hit +
         (cacheMiss / 1e6) * p.input +

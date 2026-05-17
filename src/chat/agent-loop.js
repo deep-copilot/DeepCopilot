@@ -11,7 +11,7 @@ const { Logger }           = require('../logger');
 const { friendlyError }    = require('../errors');
 const { computeCost }      = require('../pricing');
 const { buildSystemPrompt }= require('../prompts/system');
-const { streamDeepSeek }   = require('../api/deepseek');
+const { streamChat, PROVIDER_PRESETS } = require('../api/adapter');
 const { getToolDefs }      = require('../tools/schema');
 const { mcpManager }       = require('../mcp');
 const { isZh }             = require('../utils/i18n');
@@ -101,8 +101,12 @@ class AgentLoop {
         const existingActive = this._getRun(this._store.sessionId);
         if (existingActive && existingActive.busy) return;
 
+        const cfg      = vscode.workspace.getConfiguration('deepseekAgent');
+        const provider = cfg.get('provider') || 'deepseek';
+
         const apiKey = await this._context.secrets.get('deepseekAgent.apiKey');
-        if (!apiKey) {
+        const needsKey = !PROVIDER_PRESETS[provider]?.noApiKey;
+        if (needsKey && !apiKey) {
             this._post({ type: 'error', text: '请先设置 API Key — 点击工具栏 🔑 按钮' });
             return;
         }
@@ -114,10 +118,8 @@ class AgentLoop {
             run = this._newRun(sid, seed);
         }
         run.busy = true;
-
-        const cfg     = vscode.workspace.getConfiguration('deepseekAgent');
-        const model   = cfg.get('defaultModel') || 'deepseek-v4-pro';
-        const baseUrl = (cfg.get('apiBaseUrl') || '').trim() || 'https://api.deepseek.com';
+        const model    = cfg.get('defaultModel') || 'deepseek-v4-pro';
+        const baseUrl  = (cfg.get('apiBaseUrl') || '').trim();
         const mode    = cfg.get('approvalMode') || 'manual';
 
         // Build attachment block (active editor context)
@@ -350,8 +352,8 @@ class AgentLoop {
                 postProgress('waiting_first_token');
 
                 let _gotFirstToken = false;
-                const { toolCalls, usage } = await streamDeepSeek(
-                    { apiKey, baseUrl, messages: finalMsgs, model, noTools: askMode, tools: allTools },
+                const { toolCalls, usage } = await streamChat(
+                    { provider, apiKey, baseUrl, messages: finalMsgs, model, noTools: askMode, tools: allTools },
                     {
                         onDelta: (delta) => {
                             if (!_gotFirstToken) { _gotFirstToken = true; postProgress('streaming'); }
@@ -563,8 +565,8 @@ class AgentLoop {
                     { role: 'user', content: '<system-reminder>\nYou have reached the tool-call iteration limit without producing a user-facing answer. Stop calling tools. Write a concise plain-text reply that: (1) summarises what you tried, (2) states what you found or could not find, (3) suggests a concrete next step the user can take.\n</system-reminder>' },
                 ];
                 let tail = '';
-                await streamDeepSeek(
-                    { apiKey, baseUrl, messages: finalMsgs, model, noTools: true },
+                await streamChat(
+                    { provider, apiKey, baseUrl, messages: finalMsgs, model, noTools: true },
                     {
                         onDelta:    t => { tail += t; run.reply.asst += t; this._postToRun(run, { type: 'replyDelta', text: t }); },
                         onThinking: t => { run.reply.thoughts += t; this._postToRun(run, { type: 'thinkingDelta', text: t }); },

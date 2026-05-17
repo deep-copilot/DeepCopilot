@@ -15,7 +15,7 @@
 const https = require('https');
 const vscode = require('vscode');
 const { Logger }         = require('../logger');
-const { streamDeepSeek } = require('../api/deepseek');
+const { streamChat, PROVIDER_PRESETS } = require('../api/adapter');
 const { getToolDefs }    = require('../tools/schema');
 const { mcpManager }     = require('../mcp');
 const { autoCompactIfNeeded } = require('./compact');
@@ -100,16 +100,31 @@ class SubAgentRunner {
             return '[spawn_agent] Error: `prompt` argument is required and must be non-empty.';
         }
 
-        const apiKey = await this._context.secrets.get('deepseekAgent.apiKey');
-        if (!apiKey) return '[spawn_agent] Error: no API key configured.';
-
         const cfg     = vscode.workspace.getConfiguration('deepseekAgent');
-        // Sub-agents default to a fast/cheap model (flash) so that multiple
-        // concurrent sub-agents don't saturate the rate-limit quota of the
-        // parent's (possibly expensive) model.  Users can override via the
-        // deepseekAgent.subAgentModel setting.
-        const model   = cfg.get('subAgentModel') || cfg.get('defaultModel') || 'deepseek-v4-flash';
-        const baseUrl = (cfg.get('apiBaseUrl') || '').trim() || 'https://api.deepseek.com';
+        const provider = cfg.get('provider') || 'deepseek';
+
+        const apiKey = await this._context.secrets.get('deepseekAgent.apiKey');
+        if (!PROVIDER_PRESETS[provider]?.noApiKey && !apiKey) {
+            return '[spawn_agent] Error: no API key configured.';
+        }
+
+        // Sub-agents default to a fast/cheap model (flash) for DeepSeek.
+        // For other providers, fall back to the user's selected model.
+        // Users can always override via the deepseekAgent.subAgentModel setting.
+        const subAgentModelConfig = cfg.inspect('subAgentModel');
+        const hasExplicitSubAgentModel = !!(
+            subAgentModelConfig && (
+                subAgentModelConfig.workspaceFolderValue ||
+                subAgentModelConfig.workspaceValue ||
+                subAgentModelConfig.globalValue
+            )
+        );
+        const configuredSubAgentModel = cfg.get('subAgentModel');
+        const defaultModel = cfg.get('defaultModel');
+        const model = provider === 'deepseek'
+            ? (configuredSubAgentModel || defaultModel || 'deepseek-v4-flash')
+            : ((hasExplicitSubAgentModel ? configuredSubAgentModel : '') || defaultModel || '');
+        const baseUrl  = (cfg.get('apiBaseUrl') || '').trim();
 
         // ── Keep-alive HTTPS agent ─────────────────────────────────────────
         // Re-use the same TLS connection for every API call in this sub-agent's
@@ -182,7 +197,7 @@ class SubAgentRunner {
             for (let attempt = 0; attempt <= MAX_NET_RETRIES; attempt++) {
                 if (childAbort.signal.aborted) throw new Error('aborted');
                 try {
-                    return await streamDeepSeek(
+                    return await streamChat(
                         { ...params, httpAgent: keepAliveAgent },
                         callbacks,
                         childAbort.signal,
@@ -222,7 +237,7 @@ class SubAgentRunner {
                 let assistantText = '';
                 let reasoningText  = ''; // must be passed back to DeepSeek in thinking mode
                 const { toolCalls } = await streamWithRetry(
-                    { apiKey, baseUrl, messages: apiMessages, model, noTools: false, tools: childTools },
+                    { provider, apiKey, baseUrl, messages: apiMessages, model, noTools: false, tools: childTools },
                     {
                         onDelta:    d => { assistantText += d; },
                         onThinking: d => { reasoningText  += d; }, // keep — API requires passback

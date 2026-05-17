@@ -2,7 +2,7 @@
   "name": "deep-copilot",
   "displayName": "Deep Copilot",
   "description": "Deep Copilot — AI coding agent embedded in VS Code. Powered by DeepSeek V4, with file editing, terminal, search, and plan/todos. Standalone, no backend required.",
-  "version": "0.33.5",
+  "version": "0.35.0",
   "publisher": "ZhouChaunge",
   "icon": "imgs/logo.png",
   "repository": {
@@ -142,10 +142,24 @@
           "default": 8787,
           "description": "API server port (unused in standalone mode)."
         },
+        "deepseekAgent.provider": {
+          "type": "string",
+          "default": "deepseek",
+          "enum": ["deepseek", "openai", "groq", "ollama", "gemini", "custom"],
+          "enumDescriptions": [
+            "DeepSeek — api.deepseek.com",
+            "OpenAI — api.openai.com/v1",
+            "Groq — api.groq.com/openai/v1 (fast Llama / Mixtral)",
+            "Ollama — localhost:11434/v1 (local, no API key required)",
+            "Google Gemini — generativelanguage.googleapis.com (OpenAI-compat endpoint)",
+            "Custom — use the Base URL set in the API settings panel"
+          ],
+          "description": "AI provider. Selecting a preset auto-fills the Base URL; use Custom to enter your own."
+        },
         "deepseekAgent.apiBaseUrl": {
           "type": "string",
           "default": "",
-          "description": "DeepSeek API Base URL. Leave empty to use https://api.deepseek.com. China users: https://api.deepseeki.com"
+          "description": "Override the provider Base URL. Leave empty to use the preset for the selected provider."
         },
         "deepseekAgent.defaultModel": {
           "type": "string",
@@ -247,15 +261,13 @@
           "default": "agent",
           "enum": [
             "agent",
-            "plan",
-            "ask"
+            "plan"
           ],
           "enumDescriptions": [
             "Agent — model can autonomously call tools (file reads, edits, shell, etc.). Recommended for coding tasks.",
-            "Plan — model can only use read-only tools to explore and produce a plan. All write/shell tools are blocked. Switch to Agent mode to execute the plan.",
-            "Ask — pure conversational mode. Tools are NEVER exposed to the model. Use for Q&A or when you don't want any workspace exploration."
+            "Plan — model can only use read-only tools to explore and produce a plan. All write/shell tools are blocked. Switch to Agent mode to execute the plan."
           ],
-          "description": "Interaction mode (analogous to GitHub Copilot's Ask / Plan / Agent). Agent mode also runs a per-turn intent classifier that auto-disables tools on greetings."
+          "description": "Interaction mode. Agent: full tool access. Plan: read-only exploration + plan generation, no writes or shell commands."
         },
         "deepCopilot.inlineCompletion.enable": {
           "type": "boolean",
@@ -328,5 +340,8 @@
     "esbuild": "^0.28.0",
     "eslint": "^8.57.0",
     "katex": "^0.16.45"
+  },
+  "dependencies": {
+    "openai": "^6.38.0"
   }
 }

@@ -25,7 +25,7 @@ const { mcpManager }       = require('../mcp');
 const { SessionStore } = require('./session-store');
 const { ToolExecutor } = require('./tool-executor');
 const { AgentLoop }    = require('./agent-loop');
-const { fetchBalance } = require('../api/deepseek');
+const { fetchBalance, resolveProviderConfig } = require('../api/adapter');
 const { resolveContextRef } = require('./context-refs');
 
 class ChatViewProvider {
@@ -145,7 +145,13 @@ class ChatViewProvider {
         switch (msg.type) {
             case 'ready': {
                 const cfg = vscode.workspace.getConfiguration('deepseekAgent');
-                this._post({ type: 'modelInfo', model: cfg.get('defaultModel') || 'deepseek-v4-pro', approvalMode: cfg.get('approvalMode') || 'manual' });
+                this._post({
+                    type: 'modelInfo',
+                    model: cfg.get('defaultModel') || 'deepseek-v4-pro',
+                    approvalMode: cfg.get('approvalMode') || 'manual',
+                    provider: cfg.get('provider') || 'deepseek',
+                    interactionMode: cfg.get('interactionMode') || 'agent',
+                });
                 this._store.postList();
                 if (!this._store.sessionId) this._post({ type: 'sessionLoaded', id: null, messages: [] });
                 this._refreshBalance(false);
@@ -169,6 +175,12 @@ class ChatViewProvider {
             case 'sessionPin':     this._store.pin(msg.id); break;
             case 'sessionUnread':  this._store.unread(msg.id); break;
             case 'sessionArchive': this._store.archive(msg.id); break;
+            case 'setInteractionMode': {
+                const cfg = vscode.workspace.getConfiguration('deepseekAgent');
+                cfg.update('interactionMode', msg.mode, vscode.ConfigurationTarget.Global)
+                    .then(() => this._post({ type: 'modelInfo', interactionMode: msg.mode }));
+                break;
+            }
             case 'setMode': {
                 const cfg = vscode.workspace.getConfiguration('deepseekAgent');
                 cfg.update('approvalMode', msg.mode, vscode.ConfigurationTarget.Global)
@@ -185,7 +197,8 @@ class ChatViewProvider {
                 const cfg       = vscode.workspace.getConfiguration('deepseekAgent');
                 const dsKey     = await this._context.secrets.get('deepseekAgent.apiKey') || '';
                 const tvKey     = await this._context.secrets.get('deepseekAgent.tavilyKey') || '';
-                const baseUrl   = cfg.get('apiBaseUrl') || 'https://api.deepseek.com';
+                const baseUrl   = cfg.get('apiBaseUrl') || '';
+                const provider  = cfg.get('provider') || 'deepseek';
                 const maskKey   = (k) => k ? (k.slice(0, 6) + '...' + k.slice(-4)) : '';
                 this._post({
                     type:       'settingsLoaded',
@@ -194,6 +207,7 @@ class ChatViewProvider {
                     tvKeySet:   !!tvKey,
                     tvKeyHint:  maskKey(tvKey),
                     baseUrl:    baseUrl,
+                    provider:   provider,
                 });
                 break;
             }
@@ -203,19 +217,18 @@ class ChatViewProvider {
                 if (which === 'ds') {
                     const testKey = msg.key || (await this._context.secrets.get('deepseekAgent.apiKey') || '');
                     const cfg     = vscode.workspace.getConfiguration('deepseekAgent');
-                    const baseUrl = (msg.baseUrl !== null && msg.baseUrl !== undefined && msg.baseUrl !== '')
-                        ? msg.baseUrl
-                        : (cfg.get('apiBaseUrl') || 'https://api.deepseek.com');
-                    if (!testKey) {
+                    const provider = msg.provider || cfg.get('provider') || 'deepseek';
+                    const resolved = resolveProviderConfig(provider, msg.baseUrl || cfg.get('apiBaseUrl') || '', '');
+                    if (!testKey && !resolved.noApiKey) {
                         this._post({ type: 'testApiKeyResult', which, ok: false, error: 'No API key set' });
                         break;
                     }
                     try {
                         const https = require('https');
                         const http  = require('http');
-                        const base  = (baseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
+                        const base  = resolved.baseUrl.replace(/\/$/, '');
                         const urlObj = new URL('/chat/completions', base);
-                        const body   = JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 });
+                        const body   = JSON.stringify({ model: resolved.model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 });
                         const isHttps = urlObj.protocol === 'https:';
                         const result = await new Promise((resolve) => {
                             const req = (isHttps ? https : http).request({
@@ -295,9 +308,11 @@ class ChatViewProvider {
                 if (msg.tvKey) {
                     await this._context.secrets.store('deepseekAgent.tavilyKey', msg.tvKey);
                 }
+                if (msg.provider) {
+                    await cfg.update('provider', msg.provider, vscode.ConfigurationTarget.Global);
+                }
                 if (typeof msg.baseUrl === 'string') {
-                    const normalized = msg.baseUrl.trim().replace(/\/$/, '') || 'https://api.deepseek.com';
-                    await cfg.update('apiBaseUrl', normalized, vscode.ConfigurationTarget.Global);
+                    await cfg.update('apiBaseUrl', msg.baseUrl.trim().replace(/\/$/, ''), vscode.ConfigurationTarget.Global);
                 }
                 this._refreshBalance(true);
                 break;
@@ -751,11 +766,12 @@ class ChatViewProvider {
     async _refreshBalance(force) {
         const now = Date.now();
         if (!force && now - this._balanceLastAt < 30_000) return;
-        const cfg     = vscode.workspace.getConfiguration('deepseekAgent');
-        const apiKey  = await this._context.secrets.get('deepseekAgent.apiKey') || '';
-        const baseUrl = cfg.get('baseUrl') || '';
+        const cfg      = vscode.workspace.getConfiguration('deepseekAgent');
+        const provider = cfg.get('provider') || 'deepseek';
+        const apiKey   = await this._context.secrets.get('deepseekAgent.apiKey') || '';
+        const resolved = resolveProviderConfig(provider, cfg.get('apiBaseUrl') || '', '');
         if (!apiKey) { this._post({ type: 'balanceUpdate', unsupported: true }); return; }
-        const result = await fetchBalance({ apiKey, baseUrl });
+        const result = await fetchBalance({ apiKey, baseUrl: resolved.baseUrl });
         if (result === null) { this._post({ type: 'balanceUpdate', unsupported: true }); return; }
         this._balanceLastAt = Date.now();
         this._post({ type: 'balanceUpdate', ...result });

@@ -20,24 +20,82 @@
   var modelBtn   = document.getElementById("modelBtn");
   var modelDrop  = document.getElementById("modelDrop");
   var _modelOpen = false;
-  var MODELS = [
-    { value: "deepseek-v4-pro",   name: "deepseek-v4-pro",   desc: "DeepSeek V4 Pro — 旗舰推理模型" },
-    { value: "deepseek-v4-flash", name: "deepseek-v4-flash",  desc: "DeepSeek V4 Flash — 快速轻量模型" },
-    { value: "deepseek-reasoner", name: "deepseek-reasoner",  desc: "DeepSeek Reasoner — 深度思维链模型" },
-  ];
+  var PROVIDER_MODELS = {
+    deepseek: [
+      { value: "deepseek-v4-pro",   name: "deepseek-v4-pro",   desc: "Flagship — best quality" },
+      { value: "deepseek-v4-flash", name: "deepseek-v4-flash",  desc: "Fast & cheap" },
+      { value: "deepseek-reasoner", name: "deepseek-reasoner",  desc: "Deep chain-of-thought" },
+    ],
+    openai: [
+      { value: "gpt-4o",       name: "gpt-4o",       desc: "Flagship multimodal" },
+      { value: "gpt-4o-mini",  name: "gpt-4o-mini",  desc: "Fast & affordable" },
+      { value: "gpt-4.1",      name: "gpt-4.1",      desc: "Latest GPT-4.1" },
+      { value: "gpt-4.1-mini", name: "gpt-4.1-mini", desc: "Fast GPT-4.1" },
+      { value: "o3",           name: "o3",            desc: "Advanced reasoning" },
+    ],
+    groq: [
+      { value: "llama-3.3-70b-versatile", name: "llama-3.3-70b", desc: "Fast Llama 3.3 70B" },
+      { value: "llama-3.1-8b-instant",    name: "llama-3.1-8b",  desc: "Ultra-fast 8B" },
+      { value: "gemma2-9b-it",            name: "gemma2-9b",     desc: "Google Gemma 2 9B" },
+      { value: "mixtral-8x7b-32768",      name: "mixtral-8x7b",  desc: "Mixtral 8x7B 32K ctx" },
+    ],
+    ollama: [],
+    gemini: [
+      { value: "gemini-2.0-flash", name: "gemini-2.0-flash", desc: "Fast & capable" },
+      { value: "gemini-2.5-flash", name: "gemini-2.5-flash", desc: "Latest Gemini Flash" },
+      { value: "gemini-1.5-pro",   name: "gemini-1.5-pro",   desc: "2M token context" },
+    ],
+    custom: [],
+  };
+  var MODELS = PROVIDER_MODELS.deepseek;
+  var _currentProvider = 'deepseek';
+
   function setModelUI(model){
-    var md = MODELS.find(function(x){ return x.value === model; }) || MODELS[0];
+    var md = MODELS.find(function(x){ return x.value === model; });
+    if (!md) md = { value: model, name: model, desc: '' };
     if (modelPicker) modelPicker.dataset.model = md.value;
-    if (modelBtn) modelBtn.innerHTML = md.name + " <span class='mode-chev'>\u25BE</span>";
+    if (modelBtn) {
+      modelBtn.textContent = '';
+      modelBtn.appendChild(document.createTextNode(String(md.name)));
+      modelBtn.appendChild(document.createTextNode(' '));
+      var chev = document.createElement('span');
+      chev.className = 'mode-chev';
+      chev.textContent = '\u25BE';
+      modelBtn.appendChild(chev);
+    }
     if (modelDrop){ var opts = modelDrop.querySelectorAll(".mo"); for (var i=0;i<opts.length;i++) opts[i].classList.toggle("sel", opts[i].dataset.model === md.value); }
   }
   function getSelectedModel(){
-    return modelPicker ? (modelPicker.dataset.model || "deepseek-v4-pro") : "deepseek-v4-pro";
+    var stored = modelPicker ? modelPicker.dataset.model : '';
+    return stored || (MODELS[0] && MODELS[0].value) || (_currentProvider === 'ollama' || _currentProvider === 'custom' ? '' : 'deepseek-v4-pro');
   }
   function openModelDrop(){
     if (!modelDrop || _modelOpen) return;
     var cur = getSelectedModel();
-    var h = "<div class='mode-drop-hd'>切换模型</div>";
+    var h = '';
+    if (_currentProvider === 'ollama' || _currentProvider === 'custom') {
+      h = "<div class='mode-drop-hd'>Type model name</div>" +
+          "<div style='padding:6px 10px'><input id='ollama-model-input' type='text' value=''" +
+          " placeholder='e.g. llama3.2, mistral, codellama'" +
+          " style='width:100%;box-sizing:border-box;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,#555);border-radius:4px;padding:4px 8px;font-size:12px'/></div>" +
+          "<div style='padding:2px 10px 6px;font-size:11px;opacity:.5'>Press Enter to confirm</div>";
+      modelDrop.innerHTML = h;
+      modelDrop.style.display = 'block';
+      _modelOpen = true;
+      var inp = document.getElementById('ollama-model-input');
+      if (inp) {
+        inp.focus(); inp.select();
+        inp.addEventListener('keydown', function(e){
+          if (e.key === 'Enter') {
+            var val = inp.value.trim();
+            if (val) { setModelUI(val); vscode.postMessage({ type: 'setModel', model: val }); }
+            closeModelDrop();
+          } else if (e.key === 'Escape') { closeModelDrop(); }
+        });
+      }
+      return;
+    }
+    h = "<div class='mode-drop-hd'>Switch Model</div>";
     for (var i=0;i<MODELS.length;i++){
       var md = MODELS[i];
       h += "<div class='mo" + (md.value === cur ? " sel" : "") + "' data-model='" + md.value + "'>" +
@@ -53,6 +111,53 @@
     modelDrop.style.display = "none";
     _modelOpen = false;
   }
+  function switchToProvider(provider){
+    _currentProvider = provider;
+    MODELS = PROVIDER_MODELS[provider] || [];
+    if (MODELS.length) {
+      var defaultModel = MODELS[0].value;
+      setModelUI(defaultModel);
+    } else {
+      if (modelPicker) modelPicker.dataset.model = '';
+      if (modelBtn) modelBtn.innerHTML = "<span style='opacity:.45;font-style:italic'>custom model</span> <span class='mode-chev'>▾</span>";
+    }
+    if (stgDsKey) {
+      if (provider === 'ollama') {
+        stgDsKey.placeholder = 'No API key required';
+        stgDsKey.style.opacity = '0.4';
+        stgDsKey.disabled = true;
+      } else {
+        stgDsKey.disabled = false;
+        stgDsKey.style.opacity = '';
+        stgDsKey.placeholder = _stgDsKeySet ? '(configured)' : 'sk-...';
+      }
+    }
+    if (stgDsLink) {
+      var linkInfo = PROVIDER_KEY_LINKS[provider];
+      if (linkInfo) { stgDsLink.textContent = linkInfo.label; stgDsLink.style.display = ''; }
+      else { stgDsLink.style.display = 'none'; }
+    }
+    if (stgBaseReset) {
+      var resetUrl = PROVIDER_URLS[provider] || '';
+      stgBaseReset.onclick = function(){ if (stgBaseUrl) { stgBaseUrl.value = resetUrl; _stgUpdateDirtyBar(); } };
+    }
+  }
+  /* ── Interaction Mode toggle (Agent ↔ Plan) ── */
+  var iModePicker = document.getElementById("iModePicker");
+  var iModeBtn    = document.getElementById("iModeBtn");
+  var _curIMode   = "agent"; // tracks current interaction mode for ft-mode display
+  var INTERACTION_MODES = [
+    { value: "agent", icon: "tools",       name: "Agent", desc: "自主调用工具完成任务（文件读写、Shell、搜索等）" },
+    { value: "plan",  icon: "list-ordered", name: "Plan",  desc: "只探索代码库、生成可审阅的计划，不执行任何写操作" },
+  ];
+  function setIModeUI(mode){
+    var md = INTERACTION_MODES.find(function(x){ return x.value === mode; }) || INTERACTION_MODES[0];
+    _curIMode = md.value;
+    if (iModePicker) iModePicker.dataset.im = mode;
+    if (iModeBtn) iModeBtn.innerHTML = "<i class='codicon codicon-" + md.icon + "'></i> " + md.name;
+  }
+
+  /* ── Approval Mode picker (Manual / Auto-Edit / Autopilot / Read-Only) ── */
   var modePicker = document.getElementById("modePicker");
   var modeBtn    = document.getElementById("modeBtn");
   var modeDrop   = document.getElementById("modeDrop");
@@ -1693,6 +1798,12 @@
     vscode.postMessage({type:"setModel", model: model});
     closeModelDrop();
   });
+  iModeBtn && iModeBtn.addEventListener("click", function(e){
+    e.stopPropagation();
+    var next = _curIMode === "agent" ? "plan" : "agent";
+    setIModeUI(next);
+    vscode.postMessage({type:"setInteractionMode", mode: next});
+  });
   modeBtn && modeBtn.addEventListener("click", function(e){
     e.stopPropagation();
     _modeOpen ? closeModeDrop() : openModeDrop();
@@ -1712,8 +1823,26 @@
   var _stgOpen = false;
   var _stgDsKeySet = false, _stgTvKeySet = false;
   var _stgOrigBaseUrl = '';
+  var _stgOrigProvider = 'deepseek';
+  var PROVIDER_KEY_LINKS = {
+    deepseek:   { url: 'https://platform.deepseek.com/api_keys',  label: '↗ platform.deepseek.com/api_keys' },
+    openai:     { url: 'https://platform.openai.com/api-keys',    label: '↗ platform.openai.com/api-keys' },
+    groq:       { url: 'https://console.groq.com/keys',           label: '↗ console.groq.com/keys' },
+    ollama:     null,
+    gemini:     { url: 'https://aistudio.google.com/app/apikey',  label: '↗ aistudio.google.com/app/apikey' },
+    custom:     null,
+  };
+  var PROVIDER_URLS = {
+    deepseek:   'https://api.deepseek.com',
+    openai:     'https://api.openai.com/v1',
+    groq:       'https://api.groq.com/openai/v1',
+    ollama:     'http://localhost:11434/v1',
+    gemini:     'https://generativelanguage.googleapis.com/v1beta/openai/',
+    custom:     '',
+  };
   var _stgTestTimers = {};
 
+  var stgProvider  = document.getElementById('s-provider');
   var stgOverlay   = document.getElementById('settings-overlay');
   var stgDsKey     = document.getElementById('s-ds-key');
   var stgDsEye     = document.getElementById('s-ds-key-eye');
@@ -1736,6 +1865,7 @@
   function _stgIsDirty(){
     return (stgDsKey && stgDsKey.value !== '') ||
            (stgTvKey && stgTvKey.value !== '') ||
+           (stgProvider && stgProvider.value !== _stgOrigProvider) ||
            (stgBaseUrl && stgBaseUrl.value !== _stgOrigBaseUrl);
   }
   function _stgUpdateDirtyBar(){
@@ -1760,7 +1890,9 @@
     if (stgDsKey) stgDsKey.value = '';
     if (stgTvKey) stgTvKey.value = '';
     if (stgBaseUrl) stgBaseUrl.value = '';
+    if (stgProvider) stgProvider.value = 'deepseek';
     _stgOrigBaseUrl = '';
+    _stgOrigProvider = 'deepseek';
     _stgDsKeySet = false; _stgTvKeySet = false;
     if (stgDirtyBar) stgDirtyBar.style.display = 'none';
     _stgSetResult(stgDsResult, 'ds', '', '');
@@ -1791,12 +1923,20 @@
   stgDiscard   && stgDiscard.addEventListener('click',   function(){
     if (stgDsKey) stgDsKey.value = '';
     if (stgTvKey) stgTvKey.value = '';
+    if (stgProvider) stgProvider.value = _stgOrigProvider;
     if (stgBaseUrl) stgBaseUrl.value = _stgOrigBaseUrl;
     closeSettingsModal(true);
   });
   stgDsKey  && stgDsKey.addEventListener('input',  _stgUpdateDirtyBar);
   stgTvKey  && stgTvKey.addEventListener('input',  _stgUpdateDirtyBar);
   stgBaseUrl && stgBaseUrl.addEventListener('input', _stgUpdateDirtyBar);
+  stgProvider && stgProvider.addEventListener('change', function(){
+    var prov = stgProvider.value;
+    var preset = PROVIDER_URLS[prov];
+    if (preset !== undefined && stgBaseUrl) stgBaseUrl.value = preset;
+    switchToProvider(prov);
+    _stgUpdateDirtyBar();
+  });
   stgDsEye && stgDsEye.addEventListener('click', function(){
     if (!stgDsKey) return;
     stgDsKey.type = stgDsKey.type === 'password' ? 'text' : 'password';
@@ -1810,7 +1950,8 @@
   });
   stgDsLink && stgDsLink.addEventListener('click', function(e){
     e.preventDefault();
-    vscode.postMessage({ type: 'openExternal', url: 'https://platform.deepseek.com/api_keys' });
+    var linkInfo = PROVIDER_KEY_LINKS[_stgOrigProvider];
+    if (linkInfo) vscode.postMessage({ type: 'openExternal', url: linkInfo.url });
   });
   stgTvLink && stgTvLink.addEventListener('click', function(e){
     e.preventDefault();
@@ -1821,7 +1962,8 @@
     var url = stgBaseUrl ? stgBaseUrl.value.trim() : '';
     _stgSetResult(stgDsResult, 'ds', 'pending', '⟳ Testing...');
     if (stgDsTest) stgDsTest.disabled = true;
-    vscode.postMessage({ type: 'testApiKey', which: 'ds', key: key || null, baseUrl: url || null });
+    var prov = stgProvider ? stgProvider.value : 'deepseek';
+    vscode.postMessage({ type: 'testApiKey', which: 'ds', key: key || null, baseUrl: url || null, provider: prov });
   });
   stgTvTest && stgTvTest.addEventListener('click', function(){
     var key = stgTvKey ? stgTvKey.value.trim() : '';
@@ -1830,14 +1972,20 @@
     vscode.postMessage({ type: 'testApiKey', which: 'tv', key: key || null });
   });
   stgSaveBtn && stgSaveBtn.addEventListener('click', function(){
-    var dsKey    = stgDsKey   ? stgDsKey.value.trim()   : null;
-    var tvKey    = stgTvKey   ? stgTvKey.value.trim()   : null;
-    var baseUrl  = stgBaseUrl ? stgBaseUrl.value.trim() : null;
+    var dsKey    = stgDsKey    ? stgDsKey.value.trim()    : null;
+    var tvKey    = stgTvKey    ? stgTvKey.value.trim()    : null;
+    var provider = stgProvider ? stgProvider.value        : _stgOrigProvider;
+    var rawUrl   = stgBaseUrl  ? stgBaseUrl.value.trim()  : '';
+    // Don't persist preset URLs — save empty so the backend always resolves
+    // the correct URL from the provider preset, avoiding stale URL overrides.
+    var presetUrl = PROVIDER_URLS[provider] || '';
+    var baseUrl  = (rawUrl && rawUrl !== presetUrl) ? rawUrl : '';
     vscode.postMessage({
-      type: 'saveApiSettings',
-      dsKey:   dsKey   || null,
-      tvKey:   tvKey   || null,
-      baseUrl: baseUrl !== null ? baseUrl : _stgOrigBaseUrl,
+      type:     'saveApiSettings',
+      dsKey:    dsKey    || null,
+      tvKey:    tvKey    || null,
+      provider: provider,
+      baseUrl:  baseUrl,
     });
     closeSettingsModal(true);
   });
@@ -1854,7 +2002,10 @@
     if (m.type === "settingsLoaded"){
       _stgDsKeySet = !!m.dsKeySet;
       _stgTvKeySet = !!m.tvKeySet;
-      _stgOrigBaseUrl = m.baseUrl || 'https://api.deepseek.com';
+      _stgOrigProvider = m.provider || 'deepseek';
+      _stgOrigBaseUrl  = m.baseUrl  || PROVIDER_URLS[_stgOrigProvider] || 'https://api.deepseek.com';
+      if (stgProvider) stgProvider.value = _stgOrigProvider;
+      switchToProvider(_stgOrigProvider);
       if (stgDsKey) { stgDsKey.value = ''; stgDsKey.placeholder = _stgDsKeySet ? (m.dsKeyHint || '(configured)') : 'sk-...'; }
       if (stgTvKey) { stgTvKey.value = ''; stgTvKey.placeholder = _stgTvKeySet ? (m.tvKeyHint || '(configured)') : 'tvly-...'; }
       if (stgBaseUrl) stgBaseUrl.value = _stgOrigBaseUrl;
@@ -2193,9 +2344,16 @@
       if (!m.running) sb.textContent = "⚠ 后端服务器未启动 — 发送时将自动启动";
       dot.className = "dot" + (m.running ? "" : " err");
     } else if (m.type === "modelInfo"){
+      if (m.provider && m.provider !== _currentProvider) { switchToProvider(m.provider); }
       if (m.model){
         setModelUI(m.model);
-        ftMode.textContent = "agent · " + m.model;
+        ftMode.textContent = _curIMode + " · " + m.model;
+      }
+      if (m.interactionMode){
+        setIModeUI(m.interactionMode);
+        // refresh footer with updated interaction mode
+        var _curModel = (modelPicker && modelPicker.dataset.model) || "deepseek-v4-pro";
+        ftMode.textContent = m.interactionMode + " · " + _curModel;
       }
       if (m.approvalMode){ setModeUI(m.approvalMode); }
     } else if (m.type === "balanceUpdate"){

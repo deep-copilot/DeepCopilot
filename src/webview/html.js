@@ -31,6 +31,7 @@ function buildWebviewHtml(webview, extensionUri) {
         cacheTitle:      t('wvCacheTitle'),
         switchModel:     t('wvSwitchModel'),
         approvalMode:    t('wvApprovalMode'),
+        interactionMode: t('wvInteractionMode'),
         balanceTitle:    t('wvBalanceTitle'),
         balanceInit:     t('wvBalanceInit'),
     };
@@ -106,6 +107,9 @@ function buildWebviewHtml(webview, extensionUri) {
     </div>
     <div id="composer-bar">
       <div class="cb-left">
+        <div id="iModePicker" class="mode-picker" data-im="agent">
+          <button id="iModeBtn" class="cbtn mode-trigger" title="${ui.interactionMode}"><i class="codicon codicon-tools"></i> Agent</button>
+        </div>
         <div id="modelPicker" class="mode-picker" data-model="deepseek-v4-pro">
           <button id="modelBtn" class="cbtn mode-trigger" title="${ui.switchModel}">⚡ v4-pro <span class="mode-chev">▾</span></button>
           <div id="modelDrop" class="mode-drop" style="display:none"></div>
@@ -141,7 +145,19 @@ function buildWebviewHtml(webview, extensionUri) {
     </div>
     <div class="settings-body">
       <div class="settings-section">
-        <div class="settings-section-label">DeepSeek AI</div>
+        <div class="settings-section-label">AI Provider</div>
+        <div class="settings-field">
+          <label class="settings-label" for="s-provider">Provider</label>
+          <select id="s-provider" class="settings-input" style="cursor:pointer">
+            <option value="deepseek">DeepSeek</option>
+            <option value="openai">OpenAI</option>
+            <option value="groq">Groq</option>
+            <option value="ollama">Ollama (local)</option>
+            <option value="gemini">Gemini</option>
+            <option value="custom">Custom</option>
+          </select>
+          <span class="settings-hint">Auto-fills Base URL · swap model in VS Code settings</span>
+        </div>
         <div class="settings-field">
           <label class="settings-label" for="s-ds-key">API Key <span class="settings-required">*</span></label>
           <div class="settings-input-row">
