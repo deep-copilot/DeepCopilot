@@ -20,7 +20,10 @@ export default {
         'revert',    // 回滚
         'build',     // 影响构建系统的变更
         'security',  // 安全修复（项目自定义）
-        'release',   // 版本发布（项目自定义）
+        'release',   // 版本发布、打包、发布 changelog（项目自定义）
+        'deps',      // 依赖升级 / 降级（比 chore: bump 语义更清晰）
+        'i18n',      // 国际化 / 本地化文案变更
+        'ux',        // UX / 交互改进（不引入新功能，区别于 feat）
       ],
     ],
     // subject 最大长度（允许中文描述）
