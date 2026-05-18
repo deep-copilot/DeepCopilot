@@ -19,8 +19,9 @@ const MAX_BYTES_PER_EXECUTION     = 64 * 1024;
 
 // terminalId (string, derived from Terminal object identity) -> Execution[]
 //   { id, command, cwd, exitCode, startedAt, endedAt, output, running }
-const _buffers = new WeakMap();   // Terminal -> Execution[]
-const _terminalIds = new WeakMap(); // Terminal -> stable string id
+const _buffers      = new WeakMap();  // Terminal   -> Execution[]
+const _execToRec    = new WeakMap();  // TerminalShellExecution -> rec  (for precise end-event matching)
+const _terminalIds  = new WeakMap();  // Terminal   -> stable string id
 let   _idSeq = 0;
 
 let _disposables = [];
@@ -79,14 +80,17 @@ function start(context) {
                 running:   true,
             };
             _push(terminal, rec);
+            // Register execution → rec mapping for precise end-event lookup.
+            if (execution) _execToRec.set(execution, rec);
 
             // Stream stdout/stderr into the record. read() yields strings.
+            // Break immediately once the byte cap is reached — continuing to
+            // iterate over a large stream wastes CPU with no benefit.
             try {
                 const stream = execution.read();
                 for await (const chunk of stream) {
-                    if (!rec.running && rec.output.length >= MAX_BYTES_PER_EXECUTION) break;
                     const remain = MAX_BYTES_PER_EXECUTION - rec.output.length;
-                    if (remain <= 0) continue;
+                    if (remain <= 0) break;
                     const s = typeof chunk === 'string' ? chunk : String(chunk || '');
                     rec.output += s.length > remain ? s.slice(0, remain) : s;
                 }
@@ -101,17 +105,22 @@ function start(context) {
     const endSub = (typeof vscode.window.onDidEndTerminalShellExecution === 'function')
         ? vscode.window.onDidEndTerminalShellExecution((e) => {
             try {
-                const list = _buffers.get(e.terminal);
-                if (!list || !list.length) return;
-                // Match by execution-object identity if available; else newest running.
-                let rec = null;
-                for (let i = list.length - 1; i >= 0; i--) {
-                    if (list[i].running) { rec = list[i]; break; }
+                // Prefer WeakMap lookup for O(1) exact match; fall back to
+                // "most-recent running" for robustness against edge cases where
+                // the execution object differs (e.g. proxy wrapping).
+                let rec = e.execution ? _execToRec.get(e.execution) : null;
+                if (!rec) {
+                    const list = _buffers.get(e.terminal);
+                    if (!list || !list.length) return;
+                    for (let i = list.length - 1; i >= 0; i--) {
+                        if (list[i].running) { rec = list[i]; break; }
+                    }
                 }
                 if (!rec) return;
                 rec.running  = false;
                 rec.endedAt  = Date.now();
                 rec.exitCode = typeof e.exitCode === 'number' ? e.exitCode : null;
+                if (e.execution) try { _execToRec.delete(e.execution); } catch {}
             } catch { /* non-fatal */ }
         })
         : null;
