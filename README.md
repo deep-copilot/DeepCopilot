@@ -646,10 +646,6 @@ MIT © [ZhouChaunge](https://github.com/ZhouChaunge). See [LICENSE](./LICENSE).
   </picture>
 </a>
 
-> 中文：图表由 [star-history.com](https://www.star-history.com) 实时基于 GitHub Star API 渲染（SVG 端点 `api.star-history.com/svg`，相比 PNG 更新更及时）。请注意 GitHub 自身的图片代理 `camo.githubusercontent.com` 会再缓存几小时；若想看到最新数据，请点击图表跳转到 star-history.com 查看，或在 URL 末尾追加 `&_=<时间戳>` 强制刷新缓存。
->
-> English: This chart is generated **live** by [star-history.com](https://www.star-history.com) from the GitHub Stars API (the `api.star-history.com/svg` endpoint refreshes more often than the PNG one). Note: GitHub's image proxy (`camo.githubusercontent.com`) re-caches the chart for a few hours when displayed on github.com, so the embedded image is **near-real-time, not strictly real-time**. Click through to star-history.com for the freshest data, or append `&_=<unix-ts>` to bust the cache.
-
 ---
 
 <p align="center">
