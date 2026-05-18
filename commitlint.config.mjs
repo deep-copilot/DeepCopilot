@@ -20,6 +20,7 @@ export default {
         'revert',    // 回滚
         'build',     // 影响构建系统的变更
         'security',  // 安全修复（项目自定义）
+        'release',   // 版本发布（项目自定义）
       ],
     ],
     // subject 最大长度（允许中文描述）
