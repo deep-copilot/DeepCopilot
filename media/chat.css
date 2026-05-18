@@ -280,6 +280,11 @@ body.narrow #ia{padding-left:8px;padding-right:8px}
 .chip-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip-line{opacity:.7;font-size:10.5px;flex-shrink:0}
 .chip-live{background:var(--vscode-editor-selectionBackground,rgba(0,120,215,.18));border-color:var(--vscode-editor-selectionHighlightBorder,rgba(0,120,215,.4))}
+/* Issue #97: external files are shown but visually de-emphasized — they are
+   visible to the user but not auto-attached to the prompt. A dashed border
+   distinguishes them from in-workspace chips at a glance. */
+.chip-external{opacity:.65;border-style:dashed;background:transparent}
+.chip-external .chip-ico{color:var(--vscode-descriptionForeground,inherit)}
 #inp-row{display:flex;align-items:flex-start;width:100%}
 #skill-notice{display:none;align-items:center;gap:5px;background:#0074cc;color:#fff;border-radius:12px;padding:3px 8px 3px 11px;font-size:12px;font-weight:500;white-space:nowrap;flex-shrink:0;margin:8px 0 0 10px;align-self:flex-start}
 #skill-notice .skill-notice-x{background:none;border:none;color:#fff;cursor:pointer;font-size:15px;line-height:1;padding:0;opacity:.75}

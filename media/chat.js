@@ -1201,7 +1201,14 @@
       var lsLine = (liveSelection.startLine !== undefined && liveSelection.endLine !== undefined)
         ? '<span class="chip-line">:' + liveSelection.startLine + (liveSelection.endLine !== liveSelection.startLine ? '-' + liveSelection.endLine : '') + '</span>'
         : '';
-      liveHtml = '<span class="chip chip-live" title="'+escHtml(liveSelection.path)+'">' +
+      // Issue #97: external files (outside any workspace folder) are shown
+      // with a dimmer style and a tooltip that exposes the absolute path,
+      // signalling that they are visible but NOT auto-included in the prompt.
+      var extCls = liveSelection.external ? ' chip-external' : '';
+      var extTip = liveSelection.external
+        ? ('External (\u5916\u90e8\u6587\u4ef6, \u4e0d\u81ea\u52a8\u9644\u5e26): ' + liveSelection.path)
+        : liveSelection.path;
+      liveHtml = '<span class="chip chip-live'+extCls+'" title="'+escHtml(extTip)+'">' +
         '<span class="codicon codicon-selection chip-ico"></span>' +
         '<span class="chip-name">' + escHtml(lsName) + '</span>' + lsLine +
         '<button class="chip-x chip-x-live" title="取消选区">×</button></span>';
@@ -1592,7 +1599,10 @@
     // selected content. Bare "file-open" chips are visual markers only; the
     // active editor's context is provided by the backend via the standard
     // attachment-block path so we avoid sending an "(empty)" placeholder.
-    if (liveSelection && liveSelection.content) _allAtt.push(liveSelection);
+    // Issue #97: external files (outside any workspace folder) are visible
+    // via the chip but must NOT auto-leak into the prompt. The user must
+    // explicitly attach them via right-click / #file picker if desired.
+    if (liveSelection && liveSelection.content && !liveSelection.external) _allAtt.push(liveSelection);
     _allAtt = _allAtt.concat(attachedFiles.filter(function(f){ return f.content !== null || !!f.imageData; }));
     if (_allAtt.length) { toSend.attachments = _allAtt; }
     if (_pendingRefs && _pendingRefs.length) { toSend.pendingRefs = _pendingRefs; }

@@ -241,19 +241,29 @@ function activate(context) {
     );
 
     // Auto-attach live selection chip when the user selects text in any editor
+    // Issue #97: previously the empty-selection branch called clearLiveSelection,
+    // which hid the chip the moment the user clicked into a file without dragging
+    // a selection. We now keep the file chip (the provider supports a "no range"
+    // variant) and only clear when the editor itself is gone.
     let _selDebounce = null;
     context.subscriptions.push(
         vscode.window.onDidChangeTextEditorSelection(e => {
             if (_selDebounce) clearTimeout(_selDebounce);
             _selDebounce = setTimeout(() => {
                 _selDebounce = null;
-                const sel = e.selections && e.selections[0];
-                if (sel && !sel.isEmpty) {
-                    chatProvider.attachLiveSelection(e.textEditor);
-                } else {
-                    chatProvider.clearLiveSelection();
-                }
+                chatProvider.attachLiveSelection(e.textEditor);
             }, 300);
+        })
+    );
+
+    // Issue #97: react to active-editor changes (Ctrl+Tab, Explorer click,
+    // closing the last tab, etc.). onDidChangeTextEditorSelection does NOT
+    // fire when only the active editor changes, so without this listener the
+    // chip was stuck on whichever editor last had a selection event.
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(editor => {
+            if (editor) chatProvider.attachLiveSelection(editor);
+            else chatProvider.clearLiveSelection();
         })
     );
 

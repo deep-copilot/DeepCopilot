@@ -16,7 +16,7 @@ const path   = require('path');
 const fs     = require('fs');
 
 const { Logger }           = require('../logger');
-const { wsRoot, resolvePath, isInsideWorkspace } = require('../utils/paths');
+const { wsRoot, resolvePath, isInsideWorkspace, findContainingFolder } = require('../utils/paths');
 const { isZh }             = require('../utils/i18n');
 const { openFile }         = require('./openFile');
 const { buildWebviewHtml } = require('../webview/html');
@@ -158,6 +158,10 @@ class ChatViewProvider {
                     const skills = discoverSkills().map(s => ({ name: s.name, desc: s.desc, hint: s.hint }));
                     if (skills.length) this._post({ type: 'skillList', skills });
                 } catch { /* non-fatal: skill discovery failures must not break startup */ }
+                // Issue #97: push the current active editor as the initial chip
+                // so users see context immediately after the webview boots,
+                // without having to click into the editor first.
+                try { this.attachLiveSelection(vscode.window.activeTextEditor); } catch { /* non-fatal */ }
                 break;
             }
             case 'balanceRefresh': this._refreshBalance(true); break;
@@ -560,6 +564,35 @@ class ChatViewProvider {
     // ─── Public API for extension commands ──────────────────────────────────
 
     /**
+     * Compute display path + workspace location for a TextDocument.
+     * Issue #97: multi-root aware + external-file aware.
+     *  - Returns null for unsupported schemes (we only handle file/untitled;
+     *    synthetic schemes like git:/output:/vscode-userdata: are intentionally
+     *    refused because their contents are derived views, not source files).
+     *  - For workspace-internal files, `rel` is relative to the *containing*
+     *    folder (not necessarily the first one).
+     *  - For workspace-external files, `external` is true and `rel` falls back
+     *    to the absolute path so the UI can disambiguate same-named files.
+     *
+     * @param {import('vscode').TextDocument} doc
+     * @returns {{ abs: string, rel: string, external: boolean, untitled: boolean } | null}
+     */
+    _resolveDocLocation(doc) {
+        if (!doc) return null;
+        const scheme = doc.uri.scheme;
+        if (scheme !== 'file' && scheme !== 'untitled') return null;
+        if (scheme === 'untitled') {
+            return { abs: doc.uri.toString(), rel: doc.fileName || 'Untitled', external: false, untitled: true };
+        }
+        const abs = doc.fileName;
+        const hit = findContainingFolder(abs);
+        if (hit) return { abs, rel: hit.rel, external: false, untitled: false };
+        // External: not inside any workspace folder. Use absolute path as the
+        // display key; the UI marks it with a distinct style.
+        return { abs, rel: abs.replace(/\\/g, '/'), external: true, untitled: false };
+    }
+
+    /**
      * Read the active editor selection (or entire file if nothing selected)
      * and push an addAttachment message to the webview.
      * Called by the deepseekAgent.attachSelection command.
@@ -573,21 +606,9 @@ class ChatViewProvider {
             return;
         }
         const doc = editor.document;
-        if (doc.uri.scheme !== 'file' && doc.uri.scheme !== 'untitled') return;
+        const loc = this._resolveDocLocation(doc);
+        if (!loc) return;
 
-        const abs  = doc.fileName;
-        const root = wsRoot();
-        // Security: reject paths outside the workspace
-        if (doc.uri.scheme === 'file' && root && !isInsideWorkspace(abs)) {
-            vscode.window.showWarningMessage(
-                isZh() ? 'Deep Copilot: 只能附加工作区内的文件' : 'Deep Copilot: Only files inside the workspace can be attached'
-            );
-            return;
-        }
-
-        const rel  = root && abs.startsWith(root)
-            ? path.relative(root, abs).replace(/\\/g, '/')
-            : path.basename(abs);
         const lang = doc.languageId;
         const sel  = editor.selection;
 
@@ -602,7 +623,13 @@ class ChatViewProvider {
             if (content.length > 65536) content = content.slice(0, 65536) + '\n... [截断]';
         }
 
-        this._post({ type: 'addAttachment', payload: { path: rel, content, startLine, endLine, lang } });
+        // Issue #97: for explicit user-driven attach (right-click / command),
+        // we honor the user's intent even on external files — they asked for
+        // it. We still tag `external` so the UI can flag it.
+        this._post({
+            type: 'addAttachment',
+            payload: { path: loc.rel, content, startLine, endLine, lang, external: loc.external },
+        });
         // Focus the chat panel so the user can see the chip was added
         vscode.commands.executeCommand('deepseek.chatView.focus').then(() => {}, () => {});
     }
@@ -612,19 +639,23 @@ class ChatViewProvider {
      * by the active-editor-change listener. Always shows a chip for the
      * currently active file. If a non-empty selection exists, the chip also
      * carries the selected text + line range; otherwise it's just a name tag.
+     *
+     * Issue #97:
+     *  - Multi-root aware: paths are computed relative to the *containing*
+     *    workspace folder, not just folders[0].
+     *  - External files (outside every workspace folder) are no longer
+     *    silently dropped. The chip is rendered with an `external` flag so
+     *    the user can see what they have open; the prompt-side attachment
+     *    block below skips them so they don't auto-leak into requests.
      * @param {import('vscode').TextEditor} [editor]
      */
     attachLiveSelection(editor) {
         if (!editor) editor = vscode.window.activeTextEditor;
         if (!editor) { this.clearLiveSelection(); return; }
         const doc = editor.document;
-        if (doc.uri.scheme !== 'file' && doc.uri.scheme !== 'untitled') { this.clearLiveSelection(); return; }
-        const abs  = doc.fileName;
-        const root = wsRoot();
-        if (doc.uri.scheme === 'file' && root && !isInsideWorkspace(abs)) { this.clearLiveSelection(); return; }
-        const rel  = root && abs.startsWith(root)
-            ? path.relative(root, abs).replace(/\\/g, '/')
-            : path.basename(abs);
+        const loc = this._resolveDocLocation(doc);
+        if (!loc) { this.clearLiveSelection(); return; }
+
         const lang = doc.languageId;
         const sel  = editor.selection;
         if (sel && !sel.isEmpty) {
@@ -632,7 +663,10 @@ class ChatViewProvider {
             const startLine = sel.start.line + 1;
             const endLine   = sel.end.line + 1;
             if (content.length > 12000) content = content.slice(0, 12000) + (isZh() ? '\n... [截断]' : '\n... [truncated]');
-            this._post({ type: 'setLiveSelection', payload: { path: rel, content, startLine, endLine, lang } });
+            this._post({
+                type: 'setLiveSelection',
+                payload: { path: loc.rel, content, startLine, endLine, lang, external: loc.external },
+            });
         } else {
             // File is open but no selection: include the full document content
             // (truncated) so that sending the chip attaches the whole file.
@@ -640,7 +674,10 @@ class ChatViewProvider {
             let content = doc.getText();
             const truncated = content.length > FILE_CAP;
             if (truncated) content = content.slice(0, FILE_CAP) + (isZh() ? '\n... [文件超出 60KB 已截断]' : '\n... [file exceeded 60KB and was truncated]');
-            this._post({ type: 'setLiveSelection', payload: { path: rel, content, lang } });
+            this._post({
+                type: 'setLiveSelection',
+                payload: { path: loc.rel, content, lang, external: loc.external },
+            });
         }
     }
 
@@ -653,14 +690,16 @@ class ChatViewProvider {
         const editor = vscode.window.activeTextEditor;
         if (!editor) return null;
         const doc  = editor.document;
-        if (doc.uri.scheme !== 'file' && doc.uri.scheme !== 'untitled') return null;
+        const loc  = this._resolveDocLocation(doc);
+        if (!loc) return null;
+        // Issue #97: never auto-leak the content of files outside the workspace
+        // into the prompt. The chip is still shown so the user is aware of the
+        // file; if they want to include it they must explicitly attach via the
+        // right-click command or the `#file` picker.
+        if (loc.external) return null;
         const sel  = editor.selection;
         const lang = doc.languageId;
-        const root = wsRoot();
-        const abs  = doc.fileName;
-        const rel  = root && abs.startsWith(root)
-            ? path.relative(root, abs).replace(/\\/g, '/')
-            : path.basename(abs);
+        const rel  = loc.rel;
         const lines = ['<attachments>'];
         lines.push(`The user is currently viewing \`${rel}\` (${lang}).`);
         if (!sel.isEmpty) {

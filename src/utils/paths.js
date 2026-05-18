@@ -35,19 +35,57 @@ function resolvePath(p) {
 }
 
 /**
- * Determine whether `absPath` is inside the workspace root (or equal to it).
- * Uses path.relative + safe start checks so symbolic resolution does not
- * matter — we only consider lexical containment, since following symlinks
- * to escape the workspace is itself a signal we want to flag.
+ * Test whether `absPath` is lexically contained by `rootPath`. Uses
+ * path.relative so platform-specific normalization (case-insensitive on
+ * Windows, drive-letter handling) is delegated to Node. Symlinks are not
+ * resolved — following them to escape the boundary is itself a signal we
+ * want to flag at the caller.
  */
-function isInsideWorkspace(absPath) {
-    const root = wsRoot();
-    if (!root) return false;
-    const rel = path.relative(root, absPath);
+function _isContainedBy(absPath, rootPath) {
+    if (!rootPath) return false;
+    const rel = path.relative(rootPath, absPath);
     if (!rel) return true; // exact root
     if (rel.startsWith('..')) return false;
     if (path.isAbsolute(rel)) return false; // different drive on Windows
     return true;
 }
 
-module.exports = { wsRoot, resolvePath, isInsideWorkspace, expandHome };
+/**
+ * Find the workspace folder that contains `absPath`.
+ *
+ * Issue #97: in a multi-root workspace, the first folder is not the only
+ * valid root. Callers that need to label a file relative to its owning
+ * folder (e.g. chat context chips) must walk *all* `workspaceFolders` and
+ * pick the one that lexically contains the path. Returns `null` when the
+ * path is outside every folder (an "external" file).
+ *
+ * @param {string} absPath
+ * @returns {{ folder: import('vscode').WorkspaceFolder, rel: string } | null}
+ */
+function findContainingFolder(absPath) {
+    if (!absPath) return null;
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) return null;
+    // Iterate longest-first so that nested folders win over their parents
+    // (rare, but possible when a user adds both a repo and one of its
+    // subdirectories as roots).
+    const sorted = [...folders].sort((a, b) => b.uri.fsPath.length - a.uri.fsPath.length);
+    for (const folder of sorted) {
+        const root = folder.uri.fsPath;
+        if (_isContainedBy(absPath, root)) {
+            const rel = path.relative(root, absPath).replace(/\\/g, '/');
+            return { folder, rel };
+        }
+    }
+    return null;
+}
+
+/**
+ * Determine whether `absPath` is inside *any* workspace folder.
+ * Multi-root aware (#97).
+ */
+function isInsideWorkspace(absPath) {
+    return findContainingFolder(absPath) !== null;
+}
+
+module.exports = { wsRoot, resolvePath, isInsideWorkspace, expandHome, findContainingFolder };
