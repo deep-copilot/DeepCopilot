@@ -633,11 +633,11 @@ MIT © [ZhouChaunge](https://github.com/ZhouChaunge). See [LICENSE](./LICENSE).
 <a href="https://www.star-history.com/#ZhouChaunge/DeepCopilot&Date">
   <picture>
     <source media="(prefers-color-scheme: dark)"
-            srcset="https://api.star-history.com/svg?repos=ZhouChaunge/DeepCopilot&type=Date&theme=dark&legend=top-left" />
+            srcset="https://api.star-history.com/svg?repos=ZhouChaunge/DeepCopilot&type=Date&theme=dark&legend=top-left&_=20260518" />
     <source media="(prefers-color-scheme: light)"
-            srcset="https://api.star-history.com/svg?repos=ZhouChaunge/DeepCopilot&type=Date&legend=top-left" />
+            srcset="https://api.star-history.com/svg?repos=ZhouChaunge/DeepCopilot&type=Date&legend=top-left&_=20260518" />
     <img alt="Deep Copilot Star History"
-         src="https://api.star-history.com/svg?repos=ZhouChaunge/DeepCopilot&type=Date&legend=top-left" />
+         src="https://api.star-history.com/svg?repos=ZhouChaunge/DeepCopilot&type=Date&legend=top-left&_=20260518" />
   </picture>
 </a>
 
