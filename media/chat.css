@@ -295,6 +295,8 @@ body.narrow #ia{padding-left:8px;padding-right:8px}
 .chip-spin{display:inline-block;animation:chip-rotate 1s linear infinite;font-size:12px}
 @keyframes chip-rotate{to{transform:rotate(360deg)}}
 .chip-img{width:18px;height:18px;object-fit:cover;border-radius:3px;vertical-align:middle;flex-shrink:0}
+.chip-err{background:rgba(244,71,71,.12);border-color:rgba(244,71,71,.5);color:var(--vscode-errorForeground,#f44747)}
+.chip-err .chip-ico{color:#f44747;font-size:14px}
 /* GH-Copilot-style composer card: textarea on top, bottom bar with attach/model/mode/send */
 #composer-card{display:flex;flex-direction:column;background:var(--vscode-input-background);border:1px solid var(--vscode-input-border);border-radius:10px;transition:border-color .12s,box-shadow .12s}
 #composer-card:focus-within{border-color:var(--vscode-focusBorder);box-shadow:0 0 0 1px var(--vscode-focusBorder)}

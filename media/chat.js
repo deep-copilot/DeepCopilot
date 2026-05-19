@@ -1329,6 +1329,12 @@
       var lineLabel = (f.startLine !== undefined && f.endLine !== undefined)
         ? '<span class="chip-line">:' + f.startLine + (f.endLine !== f.startLine ? '-' + f.endLine : '') + '</span>'
         : '';
+      if (f.isErr) {
+        return '<span class="chip chip-err" data-i="'+i+'" title="'+escHtml(f.errText || '')+'">' +
+          '<span class="chip-ico">⚠</span>' +
+          '<span class="chip-name">' + escHtml(f.path) + '</span>' +
+          '<button class="chip-x" data-i="'+i+'" title="移除">×</button></span>';
+      }
       if (f.imageData) {
         return '<span class="chip" data-i="'+i+'" title="'+escHtml(f.path)+'">' +
           '<img class="chip-img" src="'+f.imageData+'" alt=""/>' +
@@ -1716,13 +1722,13 @@
     // via the chip but must NOT auto-leak into the prompt. The user must
     // explicitly attach them via right-click / #file picker if desired.
     if (liveSelection && liveSelection.content && !liveSelection.external) _allAtt.push(liveSelection);
-    _allAtt = _allAtt.concat(attachedFiles.filter(function(f){ return f.content !== null || !!f.imageData; }));
+    _allAtt = _allAtt.concat(attachedFiles.filter(function(f){ return !f.isErr && (f.content !== null || !!f.imageData); }));
     if (_allAtt.length) { toSend.attachments = _allAtt; }
     if (_pendingRefs && _pendingRefs.length) { toSend.pendingRefs = _pendingRefs; }
     // Snapshot visible chips so we can render them in the sent message bubble
     var _snapAtt = [];
     if (liveSelection) _snapAtt.push(liveSelection);
-    _snapAtt = _snapAtt.concat(attachedFiles);
+    _snapAtt = _snapAtt.concat(attachedFiles.filter(function(f){ return !f.isErr; }));
     _pendingAttachments = _snapAtt.length ? _snapAtt : null;
     if (pendingSkill) {
       // Only send the skill name — provider.js reads the full content from disk.
@@ -1733,7 +1739,7 @@
     vscode.postMessage(toSend);
   }
   function resetChat(){
-    var nodes = msgs.querySelectorAll(".msgU,.msgA,.err");
+    var nodes = msgs.querySelectorAll(".msgU,.msgA,.err,.errCard");
     for (var i=0;i<nodes.length;i++) nodes[i].remove();
     if (es) es.style.display = "block";
     sess = { tokens:0, cost:0, cacheHit:0, promptTotal:0 };
@@ -2393,6 +2399,15 @@
       curBubble = null; cur = null; curThk = null; curText = "";
     } else if (m.type === "reply"){
       add("assistant", m.text);
+    } else if (m.type === "contextRefError"){
+      var errPath = '#' + m.refType + (m.value ? ':' + m.value : '');
+      var existIdx = attachedFiles.findIndex(function(f){ return f.isErr && f.path === errPath; });
+      if (existIdx >= 0) {
+        attachedFiles[existIdx].errText = m.text;
+      } else {
+        attachedFiles.push({ path: errPath, content: '', isErr: true, errText: m.text });
+      }
+      renderChips();
     } else if (m.type === "error"){
       addErrorCard(m);
     } else if (m.type === "serverStatus"){

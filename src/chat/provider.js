@@ -478,12 +478,12 @@ class ChatViewProvider {
                 try {
                     const result = await resolveContextRef(refType, value);
                     if (!result || result.error) {
-                        this._post({ type: 'error', text: `#${refType}${value ? ':' + value : ''} — ${result?.error || 'failed'}` });
+                        this._post({ type: 'contextRefError', refType, value, text: result?.error || 'failed' });
                     } else {
                         this._post({ type: 'addAttachment', payload: result });
                     }
                 } catch (e) {
-                    this._post({ type: 'error', text: `#${refType} failed: ${e.message}` });
+                    this._post({ type: 'contextRefError', refType, value, text: e.message });
                 }
                 break;
             }
