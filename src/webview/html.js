@@ -222,16 +222,11 @@ module.exports = { buildWebviewHtml, buildSidebarHintHtml };
 function buildSidebarHintHtml(webview, extensionUri) {
     const logoUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'imgs', 'logo_black_bg.png'));
     const locale  = isZh() ? 'zh' : 'en';
-    const zh      = isZh();
-    const lead    = zh
-        ? '为了更好的使用体验，建议以「标签页」形式打开 Deep Copilot'
-        : 'For the best experience, open Deep Copilot as an editor tab';
-    const b1      = zh ? '聊天界面拥有更大的显示空间' : 'Larger, dedicated chat area';
-    const b2      = zh ? '左侧活动栏可用于资源管理器、源代码管理等' : 'Left activity bar free for Explorer, Git & more';
-    const btnLbl  = zh ? '立即打开' : 'Open now';
-    const hint    = zh
-        ? '\u2299 或直接点击底部状态栏的 Deep Copilot 按钮'
-        : '\u2299 Or click Deep Copilot in the status bar below';
+    const lead    = t('sidebarHintLead');
+    const b1      = t('sidebarHintBenefit1');
+    const b2      = t('sidebarHintBenefit2');
+    const btnLbl  = t('sidebarHintButton');
+    const hint    = t('sidebarHintFooter');
     const nonce   = Buffer.from(Date.now().toString() + Math.random().toString())
         .toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
     const csp = [

@@ -92,6 +92,13 @@ const EN = {
     wvBalanceTitle:     'Account balance (click to refresh)',
     wvBalanceInit:      '💰 Checking...',
 
+    // Sidebar launcher hint page — shown in the left activity-bar view.
+    sidebarHintLead:    'For the best experience, open Deep Copilot as an editor tab',
+    sidebarHintBenefit1:'Larger, dedicated chat area',
+    sidebarHintBenefit2:'Left activity bar free for Explorer, Git & more',
+    sidebarHintButton:  'Open now',
+    sidebarHintFooter:  '⊙ Or click Deep Copilot in the status bar below',
+
     // run_shell stall/timeout diagnostics — issue #69
     // The bracketed `[Note: ...]` prefix is a stable marker token the LLM is
     // instructed (via tools/schema.js) to detect; keep it identical across
@@ -179,6 +186,13 @@ const ZH = {
     wvInteractionMode:  '交互模式',
     wvBalanceTitle:     '账户余额（点击刷新）',
     wvBalanceInit:      '💰 查询中…',
+
+    // Sidebar launcher hint page — shown in the left activity-bar view.
+    sidebarHintLead:    '为了更好的使用体验，建议以「标签页」形式打开 Deep Copilot',
+    sidebarHintBenefit1:'聊天界面拥有更大的显示空间',
+    sidebarHintBenefit2:'左侧活动栏可用于资源管理器、源代码管理等',
+    sidebarHintButton:  '立即打开',
+    sidebarHintFooter:  '⊙ 或直接点击底部状态栏的 Deep Copilot 按钮',
 
     // run_shell stall/timeout diagnostics — issue #69
     // 方括号内的 `[Note: ...]` 是给模型识别的稳定标记，跨语言保持一致；

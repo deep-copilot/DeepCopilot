@@ -331,10 +331,15 @@ function activate(context) {
             chatProvider.bindPanel(panel);
         }),
         vscode.commands.registerCommand('deepseekAgent.moveToRight', async () => {
-            // Open the auxiliary (secondary) side bar so the user can drag the
-            // Deep Copilot view into it. We no longer contribute a dedicated
-            // viewsContainer there because VS Code's `viewsContainers`
-            // contribution point does not support the `auxiliarybar` key.
+            // Toggle the built-in Secondary (Auxiliary) Side Bar so users can
+            // drag the Deep Copilot view into it if they want a right-side
+            // layout. We intentionally use *toggle* (not a hard "show") so
+            // re-invoking the command also collapses the bar — this mirrors
+            // VS Code's own `workbench.action.toggleAuxiliaryBar` UX and
+            // avoids stealing focus when the bar is already visible.
+            // We no longer contribute a dedicated viewsContainer there because
+            // VS Code's `viewsContainers` contribution point does not support
+            // the `auxiliarybar` key for third-party extensions.
             try { await vscode.commands.executeCommand('workbench.action.toggleAuxiliaryBar'); } catch (_) {}
         }),
     );
