@@ -161,6 +161,7 @@
             "groq",
             "ollama",
             "gemini",
+            "anthropic",
             "custom"
           ],
           "enumDescriptions": [
@@ -169,6 +170,7 @@
             "Groq — api.groq.com/openai/v1 (fast Llama/Mixtral, no streaming usage)",
             "Ollama — localhost:11434/v1 (local, no API key required)",
             "Google Gemini (OpenAI-compat endpoint)",
+            "Anthropic — api.anthropic.com (Claude models, native SDK)",
             "Custom — use the Base URL configured above"
           ],
           "description": "AI provider. Selecting a preset auto-fills the Base URL in the settings UI."
@@ -360,6 +362,7 @@
     "lint": "eslint src/"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
     "openai": "^6.38.0"
   },
   "devDependencies": {

@@ -41,23 +41,30 @@
       { value: "gemini-2.0-flash", name: "gemini-2.0-flash", desc: "Gemini 2.0 Flash — 快速" },
       { value: "gemini-1.5-pro",   name: "gemini-1.5-pro",   desc: "Gemini 1.5 Pro — 强大" },
     ],
+    anthropic: [
+      { value: "claude-opus-4-7",          name: "claude-opus-4-7",          desc: "Claude Opus 4.7 — 最强旗舰" },
+      { value: "claude-sonnet-4-6",        name: "claude-sonnet-4-6",        desc: "Claude Sonnet 4.6 — 均衡推荐" },
+      { value: "claude-haiku-4-5-20251001",name: "claude-haiku-4-5",         desc: "Claude Haiku 4.5 — 快速轻量" },
+    ],
     custom: [],
   };
   var PROVIDER_URLS = {
-    deepseek: 'https://api.deepseek.com',
-    openai:   'https://api.openai.com/v1',
-    groq:     'https://api.groq.com/openai/v1',
-    ollama:   'http://localhost:11434/v1',
-    gemini:   'https://generativelanguage.googleapis.com/v1beta/openai/',
-    custom:   '',
+    deepseek:  'https://api.deepseek.com',
+    openai:    'https://api.openai.com/v1',
+    groq:      'https://api.groq.com/openai/v1',
+    ollama:    'http://localhost:11434/v1',
+    gemini:    'https://generativelanguage.googleapis.com/v1beta/openai/',
+    anthropic: 'https://api.anthropic.com',
+    custom:    '',
   };
   var PROVIDER_KEY_LINKS = {
-    deepseek: 'https://platform.deepseek.com/api_keys',
-    openai:   'https://platform.openai.com/api-keys',
-    groq:     'https://console.groq.com/keys',
-    ollama:   null,
-    gemini:   'https://aistudio.google.com/app/apikey',
-    custom:   null,
+    deepseek:  'https://platform.deepseek.com/api_keys',
+    openai:    'https://platform.openai.com/api-keys',
+    groq:      'https://console.groq.com/keys',
+    ollama:    null,
+    gemini:    'https://aistudio.google.com/app/apikey',
+    anthropic: 'https://console.anthropic.com/settings/keys',
+    custom:    null,
   };
   var MODELS = PROVIDER_MODELS.deepseek;
   var _currentProvider = 'deepseek';
