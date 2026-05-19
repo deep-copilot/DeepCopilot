@@ -47,13 +47,6 @@
           "title": "Deep Copilot",
           "icon": "imgs/icon-aux.svg"
         }
-      ],
-      "auxiliarybar": [
-        {
-          "id": "deepseek-aux",
-          "title": "Deep Copilot",
-          "icon": "imgs/icon-aux.svg"
-        }
       ]
     },
     "views": {
@@ -61,13 +54,6 @@
         {
           "type": "webview",
           "id": "deepseek.chatView",
-          "name": "Chat"
-        }
-      ],
-      "deepseek-aux": [
-        {
-          "type": "webview",
-          "id": "deepseek.chatViewAux",
           "name": "Chat"
         }
       ]

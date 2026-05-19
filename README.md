@@ -1,7 +1,7 @@
 # Deep Copilot
 
 <p align="center">
-  <img src="imgs/main_logo.svg" alt="Deep Copilot" width="100%"/>
+  <img src="imgs/main_logo.png" alt="Deep Copilot" width="100%"/>
 </p>
 
 <p align="center">
@@ -653,3 +653,5 @@ MIT © [ZhouChaunge](https://github.com/ZhouChaunge). See [LICENSE](./LICENSE).
   <sub>🇨🇳 让高质量 AI 生产力开放、公平、普惠，触手可及。</sub><br/>
   <sub>🇬🇧 Make high-quality AI productivity open, fair, and affordable for everyone.</sub>
 </p>
+
+<!-- test branch protection 2026-05-19 18:48 -->
