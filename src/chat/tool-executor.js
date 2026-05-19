@@ -21,7 +21,7 @@ const { mcpManager }   = require('../mcp');
 
 const {
     toolReadFile, toolListDir, toolGrepSearch, toolFindFiles,
-    toolWriteFile, toolStrReplaceInFile, toolApplyPatch, toolRunShell, toolReadTerminal, toolWebSearch, toolWebFetch,
+    toolWriteFile, toolStrReplaceInFile, toolApplyPatch, toolRunShell, toolRunShellBg, toolReadTerminal, toolWebSearch, toolWebFetch,
     toolSavePlan,
 } = require('../tools/exec');
 const { skillInvoke, skillCreate } = require('../tools/skill-tools');
@@ -30,7 +30,7 @@ class ToolExecutor {
     // Read-only tools whose results can be cached until workspace changes.
     static CACHEABLE = new Set(['read_file', 'grep_search', 'find_files', 'list_dir', 'web_search', 'web_fetch']);
     // Mutating tools that invalidate the file cache after execution.
-    static MUTATING  = new Set(['write_file', 'str_replace_in_file', 'apply_patch', 'run_shell', 'skill_create']);
+    static MUTATING  = new Set(['write_file', 'str_replace_in_file', 'apply_patch', 'run_shell', 'run_shell_bg', 'skill_create']);
 
     /**
      * @param {vscode.ExtensionContext} context
@@ -60,6 +60,7 @@ class ToolExecutor {
             ['str_replace_in_file', (args)      => toolStrReplaceInFile(args)],
             ['apply_patch',         (args)      => toolApplyPatch(args)],
             ['run_shell',           (args, ctx) => toolRunShell(args, ctx)],
+            ['run_shell_bg',         (args, ctx) => toolRunShellBg(args, ctx)],
             ['read_terminal',       (args, ctx) => toolReadTerminal(args, ctx)],
             ['web_search',          (args, ctx) => toolWebSearch(args, ctx)],
             ['web_fetch',           (args, ctx) => toolWebFetch(args, ctx)],

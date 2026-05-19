@@ -14,6 +14,7 @@
 const { toolReadFile, toolListDir, toolGrepSearch, toolFindFiles } = require('./file-read');
 const { toolWriteFile, toolStrReplaceInFile, toolApplyPatch }     = require('./file-write');
 const { toolRunShell, isDangerous }                               = require('./shell');
+const { toolRunShellBg }                                          = require('./bg-shell');
 const { toolReadTerminal }                                        = require('./read-terminal');
 const { toolWebSearch }                                           = require('./web-search');
 const { toolWebFetch }                                            = require('./web-fetch');
@@ -29,6 +30,7 @@ module.exports = {
     toolStrReplaceInFile,
     toolApplyPatch,
     toolRunShell,
+    toolRunShellBg,
     toolReadTerminal,
     toolWebSearch,
     toolWebFetch,

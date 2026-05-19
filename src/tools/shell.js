@@ -101,9 +101,8 @@ async function toolRunShell(args, ctx = {}) {
     }
 
     const MAX_BUF       = 10 * 1024 * 1024;
-    const MAX_TIMEOUT_MS = 300_000;                                         // 5 min hard cap — issue #69
+    const MAX_TIMEOUT_MS = 1_800_000;                                       // 30 min hard cap (raised from 5 min — issue #122; for tasks > 30 min use run_shell_bg)
     const STALL_PROBE_MS = 15_000;                                          // heartbeat every 15s when no output
-    const KILL_GRACE_MS  = 5_000;                                           // SIGTERM → SIGKILL grace period — issue #69 follow-up
     // Normalize args.timeout_ms: tolerate strings, NaN, negatives, etc.
     // Falls back to 30000ms default, clamps to (0, MAX_TIMEOUT_MS].
     const requestedRaw = Number(args.timeout_ms);
@@ -128,7 +127,6 @@ async function toolRunShell(args, ctx = {}) {
         let stdoutBuf = '';
         let stderrBuf = '';
         let combinedSize = 0;
-        let killedByTimeout = false;
         let killedByAbort   = false;
         let settled         = false;
         let lastOutputAt    = Date.now();                                   // for stall heartbeat — issue #69
@@ -149,19 +147,30 @@ async function toolRunShell(args, ctx = {}) {
         };
 
         const timer = setTimeout(() => {
-            killedByTimeout = true;
-            try { proc.kill('SIGTERM'); } catch {}
-            // If the process ignores SIGTERM (or kill() failed), escalate
-            // to SIGKILL after a short grace period and force-settle so
-            // run_shell can never hang indefinitely.
-            setTimeout(() => {
-                if (settled) return;
-                try { proc.kill('SIGKILL'); } catch {}
-                // Last-resort settle in case 'close' never fires.
-                setTimeout(() => {
-                    if (!settled) settle(truncate(`Error: command timed out after ${timeoutMs}ms and did not terminate after SIGTERM+SIGKILL`));
-                }, 1000);
-            }, KILL_GRACE_MS);
+            // Don't kill the process — hand control back to the agent and let
+            // the process continue running.  The agent should switch to
+            // run_shell_bg for tasks expected to exceed the timeout, or use
+            // read_terminal to poll the VS Code integrated terminal.
+            const partialOut = stdoutBuf.replace(/\s+$/, '');
+            const partialErr = stderrBuf.replace(/\s+$/, '');
+            const silentSec  = Math.round((Date.now() - lastOutputAt) / 1000);
+            settle({
+                command,
+                exitCode:   null,
+                stdout:     partialOut,
+                stderr:     partialErr,
+                truncated:  combinedSize >= MAX_BUF,
+                background: true,
+                pid:        proc.pid ?? null,
+                text: truncate(
+                    `[run_shell] Command still running after ${timeoutMs}ms — control handed back.\n` +
+                    `PID: ${proc.pid ?? 'unknown'} | silent for: ${silentSec}s\n` +
+                    `Tip: for tasks longer than ${Math.round(timeoutMs / 60000)} min, use run_shell_bg instead.\n` +
+                    (partialOut ? `\n--- partial stdout ---\n${partialOut}` : '') +
+                    (partialErr ? `\n--- partial stderr ---\n${partialErr}` : ''),
+                ),
+            });
+            // Process keeps running; we simply stop tracking it here.
         }, timeoutMs);
 
         // Stall heartbeat: when the process produces no output for STALL_PROBE_MS,
@@ -214,14 +223,10 @@ async function toolRunShell(args, ctx = {}) {
         proc.on('close', (code, signal) => {
             const stdout = stdoutBuf.replace(/\s+$/, '');
             const stderr = stderrBuf.replace(/\s+$/, '');
-            if (killedByAbort)   return settle('Error: aborted by user');
-            if (killedByTimeout) {
-                const silentMs = Date.now() - lastOutputAt;
-                const stallNote = silentMs >= STALL_PROBE_MS
-                    ? '\n' + tf('shellSilentTimeout', { sec: Math.round(silentMs / 1000) })
-                    : '';
-                return settle(truncate(`Error: command timed out after ${timeoutMs}ms${stallNote}\n${stdout}${stderr ? '\n--- stderr ---\n' + stderr : ''}`));
-            }
+            if (killedByAbort) return settle('Error: aborted by user');
+            // Note: killedByTimeout is no longer used (timeout now hands back
+            // control without killing).  If the process closes after timeout
+            // already settled, `settle()` is a no-op.
             const exitCode = (code == null && signal) ? `signal:${signal}` : code;
             // Build backward-compatible text field (same as the old string return value).
             let text;
@@ -244,4 +249,4 @@ async function toolRunShell(args, ctx = {}) {
     });
 }
 
-module.exports = { toolRunShell, isDangerous, _dangerCmdApprovals };
+module.exports = { toolRunShell, isDangerous, confirmDangerous, _normCmd, _dangerCmdApprovals };

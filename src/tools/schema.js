@@ -70,7 +70,7 @@ const TOOL_DEFS = [
                 type: 'object',
                 properties: {
                     command: { type: 'string', description: 'Shell command to execute.' },
-                    timeout_ms: { type: 'integer', description: 'Timeout in milliseconds (default 30000, hard capped at 300000 = 5 min).' },
+                    timeout_ms: { type: 'integer', description: 'Timeout in milliseconds (default 30000, hard capped at 1800000 = 30 min). For tasks expected to run longer than 30 min (model training, large builds), use run_shell_bg instead.' },
                 },
                 required: ['command'],
             },
@@ -80,7 +80,7 @@ const TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'read_terminal',
-            description: 'Read the recent output of the user\'s VS Code integrated terminal (commands they ran themselves, including processes still running). Use ONLY when the user references their terminal — phrases like "look at my terminal", "see the error", "check the log above", "port already in use", "the test failed", etc. — or when you need to inspect the result of a command the user just typed. Do NOT use this to re-run commands (use run_shell) and do NOT use it speculatively when the user has not pointed at a terminal. Returns the last N executions of the chosen terminal (default: active terminal) with command line, cwd, exit code, and captured stdout/stderr. If the shell does not have integration enabled, returns a structured error you should surface to the user ONCE — do not repeat the same hint every turn.',
+            description: 'Read the recent output of the user\'s VS Code integrated terminal (commands they ran themselves, including processes still running). Use ONLY when the user references their terminal — phrases like "look at my terminal", "see the error", "check the log above", "port already in use", "the test failed", etc. — or when you need to inspect the result of a command the user just typed. Also use to poll a background job started by run_shell_bg — pass terminal: jobId. Do NOT use this to re-run commands (use run_shell) and do NOT use it speculatively when the user has not pointed at a terminal. Returns the last N executions of the chosen terminal (default: active terminal) with command line, cwd, exit code, and captured stdout/stderr. If the shell does not have integration enabled, returns a structured error you should surface to the user ONCE — do not repeat the same hint every turn.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -90,6 +90,21 @@ const TOOL_DEFS = [
                     includeRunning: { type: 'boolean', description: 'Include the currently-running execution if any (default true). Set false to read only completed commands.' },
                 },
                 required: [],
+            },
+        },
+    },
+    // ─── run_shell_bg: fire-and-forget for long-running tasks (Issue #122) ──
+    {
+        type: 'function',
+        function: {
+            name: 'run_shell_bg',
+            description: 'Start a long-running shell command in a named VS Code integrated terminal and return immediately. Use ONLY for tasks that are expected to run longer than run_shell\'s timeout — model training, large builds, servers, extended test suites. Returns a terminalName (jobId). Poll progress with read_terminal(terminal: jobId); detect completion when "running" becomes false and read the exit code. Do NOT use for quick commands — use run_shell instead.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    command: { type: 'string', description: 'Shell command to execute in the background terminal.' },
+                },
+                required: ['command'],
             },
         },
     },
