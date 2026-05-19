@@ -1,0 +1,80 @@
+name: Dependabot PR 双语说明 / Bilingual Comment
+
+on:
+  pull_request_target:
+    types: [opened]
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: 添加中英文说明 / Add bilingual comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title;
+            const body  = context.payload.pull_request.body || '';
+
+            // 从标题解析：bump X from A to B
+            const match = title.match(/bump (.+?) from ([\S]+) to ([\S]+)/i);
+            const dep  = match ? match[1] : '未知包 / unknown package';
+            const from = match ? match[2] : '旧版本 / old version';
+            const to   = match ? match[3] : '新版本 / new version';
+
+            // 判断是否大版本跳跃
+            const fromMajor = parseInt((from.match(/^(\d+)/) || [])[1] || '0', 10);
+            const toMajor   = parseInt((to.match(/^(\d+)/)   || [])[1] || '0', 10);
+            const isMajor   = toMajor > fromMajor;
+
+            // 判断是否仅 devDependency
+            const isDev = dep.startsWith('@types/') || body.includes('devDependencies');
+            const scopeZh = isDev
+              ? '仅影响开发环境，**不会打包进插件**'
+              : '会打包进插件 VSIX，**请务必验证运行时兼容性**';
+            const scopeEn = isDev
+              ? 'dev-only — **not bundled into the plugin**'
+              : 'bundled into the VSIX — **please verify runtime compatibility**';
+
+            const warningZh = isMajor
+              ? '\n> ⚠️ **跨大版本升级**，请检查 CHANGELOG 是否有 Breaking Change，合并前务必本地运行 `npm install` 验证无报错。'
+              : '';
+            const warningEn = isMajor
+              ? '\n> ⚠️ **Major version bump.** Please review the CHANGELOG for breaking changes and run `npm install` locally before merging.'
+              : '';
+
+            const comment = [
+              '## 📦 依赖升级说明 / Dependency Update Notice',
+              '',
+              `| | |`,
+              `|---|---|`,
+              `| 包名 / Package | \`${dep}\` |`,
+              `| 版本变化 / Version | \`${from}\` → \`${to}\` |`,
+              `| 类型 / Type | ${isDev ? '开发依赖 devDependency' : '运行时依赖 dependency'} |`,
+              '',
+              '---',
+              '',
+              '### 🇨🇳 中文说明',
+              '',
+              `- **是什么**：Dependabot 机器人自动检测到 \`${dep}\` 有新版本，并提交了此 PR。`,
+              `- **影响范围**：${scopeZh}。`,
+              '- **操作建议**：合并前请确认 CI 全部通过，无 Breaking Change。',
+              warningZh,
+              '',
+              '### 🇬🇧 English',
+              '',
+              `- **What**: Dependabot detected a new version of \`${dep}\` and opened this PR automatically.`,
+              `- **Scope**: ${scopeEn}.`,
+              '- **Action**: Ensure all CI checks pass and there are no breaking changes before merging.',
+              warningEn,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: comment,
+            });

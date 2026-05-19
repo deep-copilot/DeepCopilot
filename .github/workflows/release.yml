@@ -1,0 +1,87 @@
+name: Release VSIX / 发布插件
+
+# ─────────────────────────────────────────────────────────────
+# 触发方式 / How to trigger:
+#
+#   1. 先在 release/ 目录手写当前版本的说明文档
+#      e.g. release/notes_v0353.md（对应 v0.35.3）
+#
+#   2. 打 tag 并推送：
+#      git tag v0.35.3
+#      git push origin v0.35.3
+#
+#   3. 本 workflow 自动：
+#      - 校验说明文件是否存在（不存在直接报错，防止空发布）
+#      - npm ci + npm run package → 生成 .vsix
+#      - 在 GitHub Releases 创建版本，附上说明文档和 VSIX
+# ─────────────────────────────────────────────────────────────
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 需要写权限才能创建 Release
+
+    steps:
+      - name: 检出代码 / Checkout
+        uses: actions/checkout@v4
+
+      # ── 第一步：校验说明文件，缺失直接中止 ──────────────────
+      - name: 校验发布说明文件 / Validate release notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"          # e.g. v0.35.3
+          VER="${TAG#v}"                    # 0.35.3
+          SHORT="${VER//./}"               # 0353
+          NOTES="release/notes_v${SHORT}.md"
+
+          if [ ! -f "$NOTES" ]; then
+            echo "──────────────────────────────────────────"
+            echo "❌ 缺少发布说明文件：$NOTES"
+            echo ""
+            echo "   发布前请先创建该文件，格式参考："
+            echo "   release/notes_v0352.md"
+            echo ""
+            echo "   文件需包含中英文双语说明，再重新推送 tag。"
+            echo "──────────────────────────────────────────"
+            exit 1
+          fi
+
+          echo "✅ 发布说明文件已就绪：$NOTES"
+
+      # ── 第二步：安装依赖 ─────────────────────────────────────
+      - name: 安装依赖 / Install dependencies
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      # ── 第三步：构建 VSIX ────────────────────────────────────
+      - name: 构建 VSIX / Build VSIX
+        run: npm run package
+
+      # ── 第四步：发布到 GitHub Releases ──────────────────────
+      - name: 发布到 GitHub Releases / Publish to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          SHORT="${VER//./}"
+          NOTES="release/notes_v${SHORT}.md"
+          VSIX=$(ls release/*.vsix | head -1)
+
+          gh release create "$TAG" \
+            --title "Deep Copilot ${TAG}" \
+            --notes-file "$NOTES" \
+            "${VSIX}#Deep Copilot ${TAG} 插件安装包 (.vsix)"
+
+          echo ""
+          echo "✅ 发布完成 / Release published"
+          echo "   https://github.com/${{ github.repository }}/releases/tag/${TAG}"
