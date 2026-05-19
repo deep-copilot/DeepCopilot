@@ -1,0 +1,22 @@
+# Gitleaks false-positive allowlist.
+#
+# Each line below is a "fingerprint" emitted by `gitleaks detect` in the form
+#   <commit-sha>:<file>:<rule>:<line>
+# Anything listed here is intentionally ignored on subsequent scans.
+#
+# Why these are safe to ignore:
+#  * Both findings live ONLY in git history (commit e465737), inside the
+#    third-party reference dump `claude-code-main/` which was removed from
+#    the working tree by commit 2b50c94 ("chore: remove unused
+#    claude-code-main reference source"). They are not present at HEAD.
+#  * datadog.ts:14 matches `DATADOG_CLIENT_TOKEN = 'pub...'`. Datadog
+#    *client* tokens (the `pub`-prefixed flavour) are explicitly designed to
+#    be embedded in publicly shipped code; they cannot be used to read or
+#    delete data, only to forward client-side telemetry. Not a credential.
+#  * upgrade.tsx:16 matches the literal subscription-tier name
+#    'default_claude_max_20x', triggered purely by entropy. Not a secret.
+#
+# If a real leak ever appears at one of these paths in a *new* commit it will
+# produce a different fingerprint (different commit sha) and still fail CI.
+e465737c04c399dfc3203647bc4d32532135e369:claude-code-main/src/services/analytics/datadog.ts:generic-api-key:14
+e465737c04c399dfc3203647bc4d32532135e369:claude-code-main/src/commands/upgrade/upgrade.tsx:generic-api-key:16
