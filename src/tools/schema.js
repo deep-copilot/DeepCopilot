@@ -98,7 +98,7 @@ const TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'run_shell_bg',
-            description: 'Start a long-running shell command in a named VS Code integrated terminal and return immediately. Use ONLY for tasks that are expected to run longer than run_shell\'s timeout — model training, large builds, servers, extended test suites. Returns a terminalName (jobId). Poll progress with read_terminal(terminal: jobId); detect completion when "running" becomes false and read the exit code. Do NOT use for quick commands — use run_shell instead.',
+            description: 'Start a long-running shell command in a named VS Code integrated terminal and return immediately. Use ONLY for tasks that are expected to run longer than run_shell\'s timeout — model training, large builds, servers, extended test suites. Returns a terminalName (jobId). Poll progress with read_terminal(terminal: jobId) — each execution line is prefixed with "[running]", "[finished]", or "[exit N]" in the returned text; the job is complete when you see "[exit N]" or "[finished]". Do NOT use for quick commands — use run_shell instead.',
             parameters: {
                 type: 'object',
                 properties: {

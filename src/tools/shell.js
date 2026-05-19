@@ -154,6 +154,7 @@ async function toolRunShell(args, ctx = {}) {
             const partialOut = stdoutBuf.replace(/\s+$/, '');
             const partialErr = stderrBuf.replace(/\s+$/, '');
             const silentSec  = Math.round((Date.now() - lastOutputAt) / 1000);
+            try { Logger.info('SHELL_TIMEOUT_BACKGROUND', { pid: proc.pid ?? null, timeoutMs, silentSec, command }); } catch {}
             settle({
                 command,
                 exitCode:   null,
@@ -171,6 +172,8 @@ async function toolRunShell(args, ctx = {}) {
                 ),
             });
             // Process keeps running; we simply stop tracking it here.
+            // stdout/stderr listeners remain for pipe-drain but append() guards
+            // on `settled` so no further buffering or streaming occurs.
         }, timeoutMs);
 
         // Stall heartbeat: when the process produces no output for STALL_PROBE_MS,
@@ -199,6 +202,9 @@ async function toolRunShell(args, ctx = {}) {
 
         const append = (which, chunk) => {
             const txt = chunk.toString('utf8');
+            // After settle() (e.g. timeout handed back control), drain the pipe
+            // to prevent backpressure but stop buffering and streaming.
+            if (settled) return;
             if (combinedSize + txt.length > MAX_BUF) {
                 // truncate hard once we exceed buffer; keep reading silently
                 if (which === 'out') stdoutBuf += txt.slice(0, Math.max(0, MAX_BUF - combinedSize));

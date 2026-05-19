@@ -19,6 +19,18 @@ const { isDangerous, confirmDangerous, _normCmd,
 
 let _jobSeq = 0;
 
+// Return a terminal name that doesn't collide with any currently open terminal.
+// _jobSeq is incremented until a name is free, so after a reload it won't
+// accidentally pick the same id as a terminal the user already has open.
+function _uniqueJobId() {
+    const existing = new Set((vscode.window.terminals || []).map(t => t.name));
+    let id;
+    do {
+        id = `deepseek-job-${++_jobSeq}`;
+    } while (existing.has(id));
+    return id;
+}
+
 async function toolRunShellBg(args, ctx = {}) {
     const command = (args.command || '').trim();
     if (!command) return JSON.stringify({ error: 'empty_command', hint: 'Provide a non-empty command.' });
@@ -44,7 +56,7 @@ async function toolRunShellBg(args, ctx = {}) {
     }
 
     // ── Create named terminal and send the command ────────────────────────
-    const jobId = `deepseek-job-${++_jobSeq}`;
+    const jobId = _uniqueJobId();
     let terminal;
     try {
         terminal = vscode.window.createTerminal({ name: jobId });
@@ -67,7 +79,7 @@ async function toolRunShellBg(args, ctx = {}) {
         hint: [
             `Background job "${jobId}" started.`,
             `Poll output : read_terminal(terminal: "${jobId}")`,
-            `When "running" becomes false the job has finished and you can read the exit code.`,
+            `Completion  : output will show "[exit N]" or "[finished]" instead of "[running]".`,
             `To cancel    : ask the user to close the terminal named "${jobId}".`,
         ].join('\n'),
     });
