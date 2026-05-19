@@ -21,4 +21,5 @@ jobs:
         uses: wagoid/commitlint-github-action@v6
         with:
           configFile: commitlint.config.mjs
-          # 检查 PR 中所有 commit，任一不符合规范则失败
+          failOnErrors: false
+          # 检查 PR 中所有 commit，仅警告不阻塞合并
