@@ -19,7 +19,7 @@ const { Logger }           = require('../logger');
 const { wsRoot, resolvePath, findContainingFolder } = require('../utils/paths');
 const { isZh }             = require('../utils/i18n');
 const { openFile }         = require('./openFile');
-const { buildWebviewHtml } = require('../webview/html');
+const { buildWebviewHtml, buildSidebarHintHtml } = require('../webview/html');
 const { mcpManager }       = require('../mcp');
 
 const { SessionStore } = require('./session-store');
@@ -127,7 +127,9 @@ class ChatViewProvider {
                 vscode.Uri.joinPath(this._context.extensionUri, 'imgs'),
             ],
         };
-        webviewView.webview.html = buildWebviewHtml(webviewView.webview, this._context.extensionUri);
+        // Show a minimal launcher page instead of the full chat UI.
+        // The full chat is only available in the editor-area tab (status bar).
+        webviewView.webview.html = buildSidebarHintHtml(webviewView.webview, this._context.extensionUri);
         webviewView.webview.onDidReceiveMessage(msg => this._onMessage(msg));
         webviewView.onDidDispose(() => {
             this._views.delete(webviewView);
@@ -483,6 +485,14 @@ class ChatViewProvider {
                 } catch (e) {
                     this._post({ type: 'error', text: `#${refType} failed: ${e.message}` });
                 }
+                break;
+            }
+            case 'openInTab': {
+                // Message from the sidebar launcher page — open chat as editor tab
+                // and collapse the sidebar so the activity bar is free for others.
+                vscode.commands.executeCommand('deepseekAgent.openInTab').then(() => {
+                    vscode.commands.executeCommand('workbench.action.closeSidebar');
+                }, () => {});
                 break;
             }
         }

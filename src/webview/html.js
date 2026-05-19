@@ -212,4 +212,84 @@ function buildWebviewHtml(webview, extensionUri) {
 </body></html>`;
 }
 
-module.exports = { buildWebviewHtml };
+module.exports = { buildWebviewHtml, buildSidebarHintHtml };
+
+/**
+ * Minimal launcher page shown in the left-sidebar WebviewView.
+ * Replaces the full chat UI so the sidebar acts only as an entry point,
+ * directing users to open Deep Copilot as an editor-area tab (status bar).
+ */
+function buildSidebarHintHtml(webview, extensionUri) {
+    const logoUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'imgs', 'logo_black_bg.png'));
+    const locale  = isZh() ? 'zh' : 'en';
+    const zh      = isZh();
+    const lead    = zh
+        ? '为了更好的使用体验，建议以「标签页」形式打开 Deep Copilot'
+        : 'For the best experience, open Deep Copilot as an editor tab';
+    const b1      = zh ? '聊天界面拥有更大的显示空间' : 'Larger, dedicated chat area';
+    const b2      = zh ? '左侧活动栏可用于资源管理器、源代码管理等' : 'Left activity bar free for Explorer, Git & more';
+    const btnLbl  = zh ? '立即打开' : 'Open now';
+    const hint    = zh
+        ? '\u2299 或直接点击底部状态栏的 Deep Copilot 按钮'
+        : '\u2299 Or click Deep Copilot in the status bar below';
+    const nonce   = Buffer.from(Date.now().toString() + Math.random().toString())
+        .toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
+    const csp = [
+        `default-src 'none'`,
+        `img-src ${webview.cspSource} data:`,
+        `style-src 'unsafe-inline'`,
+        `script-src 'nonce-${nonce}'`,
+    ].join('; ');
+    return `<!DOCTYPE html>
+<html lang="${locale}"><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Deep Copilot</title><style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{display:flex;flex-direction:column;
+  background:var(--vscode-sideBar-background,#252526);
+  color:var(--vscode-foreground,#cccccc);
+  font-family:var(--vscode-font-family,'Segoe UI',sans-serif);font-size:13px}
+.main{flex:1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:16px;padding:24px 22px;text-align:center}
+img{width:56px;height:56px;border-radius:12px;opacity:.88}
+.title-block{display:flex;flex-direction:column;gap:3px}
+h2{font-size:15px;font-weight:700;letter-spacing:-.01em}
+.lead{font-size:12px;font-weight:600;
+  color:var(--vscode-foreground,#cccccc);opacity:1;line-height:1.5}
+.benefits{list-style:none;width:100%;display:flex;flex-direction:column;gap:6px;
+  text-align:center}
+.benefits li{display:flex;align-items:flex-start;justify-content:center;gap:8px;font-size:12px;
+  opacity:.72;line-height:1.45}
+.benefits li::before{content:'\u2713';flex-shrink:0;
+  color:var(--vscode-focusBorder,#007fd4);font-weight:700;margin-top:1px}
+.btn{padding:7px 26px;border:none;border-radius:4px;cursor:pointer;
+  background:var(--vscode-button-background,#0e639c);
+  color:var(--vscode-button-foreground,#fff);
+  font-size:13px;font-family:inherit;font-weight:500;letter-spacing:.01em}
+.btn:hover{background:var(--vscode-button-hoverBackground,#1177bb)}
+.footer{flex-shrink:0;padding:10px 16px;text-align:center;font-size:11px;
+  opacity:.4;line-height:1.4;
+  border-top:1px solid var(--vscode-sideBarSectionHeader-border,rgba(127,127,127,.15))}
+</style></head><body>
+<div class="main">
+  <img src="${logoUri}" alt="Deep Copilot"/>
+  <div class="title-block">
+    <h2>Deep Copilot</h2>
+    <p class="lead">${lead}</p>
+  </div>
+  <ul class="benefits">
+    <li>${b1}</li>
+    <li>${b2}</li>
+  </ul>
+  <button class="btn" id="ob">${btnLbl}</button>
+</div>
+<div class="footer">${hint}</div>
+<script nonce="${nonce}">
+const vscode=acquireVsCodeApi();
+document.getElementById('ob').addEventListener('click',function(){
+  vscode.postMessage({type:'openInTab'});
+});
+</script>
+</body></html>`;
+}

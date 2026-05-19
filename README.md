@@ -1,7 +1,7 @@
 # Deep Copilot
 
 <p align="center">
-  <img src="imgs/main_logo.svg" alt="Deep Copilot" width="100%"/>
+  <img src="imgs/main_logo.png" alt="Deep Copilot" width="100%"/>
 </p>
 
 <p align="center">
