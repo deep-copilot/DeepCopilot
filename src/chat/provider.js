@@ -35,6 +35,7 @@ const FOLDER_TREE_SKIP = new Set([
     '__pycache__', '.venv', 'venv', '.next', 'coverage', '.turbo',
 ]);
 const { fetchBalance, resolveProviderConfig } = require('../api/adapter');
+const { testConnection: testAnthropicConnection } = require('../api/anthropic-client');
 const { resolveContextRef } = require('./context-refs');
 
 class ChatViewProvider {
@@ -237,55 +238,52 @@ class ChatViewProvider {
                         break;
                     }
                     try {
-                        const https = require('https');
-                        const http  = require('http');
-                        const base  = resolved.baseUrl.replace(/\/$/, '');
-                        const isAnthropic = provider === 'anthropic';
-                        // Anthropic uses a different endpoint and auth scheme from OpenAI-compat providers.
-                        const urlObj  = isAnthropic
-                            ? new URL('/v1/messages', base)
-                            : new URL('/chat/completions', base);
-                        const body    = isAnthropic
-                            ? JSON.stringify({ model: resolved.model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 })
-                            : JSON.stringify({ model: resolved.model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 });
-                        const headers = isAnthropic
-                            ? {
-                                'x-api-key':         testKey || '',
-                                'anthropic-version': '2023-06-01',
-                                'Content-Type':      'application/json',
-                                'Content-Length':    Buffer.byteLength(body),
-                            }
-                            : {
-                                'Authorization':  `Bearer ${testKey || 'ollama'}`,
-                                'Content-Type':   'application/json',
-                                'Content-Length': Buffer.byteLength(body),
-                            };
-                        const isHttps = urlObj.protocol === 'https:';
-                        const result = await new Promise((resolve) => {
-                            const req = (isHttps ? https : http).request({
-                                hostname: urlObj.hostname,
-                                port:     urlObj.port || (isHttps ? 443 : 80),
-                                path:     urlObj.pathname,
-                                method:   'POST',
-                                headers,
-                                timeout:  10000,
-                            }, (res) => {
-                                let raw = '';
-                                res.on('data', c => { raw += c; });
-                                res.on('end', () => {
-                                    if (res.statusCode === 200 || res.statusCode === 201) { resolve({ ok: true }); return; }
-                                    try {
-                                        const d = JSON.parse(raw);
-                                        resolve({ ok: false, error: (d.error && d.error.message) || `HTTP ${res.statusCode}` });
-                                    } catch { resolve({ ok: false, error: `HTTP ${res.statusCode}` }); }
-                                });
-                                res.on('error', e => resolve({ ok: false, error: e.message }));
+                        let result;
+                        if (provider === 'anthropic') {
+                            // Use the native Anthropic SDK for the test — avoids replicating
+                            // the SDK's internal header/URL handling in raw HTTP.
+                            result = await testAnthropicConnection({
+                                apiKey:  testKey,
+                                baseUrl: resolved.baseUrl,
+                                model:   resolved.model,
                             });
-                            req.on('error', e => resolve({ ok: false, error: e.message }));
-                            req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'Timeout' }); });
-                            req.write(body);
-                            req.end();
-                        });
+                        } else {
+                            const https = require('https');
+                            const http  = require('http');
+                            const base  = resolved.baseUrl.replace(/\/$/, '');
+                            const urlObj = new URL('/chat/completions', base);
+                            const body   = JSON.stringify({ model: resolved.model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 });
+                            const isHttps = urlObj.protocol === 'https:';
+                            result = await new Promise((resolve) => {
+                                const req = (isHttps ? https : http).request({
+                                    hostname: urlObj.hostname,
+                                    port:     urlObj.port || (isHttps ? 443 : 80),
+                                    path:     urlObj.pathname,
+                                    method:   'POST',
+                                    headers:  {
+                                        'Authorization':  `Bearer ${testKey || 'ollama'}`,
+                                        'Content-Type':   'application/json',
+                                        'Content-Length': Buffer.byteLength(body),
+                                    },
+                                    timeout:  10000,
+                                }, (res) => {
+                                    let raw = '';
+                                    res.on('data', c => { raw += c; });
+                                    res.on('end', () => {
+                                        if (res.statusCode === 200 || res.statusCode === 201) { resolve({ ok: true }); return; }
+                                        try {
+                                            const d = JSON.parse(raw);
+                                            resolve({ ok: false, error: (d.error && d.error.message) || `HTTP ${res.statusCode}` });
+                                        } catch { resolve({ ok: false, error: `HTTP ${res.statusCode}` }); }
+                                    });
+                                    res.on('error', e => resolve({ ok: false, error: e.message }));
+                                });
+                                req.on('error', e => resolve({ ok: false, error: e.message }));
+                                req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'Timeout' }); });
+                                req.write(body);
+                                req.end();
+                            });
+                        }
                         this._post({ type: 'testApiKeyResult', which, ok: result.ok, latency: Date.now() - t0, error: result.error });
                     } catch (e) {
                         this._post({ type: 'testApiKeyResult', which, ok: false, error: e.message });

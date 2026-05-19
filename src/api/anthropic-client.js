@@ -252,4 +252,28 @@ async function streamChat({ apiKey, baseUrl, messages, model, noTools, tools }, 
     return { toolCalls: Object.values(toolCalls), usage };
 }
 
-module.exports = { streamChat };
+/**
+ * Test an Anthropic API key by making a minimal non-streaming messages call.
+ * Returns { ok: true } on success or { ok: false, error: string } on failure.
+ */
+async function testConnection({ apiKey, baseUrl, model }) {
+    const client = new Anthropic({
+        apiKey:  apiKey || '',
+        ...(baseUrl ? { baseURL: baseUrl.replace(/\/$/, '') } : {}),
+    });
+    try {
+        await client.messages.create({
+            model:     model || 'claude-sonnet-4-6',
+            max_tokens: 1,
+            messages:  [{ role: 'user', content: 'hi' }],
+        });
+        return { ok: true };
+    } catch (err) {
+        const detail = err.error
+            ? (typeof err.error === 'object' ? JSON.stringify(err.error) : String(err.error))
+            : '';
+        return { ok: false, error: err.message || detail || `HTTP ${err.status || 'unknown'}` };
+    }
+}
+
+module.exports = { streamChat, testConnection };
