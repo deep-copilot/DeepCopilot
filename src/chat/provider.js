@@ -166,9 +166,14 @@ class ChatViewProvider {
                 });
                 this._store.postList();
                 if (!this._store.sessionId) {
-                    const last = this._store.all().find(s => !s.archived);
-                    if (last) await this._store.load(last.id);
-                    else this._post({ type: 'sessionLoaded', id: null, messages: [] });
+                    try {
+                        const all = this._store.all();
+                        const last = all.length ? all.find(s => !s.archived) : null;
+                        if (last) await this._store.load(last.id);
+                        else this._post({ type: 'sessionLoaded', id: null, messages: [] });
+                    } catch {
+                        this._post({ type: 'sessionLoaded', id: null, messages: [] });
+                    }
                 }
                 this._refreshBalance(false);
                 // Push discovered skills to the webview for slash-command autocomplete.
