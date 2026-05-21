@@ -165,7 +165,11 @@ class ChatViewProvider {
                     interactionMode: cfg.get('interactionMode') || 'agent',
                 });
                 this._store.postList();
-                if (!this._store.sessionId) this._post({ type: 'sessionLoaded', id: null, messages: [] });
+                if (!this._store.sessionId) {
+                    const last = this._store.all().find(s => !s.archived);
+                    if (last) await this._store.load(last.id);
+                    else this._post({ type: 'sessionLoaded', id: null, messages: [] });
+                }
                 this._refreshBalance(false);
                 // Push discovered skills to the webview for slash-command autocomplete.
                 // NOTE: content is intentionally omitted here — the webview only needs name/desc/hint
