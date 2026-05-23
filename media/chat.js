@@ -2079,7 +2079,7 @@
     ftTokens.textContent = "0 tokens"; ftCost.textContent = "¥0.0000";
     if (ftCache) { ftCache.textContent = "💾 0%"; ftCache.classList.remove("good"); }
     renderPlan([]);
-    curBubble = null; cur = null; curText = ""; curThk = null; toolMap = {}; _readTermCardMap = {}; _userMsgCount = 0; _editPendingIdx = -1;
+    curBubble = null; cur = null; curText = ""; curThk = null; toolMap = Object.create(null); _readTermCardMap = Object.create(null); _userMsgCount = 0; _editPendingIdx = -1;
   }
   // Detect "#<ref>:<arg>" tokens that have been explicitly committed by the
   // user. We commit when:
@@ -2443,7 +2443,7 @@
       inp.value = m.text || ""; autosize(); inp.focus();
       if (es && msgs.querySelectorAll(".msgU,.msgA").length === 0) es.style.display = "block";
     } else if (m.type === "replyStart"){
-      curBubble = null; cur = null; curThk = null; curThkHead = null; curText = ""; toolMap = {};
+      curBubble = null; cur = null; curThk = null; curThkHead = null; curText = ""; toolMap = Object.create(null);
       ensureBubble(); ascroll();
       setBusy(true); showCursor();
     } else if (m.type === "newTurn"){
