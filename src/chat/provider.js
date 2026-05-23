@@ -202,16 +202,22 @@ class ChatViewProvider {
                     provider: cfg.get('provider') || 'deepseek',
                     interactionMode: cfg.get('interactionMode') || 'agent',
                 });
-                this._store.postList();
                 if (!this._store.sessionId) {
                     try {
                         const all = this._store.all();
-                        const last = all.length ? all.find(s => !s.archived) : null;
-                        if (last) await this._store.load(last.id);
-                        else this._post({ type: 'sessionLoaded', id: null, messages: [] });
+                        const latest = all.length ? all.find(s => !s.archived) : null;
+                        if (latest) {
+                            await this._store.load(latest.id); // load() calls postList() internally
+                        } else {
+                            this._store.postList();
+                            this._post({ type: 'sessionLoaded', id: null, messages: [] });
+                        }
                     } catch {
+                        this._store.postList();
                         this._post({ type: 'sessionLoaded', id: null, messages: [] });
                     }
+                } else {
+                    this._store.postList();
                 }
                 this._refreshBalance(false);
                 // Push discovered skills to the webview for slash-command autocomplete.
