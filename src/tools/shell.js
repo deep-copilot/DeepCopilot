@@ -73,6 +73,200 @@ async function confirmDangerous(cmd, abortSignal) {
 // (GitHub Copilot terminal-card convention).  Returns the final combined
 // output string (truncated) just like the original spawnSync implementation.
 
+// Counter for unique job-style names when running inside a VS Code terminal.
+let _termRunSeq = 0;
+function _uniqueRunShellTerminalName() {
+    const existing = new Set((vscode.window.terminals || []).map((tm) => tm.name));
+    let id;
+    do {
+        id = `deepseek-job-run-${++_termRunSeq}`;
+    } while (existing.has(id));
+    return id;
+}
+
+// Convert bash-style && chains to ; on Windows PowerShell.
+function _adaptCommandForShell(command) {
+    if (process.platform === 'win32') {
+        return command.replace(/\s*&&\s*/g, '; ');
+    }
+    return command;
+}
+
+// ─── long-running command heuristic ──────────────────────────────────────────
+// The model frequently picks run_shell even for training jobs / dev servers,
+// then complains the 30s timeout fires. Auto-detect obvious long-runners and
+// transparently route them to run_shell_bg so the user doesn't have to babysit
+// tool selection. This is intentionally conservative — we only match patterns
+// that are almost never "quick" commands.
+const LONG_RUNNING_PATTERNS = [
+    // ML / training scripts
+    /\b--epochs?\b/i,
+    /\b--num-?epochs?\b/i,
+    /\b--n-?epochs?\b/i,
+    /\b(train|training|finetune|fine-?tune|pretrain)\.py\b/i,
+    /\b(python|python3)\s+\S*train[^\s]*\.py\b/i,
+    /\bpython\s+-m\s+(torch\.distributed|accelerate|deepspeed|trl|transformers)\b/i,
+    /\btorchrun\b/i,
+    /\baccelerate\s+launch\b/i,
+    /\bdeepspeed\b/i,
+
+    // Dev servers / watchers
+    /\bnpm\s+(run\s+)?(dev|start|serve|watch)\b/i,
+    /\bpnpm\s+(run\s+)?(dev|start|serve|watch)\b/i,
+    /\byarn\s+(dev|start|serve|watch)\b/i,
+    /\bvite(\s+(dev|serve|preview))?\b/i,
+    /\bnext\s+(dev|start)\b/i,
+    /\bnuxt\s+(dev|start)\b/i,
+    /\bnodemon\b/i,
+    /\b(uvicorn|gunicorn|hypercorn|daphne)\b/i,
+    /\bflask\s+run\b/i,
+    /\bpython\s+manage\.py\s+runserver\b/i,
+    /\bjupyter\s+(lab|notebook|server)\b/i,
+    /\btensorboard\b/i,
+
+    // Builds known to run for several minutes
+    /\bcargo\s+build\s+--release\b/i,
+    /\bnpm\s+run\s+build\b/i,
+    /\bpnpm\s+run\s+build\b/i,
+    /\byarn\s+build\b/i,
+    /\bdocker\s+build\b/i,
+    /\bdocker\s+compose\s+(up|build)\b/i,
+];
+
+function _looksLongRunning(cmd) {
+    const s = String(cmd || '');
+    return LONG_RUNNING_PATTERNS.some((re) => re.test(s));
+}
+
+/**
+ * Execute `command` inside a fresh VS Code integrated terminal (visible to the
+ * user) and resolve once the command finishes. Falls back to a structured
+ * "running" result if shell integration is unavailable, matching the
+ * `run_shell_bg` poll-and-read pattern.
+ */
+async function _runInVscodeTerminal(command, ctx, timeoutMs) {
+    const { addActiveBgJob, onBgJobEnded, offBgJobEnded, markSyncReturnedJob } =
+        require('./terminal-monitor');
+
+    const adapted = _adaptCommandForShell(command);
+    const jobId   = _uniqueRunShellTerminalName();
+    let terminal;
+    try {
+        terminal = vscode.window.createTerminal({ name: jobId });
+    } catch (e) {
+        return { command, exitCode: null, stdout: '', stderr: '', truncated: false, text: `Error: ${e.message}` };
+    }
+    terminal.show(/* preserveFocus */ true);
+
+    // Wait briefly for shell integration to come online.
+    const SI_WAIT_MS = 3000;
+    let siReady = !!terminal.shellIntegration;
+    if (!siReady && typeof vscode.window.onDidChangeTerminalShellIntegration === 'function') {
+        siReady = await new Promise((resolve) => {
+            const d = vscode.window.onDidChangeTerminalShellIntegration((e) => {
+                if (e.terminal === terminal) { d.dispose(); resolve(true); }
+            });
+            setTimeout(() => { d.dispose(); resolve(false); }, SI_WAIT_MS);
+        });
+    }
+    const usedSI = siReady && !!terminal.shellIntegration;
+
+    try { Logger.info('SHELL_TERMINAL_START', { jobId, command: adapted, shellIntegration: usedSI }); } catch {}
+
+    if (usedSI) {
+        terminal.shellIntegration.executeCommand(adapted);
+        addActiveBgJob(jobId);
+    } else {
+        terminal.sendText(adapted);
+    }
+
+    // Without shell-integration we cannot reliably detect exit; surface a
+    // clear hint asking the user to install a supported shell, similar to
+    // run_shell_bg's behavior.
+    if (!usedSI) {
+        return {
+            command,
+            exitCode:   null,
+            stdout:     '',
+            stderr:     '',
+            truncated:  false,
+            text: truncate(
+                `[run_shell] Command dispatched to VS Code terminal "${jobId}" without shell integration — exit code cannot be captured automatically.\n` +
+                `Tip: enable shell integration (pwsh/bash/zsh/fish) so run_shell can stream output back to the agent.\n` +
+                `Use read_terminal(terminal: "${jobId}") to inspect the output manually.`,
+            ),
+            background: true,
+            pid:        null,
+        };
+    }
+
+    // Wait for the deepseek-job-* end event, with abort + timeout handling.
+    const abortSignal = ctx.abortSignal;
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (payload) => {
+            if (settled) return;
+            settled = true;
+            offBgJobEnded(handler);
+            clearTimeout(timer);
+            if (abortSignal && onAbort) {
+                try { abortSignal.removeEventListener('abort', onAbort); } catch {}
+            }
+            resolve(payload);
+        };
+
+        const handler = (p) => {
+            if (!p || p.jobId !== jobId) return;
+            markSyncReturnedJob(jobId);
+            const exitCode = (typeof p.exitCode === 'number') ? p.exitCode : null;
+            const output   = String(p.output || '');
+            const durSec   = Math.round((p.durationMs || 0) / 1000);
+            let text;
+            if (exitCode == null)        text = truncate(`(terminal closed before completion, ${durSec}s)\n${output}`);
+            else if (exitCode !== 0)     text = truncate(`Exit ${exitCode}: ${output || '(no output)'}`);
+            else if (!output)            text = '(no output, exit 0)';
+            else                          text = truncate(output);
+            finish({
+                command,
+                exitCode,
+                stdout:    output,
+                stderr:    '',
+                truncated: false,
+                text,
+                durationSec: durSec,
+                terminalName: jobId,
+            });
+        };
+        onBgJobEnded(handler);
+
+        const onAbort = () => {
+            // Best-effort cancel: dispose the terminal which will end the SI execution.
+            try { terminal.dispose(); } catch {}
+        };
+        if (abortSignal) {
+            if (abortSignal.aborted) onAbort();
+            else abortSignal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        const timer = setTimeout(() => {
+            try { Logger.info('SHELL_TERMINAL_TIMEOUT', { jobId, timeoutMs, command: adapted }); } catch {}
+            finish({
+                command,
+                exitCode:   null,
+                stdout:     '',
+                stderr:     '',
+                truncated:  false,
+                background: true,
+                terminalName: jobId,
+                text: truncate(
+                    `[run_shell] Command still running in terminal "${jobId}" after ${timeoutMs}ms — control handed back.\n` +
+                    `Use read_terminal(terminal: "${jobId}") to poll output.`,
+                ),
+            });
+        }, timeoutMs);
+    });
+}
+
 async function toolRunShell(args, ctx = {}) {
     const command = args.command || '';
     if (isDangerous(command)) {
@@ -112,6 +306,46 @@ async function toolRunShell(args, ctx = {}) {
     const timeoutMs     = Math.min(requestedTimeout, MAX_TIMEOUT_MS);
     const onStreamDelta = typeof ctx.onStreamDelta === 'function' ? ctx.onStreamDelta : null;
     const abortSignal   = ctx.abortSignal;
+
+    // ── Execution-mode dispatch ─────────────────────────────────────────
+    // Two ways to pick a mode (per-call arg wins over user setting):
+    //   • args.in_terminal === true   → force VS Code integrated terminal
+    //   • args.in_terminal === false  → force silent child_process
+    //   • setting shellExecutionMode  → "silent" (default) or "terminal"
+    const cfg = vscode.workspace.getConfiguration('deepseekAgent');
+    const settingMode = (cfg.get('shellExecutionMode') || 'silent').toLowerCase();
+    let inTerminal;
+    if (typeof args.in_terminal === 'boolean') inTerminal = args.in_terminal;
+    else if (typeof args.mode === 'string')    inTerminal = args.mode.toLowerCase() === 'terminal';
+    else                                       inTerminal = settingMode === 'terminal';
+
+    // ── Long-running auto-redirect ──────────────────────────────────────
+    // Deterministic safety net: regardless of which tool the model picked,
+    // if the command obviously won't finish inside a 60s window, route to
+    // run_shell_bg so it lands in a named terminal with shell integration
+    // and the agent gets a proper completion notification.
+    //
+    // Opt-out: args.force_foreground === true (explicit override).
+    if (!args.force_foreground && _looksLongRunning(command)) {
+        try { Logger.info('SHELL_AUTO_BG_REDIRECT', { command, requestedTimeoutMs: requestedTimeout }); } catch {}
+        const { toolRunShellBg } = require('./bg-shell');
+        const bgResult = await toolRunShellBg({ command }, ctx);
+        // toolRunShellBg returns a JSON string; surface it as-is so the model
+        // sees the jobId / status / early-exit details unchanged.
+        return typeof bgResult === 'string'
+            ? bgResult
+            : JSON.stringify({
+                ...bgResult,
+                autoRedirected: true,
+                hint: `[run_shell] Detected long-running command — automatically delegated to run_shell_bg.`,
+            });
+    }
+
+    if (inTerminal) {
+        try { Logger.info('SHELL_MODE', { mode: 'terminal', command }); } catch {}
+        return _runInVscodeTerminal(command, ctx, timeoutMs);
+    }
+    try { Logger.info('SHELL_MODE', { mode: 'silent', command }); } catch {}
 
     return new Promise((resolve) => {
         let proc;

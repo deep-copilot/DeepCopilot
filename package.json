@@ -227,6 +227,19 @@
           "default": [],
           "description": "Tool names to always deny (overrides approvalMode), e.g. [\"run_shell\"]"
         },
+        "deepseekAgent.shellExecutionMode": {
+          "type": "string",
+          "default": "silent",
+          "enum": [
+            "silent",
+            "terminal"
+          ],
+          "enumDescriptions": [
+            "Silent — run_shell 在隐藏的子进程中静默执行命令，输出仅回传给模型（默认，速度最快）。",
+            "Terminal — run_shell 在 VS Code 集成终端中可见地执行命令，用户可以实时看到完整输出。"
+          ],
+          "description": "run_shell 工具的默认执行方式。silent = 后台静默执行；terminal = 在 VS Code 集成终端中执行（用户可见）。可被工具调用的 in_terminal 参数覆盖。"
+        },
         "deepseekAgent.enableDebugLog": {
           "type": "boolean",
           "default": true,
