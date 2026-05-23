@@ -1,14 +1,4 @@
 ﻿*{box-sizing:border-box;margin:0;padding:0}
-:root{
-  /* indent system: 16px = one hierarchy step */
-  --dc-indent: 16px;
-  /* color ladder: primary text → secondary headings/labels → muted hints → accent */
-  --dc-fg-primary: var(--vscode-foreground);
-  --dc-fg-secondary: var(--vscode-descriptionForeground);
-  --dc-fg-muted: color-mix(in srgb, var(--vscode-descriptionForeground) 65%, transparent);
-  --dc-accent: var(--vscode-focusBorder, var(--vscode-button-background));
-  --dc-rule: var(--vscode-widget-border, var(--vscode-panel-border));
-}
 body{font-family:var(--vscode-font-family);font-size:13px;color:var(--vscode-foreground);background:var(--vscode-sideBar-background);height:100vh;overflow:hidden;position:relative;
   display:grid;grid-template-columns:1fr 280px;grid-template-rows:auto 1fr auto auto;
   grid-template-areas:"sb sb" "main right" "composer right" "foot foot"}
@@ -49,13 +39,13 @@ body:not(.no-right) .edge-toggle.edge-r::before{content:"\25B8"} /* ▸ collapse
 body.narrow .edge-toggle{display:none}
 #main{grid-area:main;overflow-y:auto;padding:10px 24px;display:flex;flex-direction:column;gap:12px;min-height:0}
 body.narrow #main{padding-left:12px;padding-right:12px}
-.msgU{background:rgba(128,128,128,.10);outline:none;border:none;border-radius:8px 8px 2px 8px;padding:8px 12px;align-self:flex-end;max-width:88%;word-break:break-word;line-height:1.5;position:relative;cursor:pointer;transition:background .15s}
+.msgU{background:rgba(128,128,128,.18);outline:1px solid transparent;border-radius:8px 8px 2px 8px;padding:8px 12px;align-self:flex-end;max-width:88%;word-break:break-word;line-height:1.5;position:relative;cursor:pointer;transition:outline-color .15s,background .15s}
 .msgU-hd{display:none}
 .msgU-body{white-space:pre-wrap;word-break:break-word;line-height:1.5;pointer-events:none}
 .msgU-attachments{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;pointer-events:none}
 .chip-sent{font-size:10.5px;padding:1px 7px;border-radius:10px;opacity:.85;pointer-events:none}
 .lbl-you{display:none}
-.msgU:hover{background:rgba(128,128,128,.16);outline:none}
+.msgU:hover{background:rgba(128,128,128,.26);outline-color:var(--vscode-focusBorder,rgba(127,127,127,.6))}
 /* ── Inline edit mode (GH Copilot style) ── */
 .msgU.editing{background:var(--vscode-input-background);outline:1px solid var(--vscode-focusBorder);cursor:default;padding:6px 8px;max-width:88%;width:88%}
 .msgU.editing:hover{background:var(--vscode-input-background)}
@@ -70,13 +60,10 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .msgU-editor-bar .btn-save:disabled{opacity:.5;cursor:not-allowed}
 .msgU-editor-bar .btn-cancel{background:transparent;color:var(--vscode-foreground);border-color:var(--vscode-panel-border)}
 .msgU-editor-bar .btn-cancel:hover{background:var(--vscode-toolbar-hoverBackground)}
-/* explicit prose bullets: model can emit <p class="bullet"> to add a leading dot */
-.msgC p.bullet{padding-left:14px;position:relative}
-.msgC p.bullet::before{content:"•";position:absolute;left:2px;top:0;color:var(--dc-fg-muted);font-size:14px;line-height:1.65}
 .msgA{align-self:flex-start;width:100%}
 .msgA .lbl{display:none}
-.msgC{line-height:1.65;word-break:break-word}
-.msgC>p{margin:0 0 10px 0;max-width:72ch}
+.msgC{line-height:1.6;word-break:break-word}
+.msgC>p{margin:0 0 8px 0}
 .msgC>p:last-child{margin-bottom:0}
 .msgC h2.mh,.msgC h3.mh,.msgC h4.mh,.msgC h5.mh,.msgC h6.mh{margin:14px 0 6px 0;font-weight:600;color:var(--vscode-foreground);line-height:1.3}
 .msgC h2.mh{font-size:15px;padding-bottom:4px;border-bottom:1px solid var(--vscode-panel-border)}
@@ -86,15 +73,12 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .msgC ul.mul li,.msgC ol.mol li{margin:2px 0;line-height:1.55}
 .msgC ul.mul li::marker{color:var(--vscode-descriptionForeground)}
 .msgC hr.mhr{border:none;border-top:1px solid var(--vscode-panel-border);margin:12px 0}
-/* blockquote: left rule only, no bg */
-.msgC blockquote.mbq{margin:6px 0;padding:2px 0 2px var(--dc-indent);border-left:2px solid var(--dc-rule);color:var(--dc-fg-secondary);background:transparent}
-/* details: left rule only, no border/bg/radius */
-.msgC details{margin:6px 0;padding:0 0 0 var(--dc-indent);border:none;border-left:2px solid var(--dc-rule);border-radius:0;background:transparent}
-.msgC details>summary{cursor:pointer;font-weight:500;color:var(--vscode-foreground);outline:none;user-select:none;padding:1px 0;list-style:none}
-.msgC details>summary::before{content:"\25B8";display:inline-block;width:10px;margin-right:4px;font-size:9px;opacity:.6;transition:transform .15s}
-.msgC details[open]>summary::before{transform:rotate(90deg)}
+.msgC blockquote.mbq{margin:6px 0;padding:4px 10px;border-left:3px solid var(--vscode-panel-border);color:var(--vscode-descriptionForeground);background:rgba(255,255,255,.02)}
+/* Whitelisted HTML elements (Issue #35) */
+.msgC details{margin:6px 0;padding:4px 8px;border:1px solid var(--vscode-panel-border);border-radius:4px;background:rgba(255,255,255,.02)}
+.msgC details>summary{cursor:pointer;font-weight:600;color:var(--vscode-foreground);outline:none;user-select:none;padding:2px 0}
 .msgC details>summary:hover{color:var(--vscode-textLink-foreground)}
-.msgC details[open]>summary{margin-bottom:4px;padding-bottom:0;border-bottom:none}
+.msgC details[open]>summary{margin-bottom:6px;border-bottom:1px dashed var(--vscode-panel-border);padding-bottom:4px}
 .msgC kbd{display:inline-block;padding:1px 6px;margin:0 2px;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;line-height:1.4;color:var(--vscode-foreground);background:var(--vscode-textCodeBlock-background);border:1px solid var(--vscode-panel-border);border-bottom-width:2px;border-radius:3px;vertical-align:1px}
 .msgC mark{background:rgba(255,210,80,.28);color:inherit;padding:0 2px;border-radius:2px}
 .msgC sub,.msgC sup{font-size:75%;line-height:0}
@@ -104,12 +88,10 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .msgC samp,.msgC var{font-family:var(--vscode-editor-font-family,monospace);font-size:90%}
 .msgC figure{margin:8px 0;padding:0}
 .msgC figcaption{font-size:11px;color:var(--vscode-descriptionForeground);margin-top:4px;text-align:center}
-/* tables: only header underline + faint row separators, no cell borders */
-.msgC table.mtbl{border-collapse:collapse;margin:8px 0 12px 0;font-size:12px;width:auto;max-width:100%}
-.msgC table.mtbl th,.msgC table.mtbl td{border:none;padding:5px 14px 5px 0;text-align:left;vertical-align:top}
-.msgC table.mtbl th{border-bottom:1px solid var(--vscode-panel-border);font-weight:600;font-size:11.5px;color:var(--vscode-foreground);background:transparent}
-.msgC table.mtbl tr+tr td{border-top:1px solid rgba(127,127,127,.12)}
-.msgC table.mtbl tr:nth-child(even) td{background:transparent}
+.msgC table.mtbl{border-collapse:collapse;margin:6px 0 10px 0;font-size:12px;width:auto;max-width:100%}
+.msgC table.mtbl th,.msgC table.mtbl td{border:1px solid var(--vscode-panel-border);padding:4px 10px;text-align:left;vertical-align:top}
+.msgC table.mtbl th{background:var(--vscode-textCodeBlock-background);font-weight:600;font-size:11.5px}
+.msgC table.mtbl tr:nth-child(even) td{background:rgba(255,255,255,.02)}
 .msgC pre.cb{background:var(--vscode-textCodeBlock-background);border:1px solid var(--vscode-panel-border);border-radius:6px;margin:6px 0;overflow:hidden;font-family:var(--vscode-editor-font-family,monospace);font-size:12px}
 .msgC pre.cb .cb-h{display:flex;align-items:center;gap:6px;padding:3px 8px;background:rgba(255,255,255,.04);border-bottom:1px solid var(--vscode-panel-border);font-size:10px;color:var(--vscode-descriptionForeground);user-select:none}
 .msgC pre.cb .cb-h .lang{font-family:var(--vscode-font-family);text-transform:lowercase;flex:1}
@@ -121,14 +103,13 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .msgC pre.cb .cb-h button.cb-newfile{color:var(--vscode-descriptionForeground)}
 .msgC pre.cb code{display:block;padding:8px 10px;overflow-x:auto;white-space:pre;line-height:1.5}
 .msgC code.ic{background:var(--vscode-textCodeBlock-background);padding:1px 5px;border-radius:3px;font-family:var(--vscode-editor-font-family,monospace);font-size:12px}
-.msgC a.flink{color:var(--vscode-textLink-foreground);text-decoration:none;background:transparent;padding:0 2px;border-radius:2px;font-family:var(--vscode-editor-font-family,monospace);font-size:11.5px;cursor:pointer;border:none;opacity:.9}
-.msgC a.flink:hover{background:rgba(100,160,255,.12);text-decoration:none;opacity:1}
+.msgC a.flink{color:var(--vscode-textLink-foreground);text-decoration:none;background:rgba(100,160,255,.10);padding:0 4px;border-radius:3px;font-family:var(--vscode-editor-font-family,monospace);font-size:11.5px;cursor:pointer;border:1px solid transparent}
+.msgC a.flink:hover{background:rgba(100,160,255,.20);border-color:var(--vscode-textLink-foreground);text-decoration:none}
 .msgC a.flink .ico{opacity:.7;margin-right:2px}
 .jumpbtn{position:absolute;right:12px;bottom:8px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:14px;padding:4px 10px;font-size:11px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.25);display:none;z-index:5}
 .jumpbtn.show{display:block}
 #main{position:relative}
-/* thinking block: indent + left rule only (no bg, no radius) */
-.thinkblk{font-size:0.9em;font-family:inherit;color:var(--dc-fg-secondary);border-left:2px solid var(--dc-rule);padding:2px 0 2px var(--dc-indent);margin:4px 0 8px 0;white-space:pre-wrap;opacity:.85;max-height:120px;overflow-y:auto;background:transparent;border-radius:0}
+.thinkblk{font-size:0.88em;font-family:inherit;color:var(--vscode-foreground);border-left:2px solid var(--vscode-panel-border);padding:6px 10px;margin:4px 0 8px 0;white-space:pre-wrap;opacity:.55;max-height:120px;overflow-y:auto;background:rgba(255,255,255,.02);border-radius:0 3px 3px 0}
 .math-block{overflow-x:auto;padding:6px 2px;text-align:center}.math-block .katex-display{margin:0}.katex{font-size:1.05em}
 .thinkhead{font-size:12px;color:var(--vscode-foreground);margin-bottom:2px;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:5px;opacity:.8}
 .thinkhead:hover{opacity:1}
@@ -156,39 +137,65 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .flow{display:flex;flex-direction:column;gap:2px}
 .flow .msgC.seg{line-height:1.6;word-break:break-word}
 .flow .msgC.seg:empty{display:none}
-/* ── Tool cards (shell / web-search / agent) — unified with .tl-wrap visual ── */
-.tool{margin:0;border:none;font-size:10.5px;overflow:hidden;background:transparent}
-.tool .h{display:flex;align-items:baseline;gap:5px;padding:1px 2px 1px 6px;cursor:pointer;user-select:none;line-height:1.45;border-left:2px solid transparent;border-radius:0}
-.tool .h:hover{background:var(--vscode-list-hoverBackground,rgba(127,127,127,.06))}
+/* ── Tool cards (shell / web-search / agent) — GH-Copilot-style with icon column ── */
+.tool{margin:0;border:none;font-size:10.5px;overflow:hidden;background:transparent;position:relative}
+.tool .h{display:flex;align-items:center;gap:0;padding:2px 2px;cursor:pointer;user-select:none;line-height:1.45}
+.tool .h:hover{background:var(--vscode-list-hoverBackground,rgba(127,127,127,.06));border-radius:2px}
 .tool .h .chev{display:none}
-.tool .h .ico{font-size:11px;opacity:.55;flex-shrink:0;display:inline-block}
-.tool .h .nm{font-family:var(--vscode-font-family);font-weight:400;font-size:10.5px;flex-shrink:0;color:var(--dc-fg-secondary);opacity:.85}
-.tool .h .tgt{flex:1;color:var(--dc-fg-muted);font-family:var(--vscode-editor-font-family,monospace);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.tool .h .ico{display:inline-grid;place-items:center;width:16px;height:16px;flex-shrink:0;margin-right:6px;font-size:12px;color:var(--vscode-descriptionForeground);opacity:.7;position:relative;z-index:1}
+.tool.run .h .ico{color:#e8b86d;opacity:.9}
+.tool.ok  .h .ico{opacity:.78}
+.tool.err .h .ico{color:var(--vscode-errorForeground);opacity:.95}
+.tool .h .nm{font-family:var(--vscode-font-family);font-weight:400;font-size:10.5px;flex-shrink:0;color:var(--vscode-descriptionForeground);opacity:.65}
+.tool .h .tgt{flex:1;color:var(--vscode-descriptionForeground);font-family:var(--vscode-editor-font-family,monospace);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;opacity:.42}
 .tool .h .st{margin-left:auto;font-size:10px;opacity:.5;color:var(--vscode-descriptionForeground);flex-shrink:0;padding-left:6px}
-/* .b uses same chrome-less indent as .tl-detail */
-.tool .b{display:none;margin:2px 0 4px 8px;padding:2px 0 2px var(--dc-indent);font-family:var(--vscode-editor-font-family,monospace);font-size:10.5px;line-height:1.5;white-space:pre-wrap;max-height:320px;overflow:auto;color:var(--dc-fg-secondary);background:transparent;border:none;border-left:2px solid var(--dc-rule);border-radius:0}
+.tool .b{padding:4px 8px 6px 8px;display:none;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;white-space:pre-wrap;max-height:280px;overflow:auto;color:var(--vscode-descriptionForeground)}
 .tool.open .b{display:block}
 .tool .args{color:var(--vscode-descriptionForeground);margin-bottom:4px;white-space:pre-wrap;word-break:break-all;font-size:10.5px;opacity:.75}
-/* Shell/search/agent: same indent style as default — keep larger height for live tail */
-.tool.k-shell .b,.tool.k-search .b,.tool.k-agent .b{max-height:400px;word-break:break-all;padding-left:var(--dc-indent)}
+/* Shell output block */
+.tool.k-shell .b{max-height:400px;border-left:1px solid var(--vscode-panel-border);padding-left:10px;word-break:break-all}
+.tool.k-search .b{max-height:400px;border-left:1px solid var(--vscode-panel-border);padding-left:10px}
+.tool.k-agent .b{max-height:480px;border-left:1px solid var(--vscode-panel-border);padding-left:10px;white-space:pre-wrap}
 .tool .live-out, .tool .final-out{margin:0;padding:0;font:inherit;white-space:pre-wrap;word-break:break-all;color:var(--vscode-foreground)}
-.tool.run .live-out::after{content:"\258d";opacity:.6;animation:thpulse 1s steps(2,end) infinite;margin-left:1px}
+.tool.run .live-out::after{content:"▍";opacity:.6;animation:thpulse 1s steps(2,end) infinite;margin-left:1px}
 /* Running status dot on the name */
 .tool.run .h .nm::after{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#e8b86d;margin-left:5px;vertical-align:middle;animation:thpulse 1.4s ease-out infinite}
 .tool.err .h .nm{color:var(--vscode-descriptionForeground);opacity:.5}
 .tool.err{background:transparent!important;border-left:none!important;border-radius:0!important;padding:0!important}
-.tool .approve{padding:5px 8px 5px var(--dc-indent);display:flex;gap:6px;border:none;background:transparent;margin-left:8px;border-left:2px solid rgba(232,184,109,.55)}
+.tool .approve{padding:5px 8px;display:flex;gap:6px;border-top:1px solid var(--vscode-panel-border);background:rgba(255,200,100,.06)}
 .tool .approve button{padding:3px 10px;border:none;border-radius:3px;cursor:pointer;font-size:11px}
 .btn-yes{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
 .btn-no{background:var(--vscode-input-background);color:var(--vscode-foreground);border:1px solid var(--vscode-panel-border)!important}
-/* ── Prose tool lines — Sema-style: no icon, plain text, two-shade gray ── */
-.tl-wrap{display:block}
-.tl{display:flex;align-items:baseline;gap:0;padding:1px 2px 1px 6px;font-size:10.5px;color:var(--vscode-descriptionForeground);line-height:1.45;overflow:hidden;border-radius:0;border-left:2px solid transparent}
-.tl .ico{display:none}
+/* ── Prose tool lines — GH-Copilot-style: icon column + connecting spine ── */
+.tl-wrap{display:block;position:relative}
+.tl{display:flex;align-items:center;gap:0;padding:1px 2px;font-size:10.5px;color:var(--vscode-descriptionForeground);line-height:1.45;overflow:hidden;border-radius:2px}
+.tl .ico{display:inline-grid;place-items:center;width:16px;height:16px;flex-shrink:0;margin-right:6px;font-size:12px;color:var(--vscode-descriptionForeground);opacity:.7;position:relative;z-index:1}
+.tl.run .ico{color:#e8b86d;opacity:.9}
+.tl.ok  .ico{opacity:.78}
+.tl.err .ico{color:var(--vscode-errorForeground);opacity:.95}
+/* ── Unified spine: connects ANY consecutive tool rows ──
+   Covers: prose lines (.tl-wrap), cards (.tool: shell/web/agent/approval),
+   and live-grouped bundles (.tl-group). The line sits in the 6px gap
+   between rows, anchored at the icon column (left:10px = 2px row-padding
+   + 8px icon half-width). It vanishes automatically at group boundaries. */
+.tl-wrap + .tl-wrap,
+.tl-wrap + .tool,     .tool    + .tl-wrap,
+.tl-wrap + .tl-group, .tl-group + .tl-wrap,
+.tool    + .tool,
+.tool    + .tl-group, .tl-group + .tool,
+.tl-group + .tl-group{margin-top:6px}
+.tl-wrap:has(+ :is(.tl-wrap, .tool, .tl-group))::after,
+.tool:has(+ :is(.tl-wrap, .tool, .tl-group))::after,
+.tl-group:has(+ :is(.tl-wrap, .tool, .tl-group))::after{
+    content:"";position:absolute;
+    left:10px;top:100%;
+    width:1px;height:6px;
+    background:var(--vscode-panel-border);
+    opacity:.65;pointer-events:none;
+}
 .tl .tl-prose{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;opacity:.68}
 .tl .tl-prose code{font-family:var(--vscode-editor-font-family,monospace);font-size:10px;background:transparent;padding:0;opacity:.6;color:inherit}
-/* chip: monospace as referential signal, minimal bg */
-.tl-chip{display:inline-block;padding:0 3px;border-radius:2px;background:rgba(127,127,127,.10);color:var(--vscode-foreground);font-size:10px;font-family:var(--vscode-editor-font-family,monospace);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;line-height:1.5;margin:0 1px;opacity:.85}
+.tl-chip{display:inline-block;padding:0 5px;border-radius:3px;background:var(--vscode-badge-background,rgba(90,93,94,.38));color:var(--vscode-badge-foreground,inherit);font-size:10px;font-family:var(--vscode-editor-font-family,monospace);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;line-height:1.5;margin:0 1px}
 .tl-dot{opacity:.4;font-size:10px}
 .tl-list .tl .tl-prose code{background:var(--vscode-badge-background,rgba(90,93,94,.3));color:var(--vscode-badge-foreground,inherit);border-radius:3px;padding:0 4px;opacity:1}
 .tl .tl-res{flex-shrink:0;font-size:10px;opacity:.55;margin-left:4px}
@@ -199,9 +206,8 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .tl.has-detail:hover{background:var(--vscode-list-hoverBackground,rgba(127,127,127,.06))}
 .tl.has-detail:hover .tl-exp{opacity:.5}
 .tl.has-detail.open .tl-exp{opacity:.7;transform:rotate(90deg)}
-/* unified hierarchy: tl-group / tl-detail / thinkblk / details / blockquote / err
-   all use the same left-rule + indent pattern: 2px rule + var(--dc-indent) */
-.tl-detail{display:none;margin:2px 0 4px 4px;padding:2px 0 2px var(--dc-indent);max-height:320px;overflow:auto;background:transparent;border:none;border-left:2px solid var(--dc-rule);border-radius:0;font-family:var(--vscode-editor-font-family,monospace);font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--dc-fg-secondary)}
+/* Expandable detail pane */
+.tl-detail{display:none;margin:0 2px 4px 4px;padding:5px 8px;max-height:320px;overflow:auto;background:var(--vscode-textCodeBlock-background,rgba(127,127,127,.07));border:1px solid var(--vscode-panel-border);border-radius:4px;font-family:var(--vscode-editor-font-family,monospace);font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--vscode-editor-foreground)}
 /* Live streaming preview for write_file / str_replace_in_file / apply_patch */
 .tl-stream{margin:2px 0 4px 4px;padding:5px 8px;max-height:220px;overflow:auto;background:var(--vscode-textCodeBlock-background,rgba(127,127,127,.08));border:1px solid var(--vscode-panel-border);border-left:2px solid var(--vscode-panel-border);border-radius:4px;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;line-height:1.45;white-space:pre;color:var(--vscode-editor-foreground);position:relative}
 .tl-stream code{font-family:inherit;font-size:inherit;background:transparent;padding:0;display:block}
@@ -210,19 +216,17 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .tl-stream.done.err::before{content:"failed";color:var(--vscode-errorForeground);opacity:.9}
 .tl-stream.done{border-left-color:#7bc47f}
 .tl-stream.done.err{border-left-color:var(--vscode-errorForeground)}
-/* Group collapse — minimal, no card chrome */
-.tl-group{display:flex;flex-direction:column;border:none;border-radius:0;margin:2px 0;overflow:visible;background:transparent}
-.tl-summary{display:flex;align-items:center;gap:5px;padding:1px 2px;font-size:11px;color:var(--vscode-descriptionForeground);cursor:pointer;user-select:none;line-height:1.45;overflow:hidden;opacity:.85}
-.tl-summary:hover{color:var(--vscode-foreground);opacity:1;background:transparent}
-.tl-summary .ico{font-size:11px;opacity:.55;flex-shrink:0}
-.tl-summary .tl-prose{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;font-weight:400}
-.tl-summary .tl-chev{flex-shrink:0;font-size:10px;opacity:.45;transition:transform .15s;margin-left:4px}
+/* Group collapse */
+.tl-group{display:flex;flex-direction:column;position:relative}
+.tl-summary{display:flex;align-items:center;gap:0;padding:2px 2px;font-size:10.5px;color:var(--vscode-descriptionForeground);cursor:pointer;user-select:none;line-height:1.45;overflow:hidden;opacity:.68}
+.tl-summary .ico{display:inline-grid;place-items:center;width:16px;height:16px;flex-shrink:0;margin-right:6px;font-size:12px;color:var(--vscode-descriptionForeground);opacity:.7;position:relative;z-index:1}
+.tl-summary:hover{background:var(--vscode-list-hoverBackground,rgba(255,255,255,.04));border-radius:3px}
+.tl-summary .tl-prose{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tl-summary .tl-chev{flex-shrink:0;font-size:11px;opacity:.5;transition:transform .15s;margin-left:2px}
 .tl-group.open .tl-summary .tl-chev{transform:rotate(180deg)}
-.tl-group.open .tl-summary{border-bottom:none}
-.tl-list{display:none;flex-direction:column;padding:1px 0 2px var(--dc-indent);border-left:2px solid var(--dc-rule);margin:2px 0 4px 4px}
-.tl-group.open .tl-list{display:flex;flex-direction:column;max-height:320px;overflow-y:auto}
-/* error: 3px left accent in error color, no bg */
-.err{color:var(--vscode-errorForeground);font-size:12px;padding:2px 0 2px var(--dc-indent);background:transparent;border-radius:0;border-left:3px solid var(--vscode-errorForeground);align-self:flex-start;width:100%;white-space:pre-wrap}
+.tl-list{display:none;flex-direction:column;padding-left:8px;border-left:1px solid var(--vscode-panel-border);margin-left:6px}
+.tl-group.open .tl-list{display:flex;flex-direction:column;max-height:200px;overflow-y:auto}
+.err{color:var(--vscode-errorForeground);font-size:12px;padding:6px 10px;background:rgba(244,135,113,.08);border-radius:6px;border-left:3px solid var(--vscode-errorForeground);align-self:flex-start;width:100%;white-space:pre-wrap}
 #left{grid-area:left;display:flex;flex-direction:column;border-right:1px solid var(--vscode-panel-border);overflow:hidden;min-width:0;background:var(--vscode-sideBar-background)}
 #right{grid-area:right;display:flex;flex-direction:column;border-left:1px solid var(--vscode-panel-border);overflow:hidden;min-width:0;background:var(--vscode-sideBar-background)}
 .pnl{display:flex;flex-direction:column;border-bottom:1px solid var(--vscode-panel-border);min-height:0;flex:1 1 0}
@@ -309,6 +313,34 @@ body.narrow #ia{padding-left:8px;padding-right:8px}
 #composer-card{display:flex;flex-direction:column;background:var(--vscode-input-background);border:1px solid var(--vscode-input-border);border-radius:10px;transition:border-color .12s,box-shadow .12s}
 #composer-card:focus-within{border-color:var(--vscode-focusBorder);box-shadow:0 0 0 1px var(--vscode-focusBorder)}
 #composer-card.drag-over{border-color:var(--vscode-button-background);box-shadow:0 0 0 2px var(--vscode-button-background)}
+
+/* Pending-edits panel — sits at the top of the composer card, just above the
+   input row. Mirrors the GH-Copilot "review my edits" affordance. */
+.pending-edits-panel{display:flex;flex-direction:column;border-bottom:1px solid var(--vscode-input-border);background:var(--vscode-editorWidget-background,var(--vscode-input-background));border-radius:10px 10px 0 0;padding:6px 8px;gap:4px;max-height:180px;overflow:hidden}
+.pending-edits-panel .pe-header{display:flex;align-items:center;gap:6px;font-size:11.5px}
+.pending-edits-panel .pe-title{font-weight:600;color:var(--vscode-foreground);opacity:.85}
+.pending-edits-panel .pe-count{background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);border-radius:8px;padding:0 6px;font-size:10.5px;line-height:14px;min-width:14px;text-align:center}
+.pending-edits-panel .pe-spacer{flex:1}
+.pending-edits-panel .pe-btn{border:1px solid transparent;background:transparent;color:var(--vscode-foreground);cursor:pointer;font-size:11px;padding:2px 8px;border-radius:4px;line-height:1.4}
+.pending-edits-panel .pe-btn:hover{background:var(--vscode-toolbar-hoverBackground)}
+.pending-edits-panel .pe-btn-primary{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
+.pending-edits-panel .pe-btn-primary:hover{background:var(--vscode-button-hoverBackground)}
+.pending-edits-panel .pe-btn-secondary{border-color:var(--vscode-input-border)}
+.pending-edits-panel .pe-list{list-style:none;margin:0;padding:0;overflow-y:auto;max-height:140px}
+.pending-edits-panel .pe-item{display:flex;align-items:center;gap:6px;padding:3px 4px;border-radius:4px;cursor:pointer;font-size:12px}
+.pending-edits-panel .pe-item:hover{background:var(--vscode-list-hoverBackground)}
+.pending-edits-panel .pe-item-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--vscode-foreground)}
+.pending-edits-panel .pe-item-name .pe-dir{opacity:.55;font-size:11px}
+.pending-edits-panel .pe-stats{font-family:var(--vscode-editor-font-family,monospace);font-size:11px;display:inline-flex;gap:5px}
+.pending-edits-panel .pe-add{color:var(--vscode-gitDecoration-addedResourceForeground,#587c0c)}
+.pending-edits-panel .pe-del{color:var(--vscode-gitDecoration-deletedResourceForeground,#ad0707)}
+.pending-edits-panel .pe-tag{font-size:10px;text-transform:uppercase;padding:0 5px;border-radius:3px;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);opacity:.85}
+.pending-edits-panel .pe-actions{display:inline-flex;gap:2px;opacity:0;transition:opacity .12s}
+.pending-edits-panel .pe-item:hover .pe-actions{opacity:1}
+.pending-edits-panel .pe-actions button{border:none;background:transparent;color:var(--vscode-icon-foreground);cursor:pointer;padding:2px 6px;border-radius:3px;font-size:11px}
+.pending-edits-panel .pe-actions button:hover{background:var(--vscode-toolbar-hoverBackground)}
+.pending-edits-panel .pe-actions .pe-act-keep:hover{color:var(--vscode-gitDecoration-addedResourceForeground,#587c0c)}
+.pending-edits-panel .pe-actions .pe-act-discard:hover{color:var(--vscode-gitDecoration-deletedResourceForeground,#ad0707)}
 #inp{flex:1 1 auto;min-width:0;resize:none;background:transparent;color:var(--vscode-input-foreground);border:none;border-radius:10px 10px 0 0;padding:9px 12px 6px;font-family:inherit;font-size:13px;line-height:1.45;min-height:36px;max-height:200px;outline:none;overflow-y:hidden;box-sizing:border-box;display:block}
 #composer-bar{display:flex;align-items:center;gap:4px;padding:4px 6px 6px}
 #composer-bar .cb-left{flex:1;display:flex;align-items:center;gap:4px;flex-wrap:wrap;min-width:0}
@@ -623,13 +655,3 @@ body.vscode-light .settings-test-result.ok{color:#267f26}
 .sys-notice{align-self:stretch;margin:10px 6px;padding:8px 12px;border-left:3px solid var(--vscode-editorWarning-foreground,#d97706);background:var(--vscode-editorWidget-background,rgba(127,127,127,.08));color:var(--vscode-foreground);border-radius:3px;font-size:12px;line-height:1.45}
 .sys-notice-title{font-weight:600;margin-bottom:4px;color:var(--vscode-editorWarning-foreground,#d97706)}
 .sys-notice-body{opacity:.85}
-
-/* ── Tool kind color rails: 2px left line only, no row tint ── */
-.tl.k-read,    .tool.k-read    .h { border-left-color: rgba(106,163,224,.55); }
-.tl.k-write,   .tool.k-write   .h { border-left-color: rgba(212,146,90,.65); }
-.tl.k-search,  .tool.k-search  .h { border-left-color: rgba(179,136,212,.55); }
-.tl.k-shell,   .tool.k-shell   .h { border-left-color: rgba(123,196,127,.6); }
-.tl.k-agent,   .tool.k-agent   .h { border-left-color: rgba(232,184,109,.65); }
-.tl.k-plan,    .tool.k-plan    .h { border-left-color: var(--dc-rule); }
-.tl.k-other,   .tool.k-other   .h { border-left-color: var(--dc-rule); }
-.tl-group .tl-summary { padding-left:6px; border-left:2px solid var(--dc-rule); }

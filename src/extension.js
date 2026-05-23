@@ -69,6 +69,37 @@ function activate(context) {
 
     const chatProvider = new ChatViewProvider(context);
 
+    // ─── Diff content provider for the pending-edits panel ─────────────────
+    // URI shape:  deepcopilot-before:<basename>?sid=<sessionId>&p=<absPath>&t=<ts>
+    // Provides the pre-edit ("before") snapshot of a file so the native
+    // `vscode.diff` command can render a real diff editor against the current
+    // on-disk content. Empty string is returned for new files / unknown URIs.
+    //
+    // We expose an `onDidChange` event so the chat provider can force a
+    // refresh; combined with a cache-busting `t` query param this prevents
+    // VS Code from showing a stale, no-op diff on the second click of the
+    // same pending edit (see issue: "只能点击一次后面弹不出来了").
+    const _pendingBeforeEmitter = new vscode.EventEmitter();
+    const pendingBeforeProvider = {
+        onDidChange: _pendingBeforeEmitter.event,
+        provideTextDocumentContent(uri) {
+            try {
+                const params = new URLSearchParams(uri.query || '');
+                const sid    = params.get('sid');
+                const p      = params.get('p');
+                if (!sid || !p) return '';
+                return chatProvider.getPendingBefore(sid, p) || '';
+            } catch { return ''; }
+        },
+    };
+    context.subscriptions.push(
+        _pendingBeforeEmitter,
+        vscode.workspace.registerTextDocumentContentProvider('deepcopilot-before', pendingBeforeProvider)
+    );
+    // Exposed on the provider so `_handleOpenEditDiff` can poke VS Code to
+    // re-read the same URI when the user clicks twice in a row.
+    chatProvider._invalidatePendingBefore = (uri) => _pendingBeforeEmitter.fire(uri);
+
     // ─── Discount expiry warning (shown once per state change) ────────────
     const dw = getDiscountWarning();
     const dwState = dw.expired ? 'expired' : dw.expiring ? `expiring-${dw.days}` : '';

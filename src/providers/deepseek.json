@@ -20,7 +20,7 @@
       "id": "deepseek-v4-pro",
       "displayName": "DeepSeek V4 Pro",
       "contextWindow": 1000000,
-      "maxOutputTokens": 65536,
+      "maxOutputTokens": 384000,
       "capabilities": { "tools": true, "reasoning": true, "vision": false },
       "pricing": {
         "currency": "CNY",
@@ -29,7 +29,7 @@
         "output": 24.0,
         "discount": {
           "label": "2.5折",
-          "until": "2026-05-31T15:59:00Z",
+          "until": "2099-12-31T15:59:00Z",
           "input": 3.0,
           "cache_hit": 0.025,
           "output": 6.0
@@ -40,7 +40,7 @@
       "id": "deepseek-v4-flash",
       "displayName": "DeepSeek V4 Flash",
       "contextWindow": 1000000,
-      "maxOutputTokens": 65536,
+      "maxOutputTokens": 384000,
       "capabilities": { "tools": true, "reasoning": true, "vision": false },
       "pricing": {
         "currency": "CNY",

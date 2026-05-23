@@ -31,13 +31,6 @@
   var MODELS = PROVIDER_MODELS.deepseek;
   var _currentProvider = 'deepseek';
 
-  // CodeQL guard: reject keys that could pollute Object.prototype or hijack
-  // built-in properties when used as dynamic object keys (provider ids, tool
-  // ids, terminal names — all flow from external data).
-  function isUnsafeKey(k) {
-    return k === '__proto__' || k === 'prototype' || k === 'constructor';
-  }
-
   function applyProvidersInfo(list) {
     if (!Array.isArray(list) || !list.length) return;
     PROVIDER_MODELS    = {};
@@ -47,8 +40,8 @@
     PROVIDER_ORDER     = [];
     for (var i = 0; i < list.length; i++) {
       var p  = list[i];
-      var id = p && p.id ? String(p.id) : '';
-      if (!id || isUnsafeKey(id)) continue;
+      var id = p && p.id;
+      if (!id) continue;
       PROVIDER_ORDER.push(id);
       PROVIDER_DISPLAY[id]   = p.displayName || id;
       PROVIDER_URLS[id]      = p.baseUrl || '';
@@ -926,7 +919,7 @@
        run_shell ×2 powershell → "Ran <chip>powershell</chip> ×2"          */
   function makeSemanticLabel(nodes) {
     function chip(s) {
-      return '<code class="tl-chip">' + escHtml(String(s || "")) + '</code>';
+      return '<span class="tl-chip">' + escHtml(String(s || "")) + '</span>';
     }
     var reads = [], writes = [], searches = [], shells = [], agents = [], others = [];
     nodes.forEach(function(el) {
@@ -1235,8 +1228,6 @@
 
   /* Prose line tool row — no expandable body, result appended inline. */
   function addToolLine(id, name, args){
-    var safeId = String(id);
-    if (isUnsafeKey(safeId)) return null;
     ensureBubble();
     var holder = curBubble.querySelector(".flow");
     var wrap = document.createElement("div");
@@ -1261,9 +1252,9 @@
       if (!d.classList.contains("has-detail")) return;
       var open = d.classList.toggle("open");
       detail.style.display = open ? "block" : "none";
-      var rec = toolMap[safeId]; if (rec) rec._userToggled = true;
+      var rec = toolMap[id]; if (rec) rec._userToggled = true;
     });
-    toolMap[safeId] = { root:d, body:detail, status:d.querySelector(".tl-res"), isLine:true, name:name, args:args, _startedAt:Date.now(), _userToggled:false };
+    toolMap[id] = { root:d, body:detail, status:d.querySelector(".tl-res"), isLine:true, name:name, args:args, _startedAt:Date.now(), _userToggled:false };
     ascroll();
     return d;
   }
@@ -1343,6 +1334,106 @@
     t = String(t).trim();
     return t || ("Step " + (i + 1));
   }
+
+  // ─── Pending-edits panel (Copilot-style review of agent writes) ─────────
+  var _peWired = false;
+  function _wirePendingEdits(){
+    if (_peWired) return;
+    var panel = document.getElementById('pending-edits-panel');
+    if (!panel) return;
+    _peWired = true;
+    var keepAll    = document.getElementById('pe-keep-all');
+    var discardAll = document.getElementById('pe-discard-all');
+    if (keepAll)    keepAll.addEventListener('click',    function(){ vscode.postMessage({ type: 'keepAllEdits' }); });
+    if (discardAll) discardAll.addEventListener('click', function(){ vscode.postMessage({ type: 'discardAllEdits' }); });
+  }
+  function _peLabel(key, fallback){
+    /* uses keys placed on the panel header via data attrs would require more
+       HTML plumbing; for now we keep the labels English-driven via fallback */
+    return fallback;
+  }
+  function renderPendingEdits(items){
+    var panel = document.getElementById('pending-edits-panel');
+    if (!panel) return;
+    _wirePendingEdits();
+    if (!items || !items.length){
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = 'flex';
+    var cnt = document.getElementById('pe-count');
+    if (cnt) cnt.textContent = String(items.length);
+    var list = document.getElementById('pe-list');
+    if (!list) return;
+    list.innerHTML = '';
+    items.forEach(function(it){
+      var li = document.createElement('li');
+      li.className = 'pe-item';
+      li.title = it.path || it.rel || '';
+      /* clicking the row opens the native diff editor */
+      li.addEventListener('click', function(ev){
+        if (ev.target && ev.target.closest && ev.target.closest('.pe-actions')) return;
+        vscode.postMessage({ type: 'openEditDiff', path: it.path });
+      });
+
+      var name = document.createElement('span');
+      name.className = 'pe-item-name';
+      var rel = String(it.rel || it.path || '');
+      var slash = rel.lastIndexOf('/');
+      if (slash >= 0){
+        var dir = document.createElement('span');
+        dir.className = 'pe-dir';
+        dir.textContent = rel.slice(0, slash + 1);
+        name.appendChild(dir);
+        name.appendChild(document.createTextNode(rel.slice(slash + 1)));
+      } else {
+        name.textContent = rel;
+      }
+      li.appendChild(name);
+
+      if (it.isNew || it.isDelete || it.binary){
+        var tag = document.createElement('span');
+        tag.className = 'pe-tag';
+        tag.textContent = it.binary ? 'binary' : it.isNew ? 'new' : 'deleted';
+        li.appendChild(tag);
+      }
+
+      var stats = document.createElement('span');
+      stats.className = 'pe-stats';
+      if (it.added > 0){
+        var a = document.createElement('span'); a.className = 'pe-add'; a.textContent = '+' + it.added; stats.appendChild(a);
+      }
+      if (it.removed > 0){
+        var r = document.createElement('span'); r.className = 'pe-del'; r.textContent = '-' + it.removed; stats.appendChild(r);
+      }
+      li.appendChild(stats);
+
+      var acts = document.createElement('span');
+      acts.className = 'pe-actions';
+      var bDiscard = document.createElement('button');
+      bDiscard.className = 'pe-act-discard';
+      bDiscard.title = 'Discard';
+      bDiscard.textContent = '✕';
+      bDiscard.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        vscode.postMessage({ type: 'discardEdit', path: it.path });
+      });
+      var bKeep = document.createElement('button');
+      bKeep.className = 'pe-act-keep';
+      bKeep.title = 'Keep';
+      bKeep.textContent = '✓';
+      bKeep.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        vscode.postMessage({ type: 'keepEdit', path: it.path });
+      });
+      acts.appendChild(bDiscard);
+      acts.appendChild(bKeep);
+      li.appendChild(acts);
+
+      list.appendChild(li);
+    });
+  }
+
   function renderPlan(steps, todos){
     var allItems = [];
     (steps || []).forEach(function(s, i){
@@ -2374,19 +2465,9 @@
       var th2 = curThkHead;
       if (th2 && !th2.dataset.done) {
         th2.dataset.done = "1";
-        /* Switch label to "Thought for Ns" and collapse the body, but keep
-           the head visible so the user can click to re-expand. */
-        var startMs = parseInt(th2.dataset.start || '0', 10);
-        var dur = startMs ? Math.max(1, Math.round((Date.now() - startMs) / 1000)) : 0;
-        var lbl = th2.querySelector('.th-lbl');
-        if (lbl) lbl.textContent = dur > 0 ? ('Thought for ' + dur + 's') : 'Thought';
+        /* hide the entire thinking block once real reply begins */
         var slot2 = th2.parentNode;
-        if (slot2) {
-          var body2 = slot2.querySelector('.thinkblk');
-          if (body2) body2.style.display = 'none';
-          var chev2 = th2.querySelector('.th-chev');
-          if (chev2) chev2.textContent = '\u25b8';
-        }
+        if (slot2) slot2.style.display = "none";
       }
       showCursor();
       ascroll();
@@ -2418,7 +2499,6 @@
              during background-job polling loops (e.g. run_shell_bg + read_terminal). */
           var _rtA; try { _rtA = JSON.parse(m.args || '{}'); } catch(e) { _rtA = {}; }
           var _rtKey = String(_rtA.terminal || '_active_');
-          if (isUnsafeKey(_rtKey)) _rtKey = 'rt:' + _rtKey;
           var _prev = _readTermCardMap[_rtKey];
           if (_prev && _prev.root && _prev.root.parentNode) {
             /* Reset card to running state in-place */
@@ -2661,6 +2741,8 @@
       ascroll();
     } else if (m.type === "plan"){
       renderPlan(m.steps || [], m.todos || []);
+    } else if (m.type === "pendingEdits"){
+      renderPendingEdits(m.items || []);
     } else if (m.type === "usage"){
       bumpUsage(m.usage || {});
     } else if (m.type === "progress"){

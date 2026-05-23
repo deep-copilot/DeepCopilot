@@ -16,14 +16,14 @@
     {
       "id": "gpt-5.5",
       "displayName": "GPT-5.5",
-      "contextWindow": 1000000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "capabilities": { "tools": true, "reasoning": true, "vision": true }
     },
     {
       "id": "gpt-5.4",
       "displayName": "GPT-5.4",
-      "contextWindow": 1000000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "capabilities": { "tools": true, "reasoning": true, "vision": true }
     },

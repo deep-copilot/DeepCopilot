@@ -34,6 +34,14 @@ function buildWebviewHtml(webview, extensionUri) {
         interactionMode: t('wvInteractionMode'),
         balanceTitle:    t('wvBalanceTitle'),
         balanceInit:     t('wvBalanceInit'),
+        pendingEditsTitle:      t('wvPendingEditsTitle'),
+        pendingEditsKeep:       t('wvPendingEditsKeep'),
+        pendingEditsKeepAll:    t('wvPendingEditsKeepAll'),
+        pendingEditsDiscard:    t('wvPendingEditsDiscard'),
+        pendingEditsDiscardAll: t('wvPendingEditsDiscardAll'),
+        pendingEditsNew:        t('wvPendingEditsNew'),
+        pendingEditsDeleted:    t('wvPendingEditsDeleted'),
+        pendingEditsBinary:     t('wvPendingEditsBinary'),
     };
     const nonce   = Buffer.from(Date.now().toString() + Math.random().toString()).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
     const csp = [
@@ -93,6 +101,16 @@ function buildWebviewHtml(webview, extensionUri) {
     <ul class="todo-pop-list" id="todo-pop-list"></ul>
   </div>
   <div id="composer-card">
+    <div id="pending-edits-panel" class="pending-edits-panel" style="display:none">
+      <div class="pe-header">
+        <span class="pe-title">${ui.pendingEditsTitle || 'Pending edits'}</span>
+        <span class="pe-count" id="pe-count">0</span>
+        <span class="pe-spacer"></span>
+        <button class="pe-btn pe-btn-secondary" id="pe-discard-all" title="${ui.pendingEditsDiscardAll || 'Discard all'}">${ui.pendingEditsDiscardAll || 'Discard all'}</button>
+        <button class="pe-btn pe-btn-primary"   id="pe-keep-all"    title="${ui.pendingEditsKeepAll    || 'Keep all'}">${ui.pendingEditsKeepAll    || 'Keep all'}</button>
+      </div>
+      <ul class="pe-list" id="pe-list"></ul>
+    </div>
     <div id="at-chips"></div>
     <div id="inp-row">
       <div id="skill-notice"></div>
