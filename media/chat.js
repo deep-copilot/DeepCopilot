@@ -31,6 +31,13 @@
   var MODELS = PROVIDER_MODELS.deepseek;
   var _currentProvider = 'deepseek';
 
+  // CodeQL guard: reject keys that could pollute Object.prototype or hijack
+  // built-in properties when used as dynamic object keys (provider ids, tool
+  // ids, terminal names — all flow from external data).
+  function isUnsafeKey(k) {
+    return k === '__proto__' || k === 'prototype' || k === 'constructor';
+  }
+
   function applyProvidersInfo(list) {
     if (!Array.isArray(list) || !list.length) return;
     PROVIDER_MODELS    = {};
@@ -40,8 +47,8 @@
     PROVIDER_ORDER     = [];
     for (var i = 0; i < list.length; i++) {
       var p  = list[i];
-      var id = p && p.id;
-      if (!id) continue;
+      var id = p && p.id ? String(p.id) : '';
+      if (!id || isUnsafeKey(id)) continue;
       PROVIDER_ORDER.push(id);
       PROVIDER_DISPLAY[id]   = p.displayName || id;
       PROVIDER_URLS[id]      = p.baseUrl || '';
@@ -1228,6 +1235,8 @@
 
   /* Prose line tool row — no expandable body, result appended inline. */
   function addToolLine(id, name, args){
+    var safeId = String(id);
+    if (isUnsafeKey(safeId)) return null;
     ensureBubble();
     var holder = curBubble.querySelector(".flow");
     var wrap = document.createElement("div");
@@ -1252,9 +1261,9 @@
       if (!d.classList.contains("has-detail")) return;
       var open = d.classList.toggle("open");
       detail.style.display = open ? "block" : "none";
-      var rec = toolMap[id]; if (rec) rec._userToggled = true;
+      var rec = toolMap[safeId]; if (rec) rec._userToggled = true;
     });
-    toolMap[id] = { root:d, body:detail, status:d.querySelector(".tl-res"), isLine:true, name:name, args:args, _startedAt:Date.now(), _userToggled:false };
+    toolMap[safeId] = { root:d, body:detail, status:d.querySelector(".tl-res"), isLine:true, name:name, args:args, _startedAt:Date.now(), _userToggled:false };
     ascroll();
     return d;
   }
@@ -2409,6 +2418,7 @@
              during background-job polling loops (e.g. run_shell_bg + read_terminal). */
           var _rtA; try { _rtA = JSON.parse(m.args || '{}'); } catch(e) { _rtA = {}; }
           var _rtKey = String(_rtA.terminal || '_active_');
+          if (isUnsafeKey(_rtKey)) _rtKey = 'rt:' + _rtKey;
           var _prev = _readTermCardMap[_rtKey];
           if (_prev && _prev.root && _prev.root.parentNode) {
             /* Reset card to running state in-place */

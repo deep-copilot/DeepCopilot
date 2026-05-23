@@ -558,7 +558,6 @@ class AgentLoop {
                                     ].join('\n'),
                                 });
                                 Logger.info('BG_SNAPSHOT_INJECTED', { jobs: [...getActiveBgJobs()], elapsed_s: elapsed });
-                                lastSnapshotAt = Date.now();
                                 break; // exit inner loop → outer continue → API call
                             }
                             // else: keep waiting silently (no API call this iteration)
