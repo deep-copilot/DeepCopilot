@@ -1,21 +1,29 @@
-*{box-sizing:border-box;margin:0;padding:0}
+﻿*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  /* indent system: 16px = one hierarchy step */
+  --dc-indent: 16px;
+  /* color ladder: primary text → secondary headings/labels → muted hints → accent */
+  --dc-fg-primary: var(--vscode-foreground);
+  --dc-fg-secondary: var(--vscode-descriptionForeground);
+  --dc-fg-muted: color-mix(in srgb, var(--vscode-descriptionForeground) 65%, transparent);
+  --dc-accent: var(--vscode-focusBorder, var(--vscode-button-background));
+  --dc-rule: var(--vscode-widget-border, var(--vscode-panel-border));
+}
 body{font-family:var(--vscode-font-family);font-size:13px;color:var(--vscode-foreground);background:var(--vscode-sideBar-background);height:100vh;overflow:hidden;position:relative;
-  display:grid;grid-template-columns:220px 1fr 280px;grid-template-rows:auto 1fr auto auto;
-  grid-template-areas:"sb sb sb" "left main right" "left composer right" "foot foot foot"}
+  display:grid;grid-template-columns:1fr 280px;grid-template-rows:auto 1fr auto auto;
+  grid-template-areas:"sb sb" "main right" "composer right" "foot foot"}
 /* ── Locale-aware fonts ── */
 html[data-locale="zh"] body{font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Source Han Sans CN","WenQuanYi Micro Hei",sans-serif}
 html[data-locale="en"] body{font-family:"Segoe UI","Inter",system-ui,-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
-body.no-left{grid-template-columns:0 1fr 280px}
-body.no-left #left{display:none}
-body.no-right{grid-template-columns:220px 1fr 0}
+body.no-right{grid-template-columns:1fr 0}
 body.no-right #right{display:none}
-body.no-left.no-right{grid-template-columns:0 1fr 0}
+body.no-right{grid-template-columns:1fr 0}
 body.narrow{grid-template-columns:1fr;grid-template-areas:"sb" "main" "composer" "foot"}
-body.narrow #left,body.narrow #right{display:none}
+body.narrow #right{display:none}
 /* CSS-only fallback: force narrow layout when webview viewport < 600px (independent of JS) */
 @media (max-width: 599px){
   body{grid-template-columns:1fr !important;grid-template-areas:"sb" "main" "composer" "foot" !important}
-  body #left,body #right{display:none !important}
+  body #right{display:none !important}
   .edge-toggle{display:none !important}
 }
 #tb{display:none}
@@ -33,25 +41,21 @@ body.narrow #left,body.narrow #right{display:none}
 .edge-toggle{position:fixed;top:50%;transform:translateY(-50%);width:20px;height:64px;border:1px solid rgba(127,127,127,.55);background:rgba(127,127,127,.22);color:var(--vscode-foreground);font-size:13px;font-weight:600;line-height:64px;text-align:center;cursor:pointer;padding:0;z-index:50;opacity:.85;box-shadow:0 0 0 1px rgba(0,0,0,.12), 0 2px 4px rgba(0,0,0,.18);transition:opacity .15s,background .15s,border-color .15s,transform .15s,left .25s,right .25s;display:flex;align-items:center;justify-content:center}
 .edge-toggle:hover{opacity:1;background:rgba(127,127,127,.42);border-color:rgba(127,127,127,.95);color:var(--vscode-foreground)}
 .edge-toggle:active{background:rgba(127,127,127,.55)}
-.edge-toggle.edge-l{left:0;border-left:none;border-radius:0 14px 14px 0}
 .edge-toggle.edge-r{right:0;border-right:none;border-radius:14px 0 0 14px}
 .edge-toggle::before{content:"";font-family:"Segoe UI Symbol",sans-serif}
-body.no-left .edge-toggle.edge-l::before{content:"\25B8"} /* ▸ expand */
-body:not(.no-left) .edge-toggle.edge-l{left:220px}
-body:not(.no-left) .edge-toggle.edge-l::before{content:"\25C2"} /* ◂ collapse */
 body.no-right .edge-toggle.edge-r::before{content:"\25C2"} /* ◂ expand (point inward) */
 body:not(.no-right) .edge-toggle.edge-r{right:280px}
 body:not(.no-right) .edge-toggle.edge-r::before{content:"\25B8"} /* ▸ collapse */
 body.narrow .edge-toggle{display:none}
 #main{grid-area:main;overflow-y:auto;padding:10px 24px;display:flex;flex-direction:column;gap:12px;min-height:0}
 body.narrow #main{padding-left:12px;padding-right:12px}
-.msgU{background:rgba(128,128,128,.18);outline:1px solid transparent;border-radius:8px 8px 2px 8px;padding:8px 12px;align-self:flex-end;max-width:88%;word-break:break-word;line-height:1.5;position:relative;cursor:pointer;transition:outline-color .15s,background .15s}
+.msgU{background:rgba(128,128,128,.10);outline:none;border:none;border-radius:8px 8px 2px 8px;padding:8px 12px;align-self:flex-end;max-width:88%;word-break:break-word;line-height:1.5;position:relative;cursor:pointer;transition:background .15s}
 .msgU-hd{display:none}
 .msgU-body{white-space:pre-wrap;word-break:break-word;line-height:1.5;pointer-events:none}
 .msgU-attachments{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;pointer-events:none}
 .chip-sent{font-size:10.5px;padding:1px 7px;border-radius:10px;opacity:.85;pointer-events:none}
 .lbl-you{display:none}
-.msgU:hover{background:rgba(128,128,128,.26);outline-color:var(--vscode-focusBorder,rgba(127,127,127,.6))}
+.msgU:hover{background:rgba(128,128,128,.16);outline:none}
 /* ── Inline edit mode (GH Copilot style) ── */
 .msgU.editing{background:var(--vscode-input-background);outline:1px solid var(--vscode-focusBorder);cursor:default;padding:6px 8px;max-width:88%;width:88%}
 .msgU.editing:hover{background:var(--vscode-input-background)}
@@ -66,10 +70,13 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .msgU-editor-bar .btn-save:disabled{opacity:.5;cursor:not-allowed}
 .msgU-editor-bar .btn-cancel{background:transparent;color:var(--vscode-foreground);border-color:var(--vscode-panel-border)}
 .msgU-editor-bar .btn-cancel:hover{background:var(--vscode-toolbar-hoverBackground)}
+/* explicit prose bullets: model can emit <p class="bullet"> to add a leading dot */
+.msgC p.bullet{padding-left:14px;position:relative}
+.msgC p.bullet::before{content:"•";position:absolute;left:2px;top:0;color:var(--dc-fg-muted);font-size:14px;line-height:1.65}
 .msgA{align-self:flex-start;width:100%}
 .msgA .lbl{display:none}
-.msgC{line-height:1.6;word-break:break-word}
-.msgC>p{margin:0 0 8px 0}
+.msgC{line-height:1.65;word-break:break-word}
+.msgC>p{margin:0 0 10px 0;max-width:72ch}
 .msgC>p:last-child{margin-bottom:0}
 .msgC h2.mh,.msgC h3.mh,.msgC h4.mh,.msgC h5.mh,.msgC h6.mh{margin:14px 0 6px 0;font-weight:600;color:var(--vscode-foreground);line-height:1.3}
 .msgC h2.mh{font-size:15px;padding-bottom:4px;border-bottom:1px solid var(--vscode-panel-border)}
@@ -79,12 +86,15 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .msgC ul.mul li,.msgC ol.mol li{margin:2px 0;line-height:1.55}
 .msgC ul.mul li::marker{color:var(--vscode-descriptionForeground)}
 .msgC hr.mhr{border:none;border-top:1px solid var(--vscode-panel-border);margin:12px 0}
-.msgC blockquote.mbq{margin:6px 0;padding:4px 10px;border-left:3px solid var(--vscode-panel-border);color:var(--vscode-descriptionForeground);background:rgba(255,255,255,.02)}
-/* Whitelisted HTML elements (Issue #35) */
-.msgC details{margin:6px 0;padding:4px 8px;border:1px solid var(--vscode-panel-border);border-radius:4px;background:rgba(255,255,255,.02)}
-.msgC details>summary{cursor:pointer;font-weight:600;color:var(--vscode-foreground);outline:none;user-select:none;padding:2px 0}
+/* blockquote: left rule only, no bg */
+.msgC blockquote.mbq{margin:6px 0;padding:2px 0 2px var(--dc-indent);border-left:2px solid var(--dc-rule);color:var(--dc-fg-secondary);background:transparent}
+/* details: left rule only, no border/bg/radius */
+.msgC details{margin:6px 0;padding:0 0 0 var(--dc-indent);border:none;border-left:2px solid var(--dc-rule);border-radius:0;background:transparent}
+.msgC details>summary{cursor:pointer;font-weight:500;color:var(--vscode-foreground);outline:none;user-select:none;padding:1px 0;list-style:none}
+.msgC details>summary::before{content:"\25B8";display:inline-block;width:10px;margin-right:4px;font-size:9px;opacity:.6;transition:transform .15s}
+.msgC details[open]>summary::before{transform:rotate(90deg)}
 .msgC details>summary:hover{color:var(--vscode-textLink-foreground)}
-.msgC details[open]>summary{margin-bottom:6px;border-bottom:1px dashed var(--vscode-panel-border);padding-bottom:4px}
+.msgC details[open]>summary{margin-bottom:4px;padding-bottom:0;border-bottom:none}
 .msgC kbd{display:inline-block;padding:1px 6px;margin:0 2px;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;line-height:1.4;color:var(--vscode-foreground);background:var(--vscode-textCodeBlock-background);border:1px solid var(--vscode-panel-border);border-bottom-width:2px;border-radius:3px;vertical-align:1px}
 .msgC mark{background:rgba(255,210,80,.28);color:inherit;padding:0 2px;border-radius:2px}
 .msgC sub,.msgC sup{font-size:75%;line-height:0}
@@ -94,10 +104,12 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .msgC samp,.msgC var{font-family:var(--vscode-editor-font-family,monospace);font-size:90%}
 .msgC figure{margin:8px 0;padding:0}
 .msgC figcaption{font-size:11px;color:var(--vscode-descriptionForeground);margin-top:4px;text-align:center}
-.msgC table.mtbl{border-collapse:collapse;margin:6px 0 10px 0;font-size:12px;width:auto;max-width:100%}
-.msgC table.mtbl th,.msgC table.mtbl td{border:1px solid var(--vscode-panel-border);padding:4px 10px;text-align:left;vertical-align:top}
-.msgC table.mtbl th{background:var(--vscode-textCodeBlock-background);font-weight:600;font-size:11.5px}
-.msgC table.mtbl tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+/* tables: only header underline + faint row separators, no cell borders */
+.msgC table.mtbl{border-collapse:collapse;margin:8px 0 12px 0;font-size:12px;width:auto;max-width:100%}
+.msgC table.mtbl th,.msgC table.mtbl td{border:none;padding:5px 14px 5px 0;text-align:left;vertical-align:top}
+.msgC table.mtbl th{border-bottom:1px solid var(--vscode-panel-border);font-weight:600;font-size:11.5px;color:var(--vscode-foreground);background:transparent}
+.msgC table.mtbl tr+tr td{border-top:1px solid rgba(127,127,127,.12)}
+.msgC table.mtbl tr:nth-child(even) td{background:transparent}
 .msgC pre.cb{background:var(--vscode-textCodeBlock-background);border:1px solid var(--vscode-panel-border);border-radius:6px;margin:6px 0;overflow:hidden;font-family:var(--vscode-editor-font-family,monospace);font-size:12px}
 .msgC pre.cb .cb-h{display:flex;align-items:center;gap:6px;padding:3px 8px;background:rgba(255,255,255,.04);border-bottom:1px solid var(--vscode-panel-border);font-size:10px;color:var(--vscode-descriptionForeground);user-select:none}
 .msgC pre.cb .cb-h .lang{font-family:var(--vscode-font-family);text-transform:lowercase;flex:1}
@@ -109,20 +121,19 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .msgC pre.cb .cb-h button.cb-newfile{color:var(--vscode-descriptionForeground)}
 .msgC pre.cb code{display:block;padding:8px 10px;overflow-x:auto;white-space:pre;line-height:1.5}
 .msgC code.ic{background:var(--vscode-textCodeBlock-background);padding:1px 5px;border-radius:3px;font-family:var(--vscode-editor-font-family,monospace);font-size:12px}
-.msgC a.flink{color:var(--vscode-textLink-foreground);text-decoration:none;background:rgba(100,160,255,.10);padding:0 4px;border-radius:3px;font-family:var(--vscode-editor-font-family,monospace);font-size:11.5px;cursor:pointer;border:1px solid transparent}
-.msgC a.flink:hover{background:rgba(100,160,255,.20);border-color:var(--vscode-textLink-foreground);text-decoration:none}
+.msgC a.flink{color:var(--vscode-textLink-foreground);text-decoration:none;background:transparent;padding:0 2px;border-radius:2px;font-family:var(--vscode-editor-font-family,monospace);font-size:11.5px;cursor:pointer;border:none;opacity:.9}
+.msgC a.flink:hover{background:rgba(100,160,255,.12);text-decoration:none;opacity:1}
 .msgC a.flink .ico{opacity:.7;margin-right:2px}
 .jumpbtn{position:absolute;right:12px;bottom:8px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:14px;padding:4px 10px;font-size:11px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.25);display:none;z-index:5}
 .jumpbtn.show{display:block}
 #main{position:relative}
-.thinkblk{font-size:11px;color:var(--vscode-descriptionForeground);font-style:italic;border-left:2px solid var(--vscode-panel-border);padding:6px 10px;margin:4px 0 8px 0;white-space:pre-wrap;opacity:.85;max-height:200px;overflow-y:auto;background:rgba(255,255,255,.02);border-radius:0 3px 3px 0}
+/* thinking block: indent + left rule only (no bg, no radius) */
+.thinkblk{font-size:0.9em;font-family:inherit;color:var(--dc-fg-secondary);border-left:2px solid var(--dc-rule);padding:2px 0 2px var(--dc-indent);margin:4px 0 8px 0;white-space:pre-wrap;opacity:.85;max-height:120px;overflow-y:auto;background:transparent;border-radius:0}
 .math-block{overflow-x:auto;padding:6px 2px;text-align:center}.math-block .katex-display{margin:0}.katex{font-size:1.05em}
-.thinkhead{font-size:11px;color:var(--vscode-descriptionForeground);margin-bottom:4px;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:10px;opacity:.85;background:rgba(255,255,255,.03);border:1px solid var(--vscode-panel-border)}
-.thinkhead:hover{background:var(--vscode-toolbar-hoverBackground);opacity:1}
-.thinkhead .th-chev{font-size:9px;opacity:.6}
-.thinkhead .th-lbl{font-weight:500}
-.thinkhead .th-dot{width:7px;height:7px;border-radius:50%;background:var(--vscode-button-background);box-shadow:0 0 0 0 var(--vscode-button-background);animation:thpulse 1.4s ease-out infinite;flex-shrink:0}
-.thinkhead.done .th-dot{animation:none;opacity:.45;background:var(--vscode-descriptionForeground)}
+.thinkhead{font-size:12px;color:var(--vscode-foreground);margin-bottom:2px;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:5px;opacity:.8}
+.thinkhead:hover{opacity:1}
+.thinkhead .th-chev{font-size:9px;opacity:.7}
+.thinkhead .th-lbl{}
 .think-slot{display:block;margin:2px 0}
 @keyframes thpulse{0%{box-shadow:0 0 0 0 rgba(100,160,255,.55);transform:scale(1)}70%{box-shadow:0 0 0 6px rgba(100,160,255,0);transform:scale(1.15)}100%{box-shadow:0 0 0 0 rgba(100,160,255,0);transform:scale(1)}}
 /* ── Issue #59: DeepCopilot Sonar Spinner ── */
@@ -145,37 +156,41 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .flow{display:flex;flex-direction:column;gap:2px}
 .flow .msgC.seg{line-height:1.6;word-break:break-word}
 .flow .msgC.seg:empty{display:none}
-/* ── Tool cards (shell / web-search / agent) — Sema-style minimal ── */
+/* ── Tool cards (shell / web-search / agent) — unified with .tl-wrap visual ── */
 .tool{margin:0;border:none;font-size:10.5px;overflow:hidden;background:transparent}
-.tool .h{display:flex;align-items:baseline;gap:5px;padding:2px 2px;cursor:pointer;user-select:none;line-height:1.45}
-.tool .h:hover{background:var(--vscode-list-hoverBackground,rgba(127,127,127,.06));border-radius:2px}
+.tool .h{display:flex;align-items:baseline;gap:5px;padding:1px 2px 1px 6px;cursor:pointer;user-select:none;line-height:1.45;border-left:2px solid transparent;border-radius:0}
+.tool .h:hover{background:var(--vscode-list-hoverBackground,rgba(127,127,127,.06))}
 .tool .h .chev{display:none}
-.tool .h .ico{display:none}
-.tool .h .nm{font-family:var(--vscode-font-family);font-weight:400;font-size:10.5px;flex-shrink:0;color:var(--vscode-descriptionForeground);opacity:.65}
-.tool .h .tgt{flex:1;color:var(--vscode-descriptionForeground);font-family:var(--vscode-editor-font-family,monospace);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;opacity:.42}
+.tool .h .ico{font-size:11px;opacity:.55;flex-shrink:0;display:inline-block}
+.tool .h .nm{font-family:var(--vscode-font-family);font-weight:400;font-size:10.5px;flex-shrink:0;color:var(--dc-fg-secondary);opacity:.85}
+.tool .h .tgt{flex:1;color:var(--dc-fg-muted);font-family:var(--vscode-editor-font-family,monospace);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .tool .h .st{margin-left:auto;font-size:10px;opacity:.5;color:var(--vscode-descriptionForeground);flex-shrink:0;padding-left:6px}
-.tool .b{padding:4px 8px 6px 8px;display:none;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;white-space:pre-wrap;max-height:280px;overflow:auto;color:var(--vscode-descriptionForeground)}
+/* .b uses same chrome-less indent as .tl-detail */
+.tool .b{display:none;margin:2px 0 4px 8px;padding:2px 0 2px var(--dc-indent);font-family:var(--vscode-editor-font-family,monospace);font-size:10.5px;line-height:1.5;white-space:pre-wrap;max-height:320px;overflow:auto;color:var(--dc-fg-secondary);background:transparent;border:none;border-left:2px solid var(--dc-rule);border-radius:0}
 .tool.open .b{display:block}
 .tool .args{color:var(--vscode-descriptionForeground);margin-bottom:4px;white-space:pre-wrap;word-break:break-all;font-size:10.5px;opacity:.75}
-/* Shell output block */
-.tool.k-shell .b{max-height:400px;border-left:1px solid var(--vscode-panel-border);padding-left:10px;word-break:break-all}
-.tool.k-search .b{max-height:400px;border-left:1px solid var(--vscode-panel-border);padding-left:10px}
-.tool.k-agent .b{max-height:480px;border-left:1px solid var(--vscode-panel-border);padding-left:10px;white-space:pre-wrap}
+/* Shell/search/agent: same indent style as default — keep larger height for live tail */
+.tool.k-shell .b,.tool.k-search .b,.tool.k-agent .b{max-height:400px;word-break:break-all;padding-left:var(--dc-indent)}
 .tool .live-out, .tool .final-out{margin:0;padding:0;font:inherit;white-space:pre-wrap;word-break:break-all;color:var(--vscode-foreground)}
-.tool.run .live-out::after{content:"▍";opacity:.6;animation:thpulse 1s steps(2,end) infinite;margin-left:1px}
+.tool.run .live-out::after{content:"\258d";opacity:.6;animation:thpulse 1s steps(2,end) infinite;margin-left:1px}
 /* Running status dot on the name */
 .tool.run .h .nm::after{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#e8b86d;margin-left:5px;vertical-align:middle;animation:thpulse 1.4s ease-out infinite}
-.tool.err .h .nm{color:var(--vscode-errorForeground);opacity:.75}
-.tool .approve{padding:5px 8px;display:flex;gap:6px;border-top:1px solid var(--vscode-panel-border);background:rgba(255,200,100,.06)}
+.tool.err .h .nm{color:var(--vscode-descriptionForeground);opacity:.5}
+.tool.err{background:transparent!important;border-left:none!important;border-radius:0!important;padding:0!important}
+.tool .approve{padding:5px 8px 5px var(--dc-indent);display:flex;gap:6px;border:none;background:transparent;margin-left:8px;border-left:2px solid rgba(232,184,109,.55)}
 .tool .approve button{padding:3px 10px;border:none;border-radius:3px;cursor:pointer;font-size:11px}
 .btn-yes{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
 .btn-no{background:var(--vscode-input-background);color:var(--vscode-foreground);border:1px solid var(--vscode-panel-border)!important}
 /* ── Prose tool lines — Sema-style: no icon, plain text, two-shade gray ── */
 .tl-wrap{display:block}
-.tl{display:flex;align-items:baseline;gap:0;padding:1px 2px;font-size:10.5px;color:var(--vscode-descriptionForeground);line-height:1.45;overflow:hidden;border-radius:2px}
+.tl{display:flex;align-items:baseline;gap:0;padding:1px 2px 1px 6px;font-size:10.5px;color:var(--vscode-descriptionForeground);line-height:1.45;overflow:hidden;border-radius:0;border-left:2px solid transparent}
 .tl .ico{display:none}
 .tl .tl-prose{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;opacity:.68}
 .tl .tl-prose code{font-family:var(--vscode-editor-font-family,monospace);font-size:10px;background:transparent;padding:0;opacity:.6;color:inherit}
+/* chip: monospace as referential signal, minimal bg */
+.tl-chip{display:inline-block;padding:0 3px;border-radius:2px;background:rgba(127,127,127,.10);color:var(--vscode-foreground);font-size:10px;font-family:var(--vscode-editor-font-family,monospace);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;line-height:1.5;margin:0 1px;opacity:.85}
+.tl-dot{opacity:.4;font-size:10px}
+.tl-list .tl .tl-prose code{background:var(--vscode-badge-background,rgba(90,93,94,.3));color:var(--vscode-badge-foreground,inherit);border-radius:3px;padding:0 4px;opacity:1}
 .tl .tl-res{flex-shrink:0;font-size:10px;opacity:.55;margin-left:4px}
 .tl.run .tl-res::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#e8b86d;margin-right:4px;vertical-align:middle;animation:thpulse 1.4s ease-out infinite}
 .tl.err .tl-res{color:var(--vscode-errorForeground);opacity:.9}
@@ -184,8 +199,9 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .tl.has-detail:hover{background:var(--vscode-list-hoverBackground,rgba(127,127,127,.06))}
 .tl.has-detail:hover .tl-exp{opacity:.5}
 .tl.has-detail.open .tl-exp{opacity:.7;transform:rotate(90deg)}
-/* Expandable detail pane */
-.tl-detail{display:none;margin:0 2px 4px 4px;padding:5px 8px;max-height:320px;overflow:auto;background:var(--vscode-textCodeBlock-background,rgba(127,127,127,.07));border:1px solid var(--vscode-panel-border);border-radius:4px;font-family:var(--vscode-editor-font-family,monospace);font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-all;color:var(--vscode-editor-foreground)}
+/* unified hierarchy: tl-group / tl-detail / thinkblk / details / blockquote / err
+   all use the same left-rule + indent pattern: 2px rule + var(--dc-indent) */
+.tl-detail{display:none;margin:2px 0 4px 4px;padding:2px 0 2px var(--dc-indent);max-height:320px;overflow:auto;background:transparent;border:none;border-left:2px solid var(--dc-rule);border-radius:0;font-family:var(--vscode-editor-font-family,monospace);font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--dc-fg-secondary)}
 /* Live streaming preview for write_file / str_replace_in_file / apply_patch */
 .tl-stream{margin:2px 0 4px 4px;padding:5px 8px;max-height:220px;overflow:auto;background:var(--vscode-textCodeBlock-background,rgba(127,127,127,.08));border:1px solid var(--vscode-panel-border);border-left:2px solid var(--vscode-panel-border);border-radius:4px;font-family:var(--vscode-editor-font-family,monospace);font-size:11px;line-height:1.45;white-space:pre;color:var(--vscode-editor-foreground);position:relative}
 .tl-stream code{font-family:inherit;font-size:inherit;background:transparent;padding:0;display:block}
@@ -194,16 +210,19 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .tl-stream.done.err::before{content:"failed";color:var(--vscode-errorForeground);opacity:.9}
 .tl-stream.done{border-left-color:#7bc47f}
 .tl-stream.done.err{border-left-color:var(--vscode-errorForeground)}
-/* Group collapse */
-.tl-group{display:flex;flex-direction:column}
-.tl-summary{display:flex;align-items:center;gap:6px;padding:2px 2px;font-size:10.5px;color:var(--vscode-descriptionForeground);cursor:pointer;user-select:none;line-height:1.45;overflow:hidden;opacity:.68}
-.tl-summary:hover{background:var(--vscode-list-hoverBackground,rgba(255,255,255,.04));border-radius:3px}
-.tl-summary .tl-prose{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.tl-summary .tl-chev{flex-shrink:0;font-size:11px;opacity:.5;transition:transform .15s;margin-left:2px}
+/* Group collapse — minimal, no card chrome */
+.tl-group{display:flex;flex-direction:column;border:none;border-radius:0;margin:2px 0;overflow:visible;background:transparent}
+.tl-summary{display:flex;align-items:center;gap:5px;padding:1px 2px;font-size:11px;color:var(--vscode-descriptionForeground);cursor:pointer;user-select:none;line-height:1.45;overflow:hidden;opacity:.85}
+.tl-summary:hover{color:var(--vscode-foreground);opacity:1;background:transparent}
+.tl-summary .ico{font-size:11px;opacity:.55;flex-shrink:0}
+.tl-summary .tl-prose{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;font-weight:400}
+.tl-summary .tl-chev{flex-shrink:0;font-size:10px;opacity:.45;transition:transform .15s;margin-left:4px}
 .tl-group.open .tl-summary .tl-chev{transform:rotate(180deg)}
-.tl-list{display:none;flex-direction:column;padding-left:8px;border-left:1px solid var(--vscode-panel-border);margin-left:6px}
-.tl-group.open .tl-list{display:flex}
-.err{color:var(--vscode-errorForeground);font-size:12px;padding:6px 10px;background:rgba(244,135,113,.08);border-radius:6px;border-left:3px solid var(--vscode-errorForeground);align-self:flex-start;width:100%;white-space:pre-wrap}
+.tl-group.open .tl-summary{border-bottom:none}
+.tl-list{display:none;flex-direction:column;padding:1px 0 2px var(--dc-indent);border-left:2px solid var(--dc-rule);margin:2px 0 4px 4px}
+.tl-group.open .tl-list{display:flex;flex-direction:column;max-height:320px;overflow-y:auto}
+/* error: 3px left accent in error color, no bg */
+.err{color:var(--vscode-errorForeground);font-size:12px;padding:2px 0 2px var(--dc-indent);background:transparent;border-radius:0;border-left:3px solid var(--vscode-errorForeground);align-self:flex-start;width:100%;white-space:pre-wrap}
 #left{grid-area:left;display:flex;flex-direction:column;border-right:1px solid var(--vscode-panel-border);overflow:hidden;min-width:0;background:var(--vscode-sideBar-background)}
 #right{grid-area:right;display:flex;flex-direction:column;border-left:1px solid var(--vscode-panel-border);overflow:hidden;min-width:0;background:var(--vscode-sideBar-background)}
 .pnl{display:flex;flex-direction:column;border-bottom:1px solid var(--vscode-panel-border);min-height:0;flex:1 1 0}
@@ -217,17 +236,6 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .pnl .ph .cnt{margin-left:auto;font-size:9px;opacity:.7;font-weight:500}
 .pnl .pb{padding:7px 10px;font-size:11px;line-height:1.55;overflow-y:auto;flex:1 1 auto;min-height:40px}
 .pnl .empty{color:var(--vscode-descriptionForeground);font-style:italic;opacity:.6}
-.plan-list{list-style:none;padding:0;margin:0}
-.plan-list li{padding:3px 0;display:flex;gap:6px;line-height:1.45}
-.plan-list li .ic{flex-shrink:0;width:14px;text-align:center}
-.plan-list li.st-done{color:var(--vscode-descriptionForeground);text-decoration:line-through;opacity:.7}
-.plan-list li.st-in_progress{color:var(--vscode-button-background);font-weight:500}
-.plan-list li.st-blocked{color:var(--vscode-errorForeground)}
-.todo-bar{height:6px;background:var(--vscode-textCodeBlock-background);border-radius:3px;overflow:hidden;margin:4px 0 6px}
-.todo-bar .fill{height:100%;background:var(--vscode-button-background);transition:width .3s ease}
-.todo-stat{font-size:10px;color:var(--vscode-descriptionForeground);margin-bottom:4px}
-.todo-list{list-style:none;padding:0;margin:0}
-.todo-list li{padding:2px 0;font-size:11px;display:flex;gap:5px}
 #right .rh{display:flex;align-items:center;gap:4px;padding:5px 8px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-titleBar-activeBackground);flex-shrink:0}
 #right .rh .rt{flex:1;font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--vscode-descriptionForeground)}
 #right .rsearch{padding:5px 7px;border-bottom:1px solid var(--vscode-panel-border);flex-shrink:0}
@@ -482,6 +490,36 @@ body.vscode-light .msgC pre.cb code .hk-deco{ color:#af00db }
 #pop.pop .popi.sel .popn{ color:#b6e4c4 }
 #pop.pop .popd{ color:var(--vscode-descriptionForeground, #999); font-size:11px }
 
+/* ── Todo popup (GH Copilot style, above input) ── */
+@keyframes tpCheckIn{from{transform:scale(0) rotate(-15deg);opacity:0}to{transform:scale(1) rotate(0deg);opacity:1}}
+@keyframes tpSpin{to{transform:rotate(360deg)}}
+@keyframes tpAmberPulse{0%,100%{opacity:.3;box-shadow:0 0 0 0 rgba(212,162,87,.5);transform:scale(.85)}50%{opacity:1;box-shadow:0 0 0 5px rgba(212,162,87,0);transform:scale(1)}}
+.todo-pop{margin-bottom:8px;background:var(--vscode-editorWidget-background,var(--vscode-editor-background));border:1px solid var(--vscode-panel-border);border-radius:10px;box-shadow:0 -2px 12px rgba(0,0,0,.18);max-height:260px;display:flex;flex-direction:column;overflow:hidden}
+.todo-pop-hd{display:flex;align-items:center;gap:6px;padding:7px 12px 6px;border-bottom:1px solid var(--vscode-panel-border);flex-shrink:0;background:var(--vscode-titleBar-activeBackground);border-radius:10px 10px 0 0;cursor:pointer}
+.todo-pop-chev{display:inline-block;font-size:13px;color:var(--vscode-descriptionForeground);opacity:.7;transition:transform .15s;line-height:1;margin-right:1px;-webkit-user-select:none;user-select:none}
+.todo-pop:not(.collapsed) .todo-pop-chev{transform:rotate(90deg)}
+.todo-pop.collapsed .todo-pop-hd{border-bottom:none;border-radius:10px}
+.todo-pop.collapsed .todo-pop-list{display:none}
+.todo-pop-title{font-size:10px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:var(--vscode-descriptionForeground);flex:1}
+.todo-pop-cnt{font-size:10px;color:var(--vscode-descriptionForeground);opacity:.7;font-variant-numeric:tabular-nums}
+.todo-pop-close{background:none;border:none;cursor:pointer;color:var(--vscode-icon-foreground);opacity:.5;font-size:11px;padding:1px 5px;border-radius:3px;line-height:1}
+.todo-pop-close:hover{opacity:1;background:var(--vscode-toolbar-hoverBackground)}
+.todo-pop-list{list-style:none;margin:0;padding:5px 8px 6px;overflow-y:auto;flex:1 1 auto}
+.tp-item{display:flex;align-items:flex-start;gap:8px;padding:4px 4px;border-radius:5px;font-size:11.5px;line-height:1.45;color:var(--vscode-foreground)}
+.tp-item+.tp-item{margin-top:1px}
+.tp-ic{flex-shrink:0;width:16px;height:16px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+/* done: green animated checkmark */
+.tp-done .tp-ic::before{content:"✓";color:#3fb950;font-size:13px;font-weight:700;display:block;animation:tpCheckIn .3s cubic-bezier(.17,.67,.4,1.4) both}
+.tp-done .tp-label{color:var(--vscode-descriptionForeground);opacity:.65}
+/* in-progress: green spinning ring */
+.tp-in_progress .tp-ic::before{content:"";display:block;width:11px;height:11px;border-radius:50%;border:2px solid #3fb950;border-top-color:transparent;animation:tpSpin .75s linear infinite}
+.tp-in_progress .tp-label{color:var(--vscode-foreground);font-weight:500}
+/* pending: amber/brown glow-pulse (GitHub PR review style) */
+.tp-pending .tp-ic::before{content:"";display:block;width:9px;height:9px;border-radius:50%;background:#d4a257;box-shadow:0 0 0 0 rgba(212,162,87,.6);animation:tpAmberPulse 2s ease-in-out infinite}
+/* blocked: red X */
+.tp-blocked .tp-ic::before{content:"✕";color:var(--vscode-errorForeground,#f48771);font-size:11px;display:block}
+.tp-blocked .tp-label{color:var(--vscode-errorForeground,#f48771)}
+
 /* ── #8 Phase 6: top progress bar ── */
 .prog{
   position:fixed; top:0; left:0; right:0; height:2px;
@@ -585,3 +623,13 @@ body.vscode-light .settings-test-result.ok{color:#267f26}
 .sys-notice{align-self:stretch;margin:10px 6px;padding:8px 12px;border-left:3px solid var(--vscode-editorWarning-foreground,#d97706);background:var(--vscode-editorWidget-background,rgba(127,127,127,.08));color:var(--vscode-foreground);border-radius:3px;font-size:12px;line-height:1.45}
 .sys-notice-title{font-weight:600;margin-bottom:4px;color:var(--vscode-editorWarning-foreground,#d97706)}
 .sys-notice-body{opacity:.85}
+
+/* ── Tool kind color rails: 2px left line only, no row tint ── */
+.tl.k-read,    .tool.k-read    .h { border-left-color: rgba(106,163,224,.55); }
+.tl.k-write,   .tool.k-write   .h { border-left-color: rgba(212,146,90,.65); }
+.tl.k-search,  .tool.k-search  .h { border-left-color: rgba(179,136,212,.55); }
+.tl.k-shell,   .tool.k-shell   .h { border-left-color: rgba(123,196,127,.6); }
+.tl.k-agent,   .tool.k-agent   .h { border-left-color: rgba(232,184,109,.65); }
+.tl.k-plan,    .tool.k-plan    .h { border-left-color: var(--dc-rule); }
+.tl.k-other,   .tool.k-other   .h { border-left-color: var(--dc-rule); }
+.tl-group .tl-summary { padding-left:6px; border-left:2px solid var(--dc-rule); }

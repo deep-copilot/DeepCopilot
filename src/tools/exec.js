@@ -11,7 +11,8 @@
 // register it in ToolExecutor (src/chat/tool-executor.js).
 'use strict';
 
-const { toolReadFile, toolListDir, toolGrepSearch, toolFindFiles } = require('./file-read');
+const { toolReadFile, toolListDir, toolGrepSearch, toolFindFiles,
+        toolGetDiagnostics }                                       = require('./file-read');
 const { toolWriteFile, toolStrReplaceInFile, toolApplyPatch }     = require('./file-write');
 const { toolRunShell, isDangerous }                               = require('./shell');
 const { toolRunShellBg }                                          = require('./bg-shell');
@@ -20,12 +21,17 @@ const { toolWebSearch }                                           = require('./w
 const { toolWebFetch }                                            = require('./web-fetch');
 const { toolSavePlan }                                            = require('./save-plan');
 const { truncate }                                                = require('./utils');
+const { toolGetEditorContext }                                    = require('./editor-context');
+const { toolGitStatus, toolGitDiff, toolGitLog }                  = require('./git');
+const { toolFindReferences, toolGoToDefinition }                  = require('./lsp');
+const { toolMemoryRead, toolMemoryWrite }                         = require('./memory');
 
 module.exports = {
     toolReadFile,
     toolListDir,
     toolGrepSearch,
     toolFindFiles,
+    toolGetDiagnostics,
     toolWriteFile,
     toolStrReplaceInFile,
     toolApplyPatch,
@@ -37,5 +43,13 @@ module.exports = {
     toolSavePlan,
     truncate,
     isDangerous,
+    toolGetEditorContext,
+    toolGitStatus,
+    toolGitDiff,
+    toolGitLog,
+    toolFindReferences,
+    toolGoToDefinition,
+    toolMemoryRead,
+    toolMemoryWrite,
 };
 

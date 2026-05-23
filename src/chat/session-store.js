@@ -161,11 +161,13 @@ class SessionStore {
 
     // ─── Session commands (webview → extension) ─────────────────────────────
 
-    async load(id) {
+    async load(id, opts = {}) {
         const s = this.all().find(x => x.id === id);
         if (!s) return;
         this.sessionId = s.id;
-        this._post({ type: 'sessionLoaded', id: s.id, messages: s.messages || [] });
+        // Include busy flag so the webview only restores the spinner for
+        // sessions that are genuinely still running (not stale timer entries).
+        this._post({ type: 'sessionLoaded', id: s.id, messages: s.messages || [], busy: !!opts.busy });
         this.postList();
         // Return buffered run events so the caller can replay them.
         return id;

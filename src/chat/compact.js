@@ -1,18 +1,25 @@
 // Compact utilities: token estimation, history auto-compaction, and
 // tool-argument streaming parser.
 //
-// Pure module — no VS Code or Node built-in dependencies beyond String/Array.
+// No VS Code dependencies. Uses global `fetch` (Node 18+) only for the
+// optional LLM-backed summarisation path in autoCompactIfNeeded.
 // Safe to import from any layer without circular-dep risk.
 'use strict';
 
 // ─── Token estimator ───────────────────────────────────────────────────────
-// Approx ~3.6 chars/token (conservative for English + code; CJK is denser
-// but DeepSeek's vocab matches this closely). Used only for autoCompact
-// triggers, never for billing.
+// CJK characters (Chinese / Japanese / Korean) tokenize at ~1.5 chars/token;
+// Latin text and code at ~3.6 chars/token.
+// Used only for autoCompact triggers, never for billing.
 
 function estimateTokens(text) {
     if (!text) return 0;
-    return Math.ceil(String(text).length / 3.6);
+    const str = String(text);
+    // Unicode ranges: CJK Unified Ideographs, Hiragana/Katakana, Hangul, CJK Compatibility
+    const cjkCount = (str.match(/[\u3000-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]/g) || []).length;
+    const otherCount = str.length - cjkCount;
+    // CJK chars: ~1 char/token (conservative: 1.0 denominator = 1 token per char);
+    // Latin/code: ~3.6 chars/token.
+    return Math.ceil(cjkCount / 1.0 + otherCount / 3.6);
 }
 
 function estimateMessagesTokens(messages) {
@@ -28,61 +35,248 @@ function estimateMessagesTokens(messages) {
     return n;
 }
 
+// ─── Tool-result truncation ────────────────────────────────────────────────
+// Truncate oversized tool results to preserve semantic content while reducing
+// token count.  Non-destructive: returns new message objects; originals untouched.
+
+const TOOL_RESULT_LONG = 2000; // chars — threshold for truncation
+const TOOL_RESULT_KEEP = 500;  // chars — keep this many from the front
+
+function truncateLongToolResults(messages) {
+    let truncCount = 0;
+    const result = messages.map(m => {
+        if (m.role !== 'tool') return m;
+        const body = typeof m.content === 'string' ? m.content
+            : (Array.isArray(m.content) ? m.content.map(p => (p && p.text) || '').join('') : '');
+        if (body.length <= TOOL_RESULT_LONG) return m;
+        truncCount++;
+        return { ...m, content: body.slice(0, TOOL_RESULT_KEEP) + `\n…[truncated — original ${body.length} chars]` };
+    });
+    return { messages: result, truncCount };
+}
+
+// ─── Head-facts extractor ──────────────────────────────────────────────────
+// Pulls key structured events from messages about to be dropped: tool calls
+// with their primary argument (file path, command, URL) and short snippets
+// of assistant prose.  Used to build the compact-summary placeholder.
+
+function extractHeadFacts(messages) {
+    const lines = [];
+    for (const m of messages) {
+        if (m.role === 'assistant' && m.tool_calls) {
+            for (const tc of m.tool_calls) {
+                const name = tc.function?.name || '?';
+                let detail = '';
+                try {
+                    const args = JSON.parse(tc.function?.arguments || '{}');
+                    const target = args.path || args.file || args.file_path || args.filename
+                        || args.command || args.url || '';
+                    if (target) detail = ` → ${String(target).slice(0, 100)}`;
+                } catch {}
+                lines.push(`tool:${name}${detail}`);
+            }
+        }
+        if (m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()) {
+            const snip = m.content.trim().slice(0, 200).replace(/\n+/g, ' ');
+            lines.push(`asst:${snip}${m.content.trim().length > 200 ? '…' : ''}`);
+        }
+    }
+    return lines;
+}
+
+// ─── LLM-backed summarisation ─────────────────────────────────────────────
+// Calls the configured API to produce a concise semantic summary of the
+// messages about to be dropped.  Silent failure: returns null on any error
+// so the caller can fall back to the structured fact-extraction path.
+
+async function summariseHead(headMessages, apiConfig) {
+    const { apiKey, baseUrl: rawBaseUrl, model, provider = 'deepseek' } = apiConfig || {};
+    if (!model) return null;
+
+    // Resolve effective base URL from the provider registry (single source of truth).
+    const { getProvider } = require('../providers');
+    const presetUrl = getProvider(provider)?.baseUrl || 'https://api.deepseek.com';
+    const effectiveBaseUrl = (rawBaseUrl || presetUrl).replace(/\/$/, '');
+
+    // Build a compact text representation of the messages to summarise.
+    const lines = [];
+    for (const m of headMessages) {
+        if (m.role === 'assistant' && m.tool_calls) {
+            const names = m.tool_calls.map(tc => tc.function?.name || '?').join(', ');
+            lines.push(`[assistant called: ${names}]`);
+        }
+        if (m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()) {
+            lines.push(`[assistant]: ${m.content.trim().slice(0, 400)}`);
+        }
+        if (m.role === 'tool') {
+            const body = typeof m.content === 'string' ? m.content : '';
+            lines.push(`[tool result]: ${body.slice(0, 300)}`);
+        }
+        if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
+            lines.push(`[user]: ${m.content.trim().slice(0, 400)}`);
+        }
+    }
+    const historyText = lines.join('\n');
+    if (!historyText.trim()) return null;
+
+    try {
+        const url = new URL(effectiveBaseUrl + '/chat/completions');
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+        const resp = await fetch(url.toString(), {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                model,
+                messages: [
+                    { role: 'system', content: 'You are a conversation summarizer. Be extremely concise.' },
+                    {
+                        role: 'user',
+                        content:
+                            'Summarize the following conversation history in ≤300 words. ' +
+                            'Focus on: what files were read or modified, what problems were found, ' +
+                            'what decisions were made, what code was written.\n\n' + historyText,
+                    },
+                ],
+                max_tokens: 400,
+                stream: false,
+            }),
+            signal: AbortSignal.timeout(8000),
+        });
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        return data?.choices?.[0]?.message?.content?.trim() || null;
+    } catch {
+        return null;
+    }
+}
+
+// ─── Compact-summary helpers ───────────────────────────────────────────────
+
+function _isCompactSummary(m) {
+    return m.role === 'user' && typeof m.content === 'string' && m.content.includes('<compact-summary>');
+}
+
+function _hasAttachment(m) {
+    if (Array.isArray(m.content)) {
+        return m.content.some(p => p && (p.type === 'file' || p.type === 'image_url'));
+    }
+    // Heuristic: long user messages likely contain attached file content.
+    return typeof m.content === 'string' && m.content.length > 3000;
+}
+
 // ─── Auto-compaction ────────────────────────────────────────────────────────
-// Compact older tool messages when the conversation grows too large.
-// Strategy (Claude-Code style, simplified):
-//   - Keep the most recent KEEP_TAIL messages verbatim.
-//   - Replace older tool result bodies with a compact placeholder.
-//   - Always keep the FIRST user message (anchors the task).
+// Strategy:
+//   1. Try truncating oversized tool results first (non-destructive, no messages dropped).
+//   2. If still over budget, drop the head portion of messages:
+//      - Keep the most recent keepTail messages verbatim.
+//      - Always keep the first user message (task anchor).
+//      - Keep the most recent user message with file attachments (if any, and different).
+//      - Accumulate prior compact-summaries rather than overwriting them.
+//   3. Inject a structured <compact-summary> placeholder.
+//   4. If apiConfig provided, attempt LLM summarisation; fall back to structured facts.
+//
+// Returns { messages, compacted, dropped, truncated }
 
-function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12) {
-    const total = estimateMessagesTokens(messages);
-    if (total <= budgetTokens) return { messages, compacted: false, dropped: 0 };
+async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiConfig = null) {
+    let working = messages;
+    let truncCount = 0;
 
-    const KEEP_TAIL = keepTail;
-    if (messages.length <= KEEP_TAIL + 2) return { messages, compacted: false, dropped: 0 };
+    // Step 1: truncate long tool results to recover tokens without dropping messages.
+    if (estimateMessagesTokens(working) > budgetTokens) {
+        const res = truncateLongToolResults(working);
+        if (res.truncCount > 0) {
+            working = res.messages;
+            truncCount = res.truncCount;
+        }
+    }
+
+    if (estimateMessagesTokens(working) <= budgetTokens) {
+        return truncCount > 0
+            ? { messages: working, compacted: true,  dropped: 0, truncated: truncCount }
+            : { messages: working, compacted: false, dropped: 0, truncated: 0 };
+    }
+
+    // Step 2: head-drop.
+    if (working.length <= keepTail + 2) {
+        return { messages: working, compacted: truncCount > 0, dropped: 0, truncated: truncCount };
+    }
 
     // Walk the split point backwards past any leading tool messages so the tail
-    // never starts in the middle of a tool_calls group. The API requires that
+    // never starts in the middle of a tool_calls group.  The API requires that
     // all tool result messages immediately follow their assistant{tool_calls}
     // message with no other roles interleaved between them.
-    let splitIdx = messages.length - KEEP_TAIL;
-    while (splitIdx > 0 && messages[splitIdx].role === 'tool') {
-        splitIdx--;
+    let splitIdx = working.length - keepTail;
+    while (splitIdx > 0 && working[splitIdx].role === 'tool') splitIdx--;
+    if (splitIdx <= 0) {
+        return { messages: working, compacted: truncCount > 0, dropped: 0, truncated: truncCount };
     }
-    if (splitIdx <= 0) return { messages, compacted: false, dropped: 0 };
 
-    const tail = messages.slice(splitIdx);
-    const head = messages.slice(0, splitIdx);
+    const tail = working.slice(splitIdx);
+    const head = working.slice(0, splitIdx);
 
-    const firstUserIdx = head.findIndex(m => m.role === 'user');
+    // (a) First non-summary user message — anchors the original task.
+    const firstUserIdx = head.findIndex(m => m.role === 'user' && !_isCompactSummary(m));
     const firstUser = firstUserIdx >= 0 ? head[firstUserIdx] : null;
 
-    let droppedToolBytes = 0;
-    let droppedAsstChars = 0;
-    let droppedUserChars = 0;
-    for (const m of head) {
-        if (m === firstUser) continue;
-        if (m.role === 'tool')      droppedToolBytes  += String(m.content || '').length;
-        else if (m.role === 'assistant') droppedAsstChars += String(m.content || '').length;
-        else if (m.role === 'user')  droppedUserChars += String(m.content || '').length;
+    // (b) Most recent user message with file attachments, if different from firstUser.
+    let lastAttachUser = null;
+    for (let i = head.length - 1; i >= 0; i--) {
+        const m = head[i];
+        if (m === firstUser) break;
+        if (m.role === 'user' && !_isCompactSummary(m) && _hasAttachment(m)) {
+            lastAttachUser = m;
+            break;
+        }
     }
 
-    const dropped = head.length - (firstUser ? 1 : 0);
+    // (c) Accumulate text from any prior compact-summaries so history is never lost.
+    const priorSummaryParts = [];
+    for (const m of head) {
+        if (!_isCompactSummary(m)) continue;
+        const inner = String(m.content).replace(
+            /[\s\S]*?<compact-summary>([\s\S]*?)<\/compact-summary>[\s\S]*/,
+            '$1',
+        ).trim();
+        if (inner && inner !== m.content) priorSummaryParts.push(inner);
+    }
+
+    const kept = new Set([firstUser, lastAttachUser].filter(Boolean));
+    const toDropMsgs = head.filter(m => !kept.has(m) && !_isCompactSummary(m));
+    const dropped = head.length - kept.size - head.filter(_isCompactSummary).length;
+
+    // Step 3: produce summary content — LLM first, structured fallback.
+    let summaryBody = '';
+    if (apiConfig && toDropMsgs.length > 0) {
+        const llmText = await summariseHead(toDropMsgs, apiConfig);
+        if (llmText) summaryBody = llmText;
+    }
+    if (!summaryBody) {
+        const factLines = extractHeadFacts(toDropMsgs);
+        summaryBody = `${dropped} messages dropped`;
+        if (truncCount > 0) summaryBody += `, ${truncCount} tool results truncated`;
+        if (factLines.length > 0) summaryBody += `.\nKey events:\n${factLines.join('\n')}`;
+    }
+
+    // Prepend accumulated prior summaries so nothing is silently lost across rounds.
+    if (priorSummaryParts.length > 0) {
+        summaryBody = `Prior compactions:\n${priorSummaryParts.join('\n---\n')}\n\nThis compaction:\n${summaryBody}`;
+    }
+
     const summary = {
         role: 'user',
         content:
-            `<system-reminder>\nEarlier conversation auto-compacted to fit the context window. ` +
-            `Original first user message preserved above. ${dropped} earlier messages summarised: ` +
-            `${droppedAsstChars} chars assistant text, ${droppedUserChars} chars user text, ` +
-            `${droppedToolBytes} chars tool output. Refer to the user's most recent messages for current intent.\n</system-reminder>`,
+            `<system-reminder>\n<compact-summary>\n${summaryBody}\n</compact-summary>\n` +
+            `Refer to the user's most recent messages for current intent.\n</system-reminder>`,
     };
 
     const out = [];
     if (firstUser) out.push(firstUser);
+    if (lastAttachUser) out.push(lastAttachUser);
     out.push(summary);
     out.push(...tail);
-    return { messages: out, compacted: true, dropped };
+    return { messages: out, compacted: true, dropped, truncated: truncCount };
 }
 
 // ─── ToolArgsStreamer ───────────────────────────────────────────────────────
@@ -173,4 +367,4 @@ class ToolArgsStreamer {
     }
 }
 
-module.exports = { estimateTokens, estimateMessagesTokens, autoCompactIfNeeded, ToolArgsStreamer };
+module.exports = { estimateTokens, estimateMessagesTokens, autoCompactIfNeeded, summariseHead, ToolArgsStreamer };

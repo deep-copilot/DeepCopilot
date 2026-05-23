@@ -2,7 +2,7 @@
   "name": "deep-copilot",
   "displayName": "Deep Copilot",
   "description": "Deep Copilot — AI coding agent embedded in VS Code. Powered by DeepSeek V4, with file editing, terminal, search, and plan/todos. Standalone, no backend required.",
-  "version": "0.35.3",
+  "version": "0.40.0",
   "publisher": "ZhouChaunge",
   "icon": "imgs/logo.png",
   "repository": {
@@ -144,22 +144,21 @@
           "enum": [
             "deepseek",
             "openai",
-            "groq",
-            "ollama",
-            "gemini",
             "anthropic",
             "custom"
           ],
           "enumDescriptions": [
             "DeepSeek — api.deepseek.com",
             "OpenAI — api.openai.com/v1",
-            "Groq — api.groq.com/openai/v1 (fast Llama/Mixtral, no streaming usage)",
-            "Ollama — localhost:11434/v1 (local, no API key required)",
-            "Google Gemini (OpenAI-compat endpoint)",
             "Anthropic — api.anthropic.com (Claude models, native SDK)",
             "Custom — use the Base URL configured above"
           ],
           "description": "AI provider. Selecting a preset auto-fills the Base URL in the settings UI."
+        },
+        "deepseekAgent.providersDir": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to a directory containing additional provider JSON files (same schema as the built-in ones in src/providers/). Files here override built-in providers with the same id, letting you add new vendors or replace model lists without rebuilding the extension. Reload the window after editing."
         },
         "deepseekAgent.defaultModel": {
           "type": "string",

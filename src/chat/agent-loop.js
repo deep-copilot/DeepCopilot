@@ -12,13 +12,19 @@ const { Logger }           = require('../logger');
 const { friendlyError }    = require('../errors');
 const { computeCost }      = require('../pricing');
 const { buildSystemPrompt }= require('../prompts/system');
-const { streamChat, PROVIDER_PRESETS } = require('../api/adapter');
+const { streamChat } = require('../api/adapter');
+const { getProvider, getModel, resolveModel } = require('../providers');
 const { getToolDefs }      = require('../tools/schema');
 const { mcpManager }       = require('../mcp');
 const { isZh }             = require('../utils/i18n');
 const {
     estimateMessagesTokens, autoCompactIfNeeded, ToolArgsStreamer,
 } = require('./compact');
+const {
+    onBgJobEnded, offBgJobEnded,
+    getActiveBgJobs, waitForNextBgJobEvent,
+    cleanupStaleJobs, findTerminalByName, getRecentExecutions, wasSyncReturned,
+} = require('../tools/terminal-monitor');
 
 // ─── Skill injection helper (Issue #61 — Step 3) ─────────────────────────────
 //
@@ -111,7 +117,7 @@ class AgentLoop {
         const provider = cfg.get('provider') || 'deepseek';
 
         const apiKey = await this._context.secrets.get('deepseekAgent.apiKey');
-        const needsKey = !PROVIDER_PRESETS[provider] || !PROVIDER_PRESETS[provider].noApiKey;
+        const needsKey = !getProvider(provider)?.noApiKey;
         if (needsKey && !apiKey) {
             this._post({ type: 'error', text: '请先设置 API Key — 点击工具栏 🔑 按钮' });
             return;
@@ -128,6 +134,7 @@ class AgentLoop {
         const model   = cfg.get('defaultModel') || 'deepseek-v4-pro';
         const baseUrl = (cfg.get('apiBaseUrl') || '').trim();
         const mode    = cfg.get('approvalMode') || 'manual';
+        const modelCfg = getModel(provider, resolveModel(provider, model)) || { contextWindow: 65536, maxOutputTokens: 16384 };
 
         // Build attachment block (active editor context)
         const attachment = this._buildAttachment();
@@ -206,7 +213,8 @@ class AgentLoop {
         // 0 (or unset) means "run until task is complete" — stagnation detection
         // (repeat-tool hints + ABAB cycle guard) is the real runaway guard.
         const MAX_ITERS = (_itersRaw > 0) ? Math.min(200, _itersRaw) : 9999;
-        const COMPACT_BUDGET = Math.max(8000, Number(cfg.get('compactBudgetTokens')) || 600000);
+        const COMPACT_BUDGET = Math.max(8000, Number(cfg.get('compactBudgetTokens')) || Math.floor(modelCfg.contextWindow * 0.6));
+        const MODEL_CTX_HARD_LIMIT = Math.floor(modelCfg.contextWindow * 0.9);
         const askMode = interactionMode === 'ask';
         Logger.info('INTERACTION_MODE', { mode: interactionMode });
 
@@ -240,29 +248,68 @@ class AgentLoop {
 
         let lastUsage = null;
         let messagesSnapshot = null; // snapshot of run.messages before each API call; restored on protocol error
+
+        // ── Bg-job end notifications (terminal-monitor push) ──────────────────
+        // Collect events from background terminals; injected as system-reminders
+        // at the top of each iteration so the model learns of completion promptly.
+        run._pendingBgJobEvents = [];
+        const _bgJobEndHandler = (payload) => { run._pendingBgJobEvents.push(payload); };
+        onBgJobEnded(_bgJobEndHandler);
+
+        // Clean up stale active-job entries from previous turns BEFORE starting
+        // the loop.  Stale entries (job ended without SI event, or terminal closed
+        // without firing onDidCloseTerminal) would cause the inner bg-wait loop to
+        // spin forever if not removed here.
+        cleanupStaleJobs();
+
+        // Track the TOTAL bg-wait time accumulated across ALL outer iterations in
+        // this turn.  MAX_WAIT_MS is the ceiling PER INNER LOOP; we need a separate
+        // turn-level budget to prevent the outer loop from re-entering the inner loop
+        // indefinitely when a job never fires its end event.
+        const BG_WAIT_TURN_START  = Date.now();
+        const MAX_BG_WAIT_PER_TURN = 4 * 60 * 60_000; // 4 h total per agent turn
+
+        try { // P0-2: outer guard — run.busy is always cleared even if the catch handler itself throws
         try {
             while (iter++ < MAX_ITERS) {
                 run._iter = iter;
                 checkAbort();
 
-                // Auto-compact
-                const compactRes = autoCompactIfNeeded(run.messages, COMPACT_BUDGET);
+                // ── Inject pending bg-job end notifications ───────────────────
+                // terminal-monitor fires onBgJobEnded() when a deepseek-job-*
+                // terminal finishes; events accumulate in run._pendingBgJobEvents
+                // and are injected here so the model sees them on the next LLM call.
+                if (run._pendingBgJobEvents && run._pendingBgJobEvents.length) {
+                    const events = run._pendingBgJobEvents.splice(0);
+                    for (const ev of events) {
+                        // Skip events whose tool call already returned the
+                        // final result synchronously (bg-shell early-exit).
+                        if (wasSyncReturned(ev.jobId)) {
+                            Logger.info('BG_JOB_END_SKIPPED_SYNC', { jobId: ev.jobId });
+                            continue;
+                        }
+                        const exitLabel = ev.exitCode === 0 ? 'SUCCESS'
+                            : ev.exitCode == null ? 'unknown' : 'FAILED';
+                        const durSec = Math.round((ev.durationMs || 0) / 1000);
+                        run.messages.push({
+                            role: 'user',
+                            content: [
+                                '<system-reminder>',
+                                `Background job "${ev.jobId}" has FINISHED.`,
+                                `Exit code: ${ev.exitCode ?? 'unknown'} (${exitLabel}) | Duration: ${durSec}s`,
+                                ev.output ? `Last output:\n${ev.output}` : '(no output captured)',
+                                '</system-reminder>',
+                            ].join('\n'),
+                        });
+                        Logger.info('BG_JOB_END_INJECTED', { jobId: ev.jobId, exitCode: ev.exitCode, durSec });
+                    }
+                }
+                const compactApiConfig = { apiKey, baseUrl, model, provider };
+                const compactRes = await autoCompactIfNeeded(run.messages, COMPACT_BUDGET, 12, compactApiConfig);
                 if (compactRes.compacted) {
                     run.messages = compactRes.messages;
-                    Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped });
+                    Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped, truncated: compactRes.truncated });
                     this._postToRun(run, { type: 'status', text: isZh() ? '🗜 压缩历史…' : 'Compacting history…' });
-                    // Issue #82: persistent user-visible bubble so the user knows the
-                    // model's context just changed. Otherwise compaction is invisible
-                    // and the user only notices when the model starts "hallucinating"
-                    // earlier file contents.
-                    this._postToRun(run, {
-                        type: 'systemNotice',
-                        kind: 'autoCompact',
-                        title: isZh() ? '⚠️ 会话历史已自动压缩' : '⚠️ Conversation history auto-compacted',
-                        body:  isZh()
-                            ? `为适应上下文窗口，已折叠 ${compactRes.dropped} 条早期消息（包含工具调用结果与源码内容）。模型可能不再记得早期文件细节 —— 如需要，请重新提供关键文件。`
-                            : `${compactRes.dropped} earlier messages (including tool results and source content) have been collapsed to fit the context window. The model may no longer recall earlier file details — re-attach the key files if needed.`,
-                    });
                     postProgress('compacting');
                 }
                 checkAbort();
@@ -309,24 +356,25 @@ class AgentLoop {
                 Logger.info('ITER_START', { sid, iter, msg_count: msgs.length, est_tokens: estimateMessagesTokens(msgs) });
 
                 // Pre-flight hard token cap — prevents HTTP 400 context-too-long errors.
-                // DeepSeek context window is 1M tokens; max output is 384K.
-                // Guard at 900K to leave ~100K headroom for the response.
-                // If still over after regular compaction, run aggressive passes.
-                const MODEL_CTX_HARD_LIMIT = 900000;
+                // MODEL_CTX_HARD_LIMIT is derived from the active model's contextWindow
+                // (90% of capacity, computed above the while loop).
                 let preflightTokens = estimateMessagesTokens(msgs);
                 let ctxLimitHit = false;
                 if (preflightTokens > MODEL_CTX_HARD_LIMIT) {
                     // Track totals across (possibly two) emergency passes so we only
                     // surface a single persistent system-notice card to the user.
                     let emergencyTotalDropped = 0;
+                    let emergencyTotalTruncated = 0;
                     let emergencyFinalKeepTail = 0;
                     for (const emergencyKeepTail of [6, 3]) {
-                        const agg = autoCompactIfNeeded(run.messages, Math.floor(MODEL_CTX_HARD_LIMIT * 0.7), emergencyKeepTail);
+                        // No LLM summarisation during emergency compaction — speed is critical.
+                        const agg = await autoCompactIfNeeded(run.messages, Math.floor(MODEL_CTX_HARD_LIMIT * 0.7), emergencyKeepTail, null);
                         if (agg.compacted) {
                             run.messages = agg.messages;
-                            Logger.info('PREFLIGHT_COMPACT', { sid, iter, before: preflightTokens, keepTail: emergencyKeepTail, dropped: agg.dropped });
+                            Logger.info('PREFLIGHT_COMPACT', { sid, iter, before: preflightTokens, keepTail: emergencyKeepTail, dropped: agg.dropped, truncated: agg.truncated });
                             this._postToRun(run, { type: 'status', text: isZh() ? '⚠️ 上下文接近上限，已紧急压缩历史…' : 'Context near limit — emergency compaction applied…' });
-                            emergencyTotalDropped += (agg.dropped || 0);
+                            emergencyTotalDropped   += (agg.dropped   || 0);
+                            emergencyTotalTruncated += (agg.truncated || 0);
                             emergencyFinalKeepTail = emergencyKeepTail;
                         }
                         const newTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
@@ -335,16 +383,7 @@ class AgentLoop {
                     }
                     // Single aggregated persistent notice (Issue #82) — avoids
                     // showing two near-identical cards when both keepTail passes run.
-                    if (emergencyTotalDropped > 0) {
-                        this._postToRun(run, {
-                            type: 'systemNotice',
-                            kind: 'autoCompact',
-                            title: isZh() ? '⚠️ 上下文接近上限，已紧急压缩历史' : '⚠️ Context near limit — emergency compaction applied',
-                            body:  isZh()
-                                ? `会话已接近模型上下文窗口上限，仅保留最近 ${emergencyFinalKeepTail} 条消息与首条用户提问，折叠了 ${emergencyTotalDropped} 条早期消息。如需继续，建议重新提供关键文件或按 Ctrl+K 清理会话后重新提问。`
-                                : `Session is near the model context window limit. Only the most recent ${emergencyFinalKeepTail} messages and the first user prompt are kept; ${emergencyTotalDropped} earlier messages were collapsed. Re-attach key files if needed, or press Ctrl+K to clear and start fresh.`,
-                        });
-                    }
+
 
                     // Last resort: if still over the limit, refuse to call the API and tell the user
                     const finalTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
@@ -438,6 +477,95 @@ class AgentLoop {
 
                 if (!toolCalls.length) {
                     run.messages.push({ role: 'assistant', content: assistantText, ...(reasoningText ? { reasoning_content: reasoningText } : {}) });
+
+                    // ── Keep loop alive while bg jobs are running ─────────────────
+                    // If the model produced a final reply but there are still active
+                    // background jobs (run_shell_bg with shell integration), do NOT
+                    // exit.  Enter a silent-wait inner loop that keeps the async
+                    // context alive without burning API tokens on every poll.
+                    //
+                    // Inner loop behaviour:
+                    //   - Polls every BG_POLL_MS for a job-end event.
+                    //   - On event → queue it; break inner loop → outer continue →
+                    //     event injected at top → ONE API call with real results.
+                    //   - On BG_SNAPSHOT_MS timeout with no event → inject a progress
+                    //     snapshot; break inner loop → ONE API call so model can
+                    //     narrate progress if desired.
+                    //   - MAX_WAIT_MS hard ceiling prevents eternal wait (e.g. 4 h).
+                    if (getActiveBgJobs().size > 0) {
+                        // Remove stale entries before waiting so we don't spin on
+                        // jobs that ended without firing their SI end event.
+                        cleanupStaleJobs();
+
+                        // Honour the turn-level budget: if we have already waited
+                        // MAX_BG_WAIT_PER_TURN in this turn (across multiple outer
+                        // iterations), give up and exit the loop rather than
+                        // re-entering the inner wait for another 4 hours.
+                        const turnWaitRemaining = MAX_BG_WAIT_PER_TURN - (Date.now() - BG_WAIT_TURN_START);
+                        if (turnWaitRemaining <= 0 || getActiveBgJobs().size === 0) {
+                            if (getActiveBgJobs().size > 0) {
+                                Logger.info('BG_WAIT_TURN_BUDGET_EXCEEDED', { jobs: [...getActiveBgJobs()] });
+                            }
+                            break;
+                        }
+
+                        const BG_POLL_MS      = 15_000;
+                        const BG_SNAPSHOT_MS  = 4 * 60_000;
+                        const MAX_WAIT_MS     = Math.min(4 * 60 * 60_000, turnWaitRemaining);
+                        const waitT0          = Date.now();
+                        let   lastSnapshotAt  = waitT0;
+
+                        while (Date.now() - waitT0 < MAX_WAIT_MS) {
+                            checkAbort();
+                            if (getActiveBgJobs().size === 0) break; // all done
+
+                            const elapsed = Math.round((Date.now() - waitT0) / 1000);
+                            postProgress('bg_wait', { elapsed_s: elapsed, jobs: [...getActiveBgJobs()] });
+
+                            const ev = await waitForNextBgJobEvent(signal, BG_POLL_MS);
+                            if (ev) {
+                                // A job ended — queue event; outer continue will inject
+                                // it as a system-reminder and then call the API once.
+                                if (!run._pendingBgJobEvents) run._pendingBgJobEvents = [];
+                                run._pendingBgJobEvents.push(ev);
+                                break;
+                            }
+
+                            // Still running after BG_POLL_MS.  If enough time has
+                            // passed since the last model interaction, inject a live
+                            // snapshot so the model (and user) can see progress.
+                            if (Date.now() - lastSnapshotAt >= BG_SNAPSHOT_MS) {
+                                const snaps = [];
+                                for (const jobId of getActiveBgJobs()) {
+                                    const t     = findTerminalByName(jobId);
+                                    const execs = t ? getRecentExecutions(t, 1) : [];
+                                    const last  = execs[execs.length - 1];
+                                    const status = last
+                                        ? (last.running ? '[running]' : `[exit ${last.exitCode ?? '?'}]`)
+                                        : '[no data]';
+                                    const tail = (last && last.output)
+                                        ? last.output.slice(-512)
+                                        : '(no output captured — shell integration may be unavailable)';
+                                    snaps.push(`${jobId} ${status}:\n${tail}`);
+                                }
+                                run.messages.push({
+                                    role: 'user',
+                                    content: [
+                                        '<system-reminder>',
+                                        'Background job progress snapshot (still running):',
+                                        snaps.join('\n---\n'),
+                                        '</system-reminder>',
+                                    ].join('\n'),
+                                });
+                                Logger.info('BG_SNAPSHOT_INJECTED', { jobs: [...getActiveBgJobs()], elapsed_s: elapsed });
+                                lastSnapshotAt = Date.now();
+                                break; // exit inner loop → outer continue → API call
+                            }
+                            // else: keep waiting silently (no API call this iteration)
+                        }
+                        continue; // outer while — inject events / call API
+                    }
+
                     break;
                 }
 
@@ -477,6 +605,11 @@ class AgentLoop {
                 checkAbort();
 
                 // Phase 2: mutating tools serially
+                // Regex to detect sleep/wait commands the model sometimes uses to poll bg jobs.
+                // When pending bg-job events are already queued, skip the sleep entirely so the
+                // failure (or success) is surfaced immediately on the next outer iteration instead
+                // of after a 15-30 second unnecessary delay.
+                const _BG_SLEEP_PAT = /^\s*(ping\s+-n\s+\d+\b|sleep\s+\d+|Start-Sleep\b)/i;
                 for (let i = 0; i < toolCalls.length; i++) {
                     const tc = toolCalls[i];
                     if (READ_ONLY.has(tc.name)) continue;
@@ -485,8 +618,19 @@ class AgentLoop {
                     const tT0  = Date.now();
                     postProgress('tool_running', { activeTool: tc.name });
                     let rawResult = '';
-                    try { rawResult = await this._exec.execute(tc.name, args, mode, run, signal, tc.id); }
-                    catch (e) { rawResult = `Error: ${e.message}`; }
+                    // If a bg-job event is already queued and the model is trying to sleep/wait,
+                    // skip the sleep — the event will be injected at the top of the next iteration.
+                    if (
+                        tc.name === 'run_shell' &&
+                        run._pendingBgJobEvents && run._pendingBgJobEvents.length > 0 &&
+                        _BG_SLEEP_PAT.test(String((args && args.command) || ''))
+                    ) {
+                        rawResult = '[wait skipped: a background job has already finished — result details follow in the next message]';
+                        Logger.info('SLEEP_SKIPPED_BGJOBEVENT', { command: args && args.command });
+                    } else {
+                        try { rawResult = await this._exec.execute(tc.name, args, mode, run, signal, tc.id); }
+                        catch (e) { rawResult = `Error: ${e.message}`; }
+                    }
                     results[i] = { tc, args, result: this._exec.logToolResult(run, tc, rawResult, Date.now() - tT0) };
                 }
                 checkAbort();
@@ -640,7 +784,7 @@ class AgentLoop {
             // Force-final summary when iteration cap is hit with no reply yet
             if (iter > MAX_ITERS && !run.reply.asst.trim()) {
                 Logger.info('FORCE_FINAL_SUMMARY', { iter });
-                const compacted = autoCompactIfNeeded(run.messages, Math.floor(COMPACT_BUDGET * 0.6));
+                const compacted = await autoCompactIfNeeded(run.messages, Math.floor(COMPACT_BUDGET * 0.6), 12, { apiKey, baseUrl, model, provider });
                 const baseMsgs  = compacted.compacted ? compacted.messages : run.messages;
                 const finalMsgs = [
                     { role: 'system', content: sysPrompt },
@@ -677,8 +821,6 @@ class AgentLoop {
         this._postToRun(run, { type: 'replyEnd', empty: false, aborted: wasAborted });
         this._postToRun(run, { type: 'status', text: '' });
         if (wasAborted) this._postToRun(run, { type: 'stopped' });
-        run.abortCtrl = null;
-        run.busy = false;
 
         // Persist turn
         const r = run.reply;
@@ -703,6 +845,11 @@ class AgentLoop {
 
         this._deleteRun(sid);
         this._postSessionList();
+        } finally { // P0-2: guarantees busy flag is cleared on any exit path
+            offBgJobEnded(_bgJobEndHandler);
+            run.abortCtrl = null;
+            run.busy = false;
+        }
     }
 }
 

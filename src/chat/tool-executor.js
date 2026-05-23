@@ -23,6 +23,10 @@ const {
     toolReadFile, toolListDir, toolGrepSearch, toolFindFiles,
     toolWriteFile, toolStrReplaceInFile, toolApplyPatch, toolRunShell, toolRunShellBg, toolReadTerminal, toolWebSearch, toolWebFetch,
     toolSavePlan,
+    toolGetDiagnostics, toolGetEditorContext,
+    toolGitStatus, toolGitDiff, toolGitLog,
+    toolFindReferences, toolGoToDefinition,
+    toolMemoryRead, toolMemoryWrite,
 } = require('../tools/exec');
 const { skillInvoke, skillCreate } = require('../tools/skill-tools');
 
@@ -30,7 +34,9 @@ class ToolExecutor {
     // Read-only tools whose results can be cached until workspace changes.
     static CACHEABLE = new Set(['read_file', 'grep_search', 'find_files', 'list_dir', 'web_search', 'web_fetch']);
     // Mutating tools that invalidate the file cache after execution.
-    static MUTATING  = new Set(['write_file', 'str_replace_in_file', 'apply_patch', 'run_shell', 'run_shell_bg', 'skill_create']);
+    static MUTATING  = new Set(['write_file', 'str_replace_in_file', 'apply_patch', 'run_shell', 'run_shell_bg', 'skill_create', 'memory_write']);
+    // Maximum cached entries per run; oldest entry is evicted on overflow (insertion-order LRU).
+    static CACHE_MAX_ENTRIES = 200;
 
     /**
      * @param {vscode.ExtensionContext} context
@@ -65,6 +71,15 @@ class ToolExecutor {
             ['web_search',          (args, ctx) => toolWebSearch(args, ctx)],
             ['web_fetch',           (args, ctx) => toolWebFetch(args, ctx)],
             ['save_plan',           (args)      => toolSavePlan(args)],
+            ['get_diagnostics',     (args)      => toolGetDiagnostics(args)],
+            ['get_editor_context',  ()          => toolGetEditorContext()],
+            ['git_status',          ()          => toolGitStatus()],
+            ['git_diff',            (args)      => toolGitDiff(args)],
+            ['git_log',             (args)      => toolGitLog(args)],
+            ['find_references',     (args)      => toolFindReferences(args)],
+            ['go_to_definition',    (args)      => toolGoToDefinition(args)],
+            ['memory_read',         ()          => toolMemoryRead()],
+            ['memory_write',        (args)      => toolMemoryWrite(args)],
         ]);
     }
 
@@ -364,6 +379,10 @@ class ToolExecutor {
                 try { entry.mtime = fs.statSync(resolvePath(args.path)).mtimeMs; } catch {}
             }
             cache.set(key, entry);
+            // P0-1: LRU eviction — keep cache bounded to prevent memory leaks in long sessions.
+            if (cache.size > ToolExecutor.CACHE_MAX_ENTRIES) {
+                cache.delete(cache.keys().next().value);
+            }
         }
 
         // Cache invalidation (mutating)

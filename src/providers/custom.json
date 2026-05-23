@@ -1,0 +1,21 @@
+{
+  "$schema": "./_schema.json",
+  "id": "custom",
+  "displayName": "Custom (OpenAI-compatible)",
+  "protocol": "openai",
+  "defaultModel": "custom-model",
+  "quirks": {
+    "streamOptions": false,
+    "parallelTools": false,
+    "useMaxCompletionTokens": false
+  },
+  "models": [
+    {
+      "id": "custom-model",
+      "displayName": "Custom model",
+      "contextWindow": 65536,
+      "maxOutputTokens": 16384,
+      "capabilities": { "tools": true, "reasoning": false, "vision": false }
+    }
+  ]
+}

@@ -157,6 +157,13 @@ class ChatViewProvider {
         switch (msg.type) {
             case 'ready': {
                 const cfg = vscode.workspace.getConfiguration('deepseekAgent');
+                // Push the dynamic provider registry first so the webview can
+                // build its model picker / settings dropdown from real data
+                // rather than the previously-hardcoded JS objects.
+                try {
+                    const { listProviders } = require('../providers');
+                    this._post({ type: 'providersInfo', providers: listProviders() });
+                } catch { /* registry failure shouldn't break the chat UI */ }
                 this._post({
                     type: 'modelInfo',
                     model: cfg.get('defaultModel') || 'deepseek-v4-pro',
@@ -253,8 +260,14 @@ class ChatViewProvider {
                             const https = require('https');
                             const http  = require('http');
                             const base  = resolved.baseUrl.replace(/\/$/, '');
-                            const urlObj = new URL('/chat/completions', base);
-                            const body   = JSON.stringify({ model: resolved.model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 });
+                            const urlObj = new URL(base + '/chat/completions');
+                            const tokenKey = resolved.useMaxCompletionTokens ? 'max_completion_tokens' : 'max_tokens';
+                            // Token budget for the test ping:
+                            //   1. Use provider-declared testConnectionMaxTokens if set (e.g. Anthropic rejects < 64)
+                            //   2. Reasoning models (useMaxCompletionTokens) need room for reasoning budget → 2048
+                            //   3. Everything else: 1 token is enough to confirm reachability
+                            const tokenBudget = resolved.testConnectionMaxTokens ?? (resolved.useMaxCompletionTokens ? 2048 : 1);
+                            const body   = JSON.stringify({ model: resolved.model, messages: [{ role: 'user', content: 'hi' }], [tokenKey]: tokenBudget });
                             const isHttps = urlObj.protocol === 'https:';
                             result = await new Promise((resolve) => {
                                 const req = (isHttps ? https : http).request({
@@ -263,7 +276,7 @@ class ChatViewProvider {
                                     path:     urlObj.pathname,
                                     method:   'POST',
                                     headers:  {
-                                        'Authorization':  `Bearer ${testKey || 'ollama'}`,
+                                        'Authorization':  `Bearer ${testKey || 'no-key'}`,
                                         'Content-Type':   'application/json',
                                         'Content-Length': Buffer.byteLength(body),
                                     },
@@ -544,8 +557,10 @@ class ChatViewProvider {
     }
 
     async _loadSession(id) {
-        await this._store.load(id);
+        // Check run before load — completed runs are deleted from _runs, so
+        // run will be null for finished sessions and truthy for in-flight ones.
         const run = this._runs.get(id);
+        await this._store.load(id, { busy: !!(run && run.busy) });
         if (run) for (const ev of run.events) this._post(ev);
     }
 
@@ -998,7 +1013,7 @@ class ChatViewProvider {
         const apiKey   = await this._context.secrets.get('deepseekAgent.apiKey') || '';
         const resolved = resolveProviderConfig(provider, cfg.get('apiBaseUrl') || '', '');
         if (!apiKey) { this._post({ type: 'balanceUpdate', unsupported: true }); return; }
-        const result = await fetchBalance({ apiKey, baseUrl: resolved.baseUrl });
+        const result = await fetchBalance({ apiKey, baseUrl: resolved.baseUrl, balanceEndpoint: resolved.balanceEndpoint });
         if (result === null) { this._post({ type: 'balanceUpdate', unsupported: true }); return; }
         this._balanceLastAt = Date.now();
         this._post({ type: 'balanceUpdate', ...result });

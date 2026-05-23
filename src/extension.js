@@ -13,6 +13,18 @@ function activate(context) {
     Logger.init(context);
     Logger.info('ACTIVATE', { version: (context.extension && context.extension.packageJSON && context.extension.packageJSON.version) || 'unknown' });
 
+    // ─── Merge user-defined provider JSONs into the registry ──────────────
+    // Reads `deepseekAgent.providersDir` and re-runs the registry init so a
+    // user-supplied directory can shadow / add to the built-in providers
+    // without rebuilding the extension. (Built-ins always load first.)
+    try {
+        const { initRegistry } = require('./providers');
+        const userDir = (vscode.workspace.getConfiguration('deepseekAgent').get('providersDir') || '').trim();
+        initRegistry(userDir ? [userDir] : []);
+    } catch (e) {
+        Logger.info('PROVIDERS_USERDIR_FAILED', { err: String(e && e.message || e) });
+    }
+
     // ─── Ensure ~/.deepcopilot/skills directory exists ────────────────────
     try {
         const { DEEPCOPILOT_SKILLS_DIR } = require('./skills');

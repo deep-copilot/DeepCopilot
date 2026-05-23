@@ -182,11 +182,16 @@ async function toolRunShell(args, ctx = {}) {
         // Only create the interval when there is a stream consumer; otherwise
         // we'd be waking the event loop with no observer.
         if (onStreamDelta) {
+            let stallCount = 0; // emit at most 1 notice — purely "still alive" signal
             stallTimer = setInterval(() => {
                 if (settled) return;
                 const silentMs = Date.now() - lastOutputAt;
                 if (silentMs >= STALL_PROBE_MS) {
+                    if (stallCount >= 1) return; // only one notice per silent run
+                    stallCount++;
                     try { onStreamDelta('\n' + tf('shellNoOutput', { sec: Math.round(silentMs / 1000) }) + '\n'); } catch {}
+                } else {
+                    stallCount = 0; // reset when output resumes
                 }
             }, STALL_PROBE_MS);
         }

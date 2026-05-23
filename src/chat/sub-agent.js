@@ -15,12 +15,20 @@
 const https = require('https');
 const vscode = require('vscode');
 const { Logger }         = require('../logger');
-const { streamChat, PROVIDER_PRESETS } = require('../api/adapter');
+const { streamChat } = require('../api/adapter');
+const { getProvider } = require('../providers');
 const { getToolDefs }    = require('../tools/schema');
 const { mcpManager }     = require('../mcp');
 const { autoCompactIfNeeded } = require('./compact');
 
-const READ_ONLY_TOOLS = new Set(['read_file', 'list_dir', 'grep_search', 'find_files', 'web_search']);
+const READ_ONLY_TOOLS = new Set([
+    'read_file', 'list_dir', 'grep_search', 'find_files',
+    'web_search', 'web_fetch',
+    'get_diagnostics',
+    'git_status', 'git_diff', 'git_log',
+    'find_references', 'go_to_definition',
+    'memory_read',
+]);
 
 // Maximum nesting depth — prevents fork bombs.
 const MAX_SUB_DEPTH = 1;
@@ -103,17 +111,13 @@ class SubAgentRunner {
         const apiKey = await this._context.secrets.get('deepseekAgent.apiKey');
         const cfg     = vscode.workspace.getConfiguration('deepseekAgent');
         const provider = cfg.get('provider') || 'deepseek';
-        const needsKey = !PROVIDER_PRESETS[provider] || !PROVIDER_PRESETS[provider].noApiKey;
+        const p = getProvider(provider) || getProvider('custom');
+        const needsKey = !p?.noApiKey;
         if (needsKey && !apiKey) return '[spawn_agent] Error: no API key configured.';
 
-        // Sub-agents default to a fast/cheap model (flash for deepseek, or provider preset).
-        // Users can override via the deepseekAgent.subAgentModel setting.
-        const configuredSubModel = cfg.get('subAgentModel');
-        const configuredDefault  = cfg.get('defaultModel');
-        const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
-        const model  = provider === 'deepseek'
-            ? (configuredSubModel || configuredDefault || 'deepseek-v4-flash')
-            : (configuredSubModel || configuredDefault || preset.defaultModel || 'gpt-4o');
+        // Sub-agents use each provider's declared `subAgentModel` (cheaper/faster
+        // variant) and fall back to `defaultModel` when none is set.
+        const model = p?.subAgentModel || p?.defaultModel || 'gpt-4o';
         const baseUrl = (cfg.get('apiBaseUrl') || '').trim();
 
         // ── Keep-alive HTTPS agent ─────────────────────────────────────────
@@ -212,8 +216,10 @@ class SubAgentRunner {
             while (iters < MAX_ITERS) {
                 iters++;
 
-                // Light compaction to avoid context blowout in deep read tasks
-                const compact = autoCompactIfNeeded(childRun.messages, COMPACT_BUDGET);
+                // Light compaction to avoid context blowout in deep read tasks.
+                // No LLM summarisation here — sub-agent uses a fast model and needs
+                // to stay responsive; structured fact fallback is sufficient.
+                const compact = await autoCompactIfNeeded(childRun.messages, COMPACT_BUDGET, 12, null);
                 if (compact.compacted) {
                     childRun.messages = compact.messages;
                     Logger.info('SUB_AGENT_COMPACT', { child: childRun.sessionId, dropped: compact.dropped });
@@ -256,13 +262,16 @@ class SubAgentRunner {
                     })),
                 });
 
-                // Execute tools — read-only (or general if agentType === 'general')
-                for (const tc of toolCalls) {
+                // Execute tools in parallel — safe for read-only tools and general
+                // mode (mutating tools are serialised by ToolExecutor internally).
+                // Using Promise.all cuts wall-clock time when the model emits
+                // multiple tool calls in one turn (e.g. reading 3 files at once).
+                const toolResults = await Promise.all(toolCalls.map(async (tc) => {
                     let tcArgs = {};
                     try { tcArgs = JSON.parse(tc.args || '{}'); } catch { /* ignore */ }
 
-                    let result = '(tool not permitted in sub-agent context)';
                     const toolName = tc.name;
+                    let result = '(tool not permitted in sub-agent context)';
 
                     if (agentType === 'explore' && READ_ONLY_TOOLS.has(toolName)) {
                         try {
@@ -281,7 +290,12 @@ class SubAgentRunner {
                         }
                     }
 
-                    childRun.messages.push({ role: 'tool', tool_call_id: tc.id, content: String(result) });
+                    return { id: tc.id, result };
+                }));
+
+                // Push tool results in the original order (API requires tool_call_id order)
+                for (const { id, result } of toolResults) {
+                    childRun.messages.push({ role: 'tool', tool_call_id: id, content: String(result) });
                 }
             } // end while
         } catch (e) {

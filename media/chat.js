@@ -1,4 +1,4 @@
-(function(){
+﻿(function(){
   var vscode;
   try { vscode = acquireVsCodeApi(); } catch(e) { document.body.innerHTML += "<div style=\"color:red;padding:10px\">vscode API error: "+e.message+"</div>"; return; }
   var msgs = document.getElementById("main");
@@ -20,54 +20,51 @@
   var modelBtn   = document.getElementById("modelBtn");
   var modelDrop  = document.getElementById("modelDrop");
   var _modelOpen = false;
-  var PROVIDER_MODELS = {
-    deepseek: [
-      { value: "deepseek-v4-pro",   name: "deepseek-v4-pro",   desc: "DeepSeek V4 Pro — 旗舰推理模型" },
-      { value: "deepseek-v4-flash", name: "deepseek-v4-flash",  desc: "DeepSeek V4 Flash — 快速轻量模型" },
-      { value: "deepseek-reasoner", name: "deepseek-reasoner",  desc: "DeepSeek Reasoner — 深度思维链模型" },
-    ],
-    openai: [
-      { value: "gpt-4o",       name: "gpt-4o",       desc: "GPT-4o — 最强通用模型" },
-      { value: "gpt-4o-mini",  name: "gpt-4o-mini",  desc: "GPT-4o Mini — 快速经济" },
-      { value: "o3-mini",      name: "o3-mini",       desc: "o3 Mini — 推理模型" },
-    ],
-    groq: [
-      { value: "llama-3.3-70b-versatile", name: "llama-3.3-70b-versatile", desc: "Llama 3.3 70B — 旗舰" },
-      { value: "llama-3.1-8b-instant",    name: "llama-3.1-8b-instant",    desc: "Llama 3.1 8B — 超快" },
-      { value: "mixtral-8x7b-32768",      name: "mixtral-8x7b-32768",      desc: "Mixtral 8x7B — 长上下文" },
-    ],
-    ollama: [],
-    gemini: [
-      { value: "gemini-2.0-flash", name: "gemini-2.0-flash", desc: "Gemini 2.0 Flash — 快速" },
-      { value: "gemini-1.5-pro",   name: "gemini-1.5-pro",   desc: "Gemini 1.5 Pro — 强大" },
-    ],
-    anthropic: [
-      { value: "claude-opus-4-7",          name: "claude-opus-4-7",          desc: "Claude Opus 4.7 — 最强旗舰" },
-      { value: "claude-sonnet-4-6",        name: "claude-sonnet-4-6",        desc: "Claude Sonnet 4.6 — 均衡推荐" },
-      { value: "claude-haiku-4-5-20251001",name: "claude-haiku-4-5",         desc: "Claude Haiku 4.5 — 快速轻量" },
-    ],
-    custom: [],
-  };
-  var PROVIDER_URLS = {
-    deepseek:  'https://api.deepseek.com',
-    openai:    'https://api.openai.com/v1',
-    groq:      'https://api.groq.com/openai/v1',
-    ollama:    'http://localhost:11434/v1',
-    gemini:    'https://generativelanguage.googleapis.com/v1beta/openai/',
-    anthropic: 'https://api.anthropic.com',
-    custom:    '',
-  };
-  var PROVIDER_KEY_LINKS = {
-    deepseek:  'https://platform.deepseek.com/api_keys',
-    openai:    'https://platform.openai.com/api-keys',
-    groq:      'https://console.groq.com/keys',
-    ollama:    null,
-    gemini:    'https://aistudio.google.com/app/apikey',
-    anthropic: 'https://console.anthropic.com/settings/keys',
-    custom:    null,
-  };
+  // Provider/model catalogue is populated dynamically from the extension on
+  // the 'providersInfo' message (sourced from src/providers/*.json). The empty
+  // defaults keep early UI code paths safe before that message arrives.
+  var PROVIDER_MODELS    = { deepseek: [], openai: [], anthropic: [], custom: [] };
+  var PROVIDER_URLS      = { deepseek: 'https://api.deepseek.com', openai: '', anthropic: '', custom: '' };
+  var PROVIDER_KEY_LINKS = { deepseek: null, openai: null, anthropic: null, custom: null };
+  var PROVIDER_DISPLAY   = { deepseek: 'DeepSeek', openai: 'OpenAI', anthropic: 'Anthropic', custom: 'Custom' };
+  var PROVIDER_ORDER     = ['deepseek', 'openai', 'anthropic', 'custom'];
   var MODELS = PROVIDER_MODELS.deepseek;
   var _currentProvider = 'deepseek';
+
+  function applyProvidersInfo(list) {
+    if (!Array.isArray(list) || !list.length) return;
+    PROVIDER_MODELS    = {};
+    PROVIDER_URLS      = {};
+    PROVIDER_KEY_LINKS = {};
+    PROVIDER_DISPLAY   = {};
+    PROVIDER_ORDER     = [];
+    for (var i = 0; i < list.length; i++) {
+      var p  = list[i];
+      var id = p && p.id;
+      if (!id) continue;
+      PROVIDER_ORDER.push(id);
+      PROVIDER_DISPLAY[id]   = p.displayName || id;
+      PROVIDER_URLS[id]      = p.baseUrl || '';
+      PROVIDER_KEY_LINKS[id] = p.apiKeyUrl || null;
+      PROVIDER_MODELS[id] = (p.models || []).map(function(m) {
+        return { value: m.id, name: m.displayName || m.id };
+      });
+    }
+    // Refresh the <select id="s-provider"> options.
+    var sel = document.getElementById('s-provider');
+    if (sel) {
+      sel.innerHTML = '';
+      for (var j = 0; j < PROVIDER_ORDER.length; j++) {
+        var pid = PROVIDER_ORDER[j];
+        var opt = document.createElement('option');
+        opt.value = pid;
+        opt.textContent = PROVIDER_DISPLAY[pid] || pid;
+        sel.appendChild(opt);
+      }
+    }
+    // Re-apply current provider so MODELS / picker reflect the freshly loaded list.
+    switchToProvider(_currentProvider);
+  }
 
   function switchToProvider(provider) {
     _currentProvider = provider || 'deepseek';
@@ -134,7 +131,7 @@
     for (var i = 0; i < MODELS.length; i++) {
       var md = MODELS[i];
       h += "<div class='mo" + (md.value === cur ? ' sel' : '') + "' data-model='" + md.value + "'>" +
-           "<span class='mo-body'><span class='mo-name'>" + md.name + "</span><span class='mo-desc'>" + md.desc + "</span></span>" +
+           "<span class='mo-body'><span class='mo-name'>" + md.name + "</span></span>" +
            "<span class='mo-chk'>✓</span></div>";
     }
     modelDrop.innerHTML = h;
@@ -158,7 +155,7 @@
     var md = INTERACTION_MODES.find(function(x){ return x.value === mode; }) || INTERACTION_MODES[0];
     _curIMode = md.value;
     if (iModePicker) iModePicker.dataset.im = mode;
-    if (iModeBtn) iModeBtn.innerHTML = "<i class='codicon codicon-" + md.icon + "'></i> " + md.name;
+    if (iModeBtn) iModeBtn.innerHTML = "<i class='codicon codicon-" + md.icon + "'></i>\u00a0" + md.name + "\u00a0<span class='mode-chev'>\u25be</span>";
   }
 
   /* ── Approval Mode picker (Manual / Auto-Edit / Autopilot / Read-Only) ── */
@@ -204,13 +201,13 @@
   var ftTokens = document.getElementById("ft-tokens");
   var ftCost = document.getElementById("ft-cost");
   var ftCache = document.getElementById("ft-cache");
-  var planBody = document.getElementById("plan-body");
-  var planCnt = document.getElementById("plan-cnt");
-  var todoBody = document.getElementById("todo-body");
-  var todoCnt = document.getElementById("todo-cnt");
+  var todoPop = document.getElementById("todo-pop");
+  var todoPopList = document.getElementById("todo-pop-list");
+  var todoPopCnt = document.getElementById("todo-pop-cnt");
   var busy = false;
   var cur = null, curText = "", curThk = null, curThkHead = null, curBubble = null;
   var toolMap = {};
+  var _readTermCardMap = {}; // terminal name → card record, for read_terminal deduplication
   var _userMsgCount = 0; // tracks index of each .msgU for editUserMessage
   var _editPendingIdx = -1; // index of msgU being edited, set before postMessage
   var sess = { tokens:0, cost:0, cacheHit:0, promptTotal:0 };
@@ -240,24 +237,30 @@
     try { new ResizeObserver(checkNarrow).observe(document.documentElement); } catch(e){}
   }
   checkNarrow();
-  /* Edge toggles: collapsed by default; persist state. */
+  /* Edge toggles: right panel only (left panel removed). */
   var _ui = {};
   try { _ui = (vscode.getState() && vscode.getState().ui) || {}; } catch(e){}
   function applyPanelState(){
-    document.body.classList.toggle("no-left", _ui.leftCollapsed !== false);
     document.body.classList.toggle("no-right", _ui.rightCollapsed !== false);
   }
   function savePanelState(){
     try { var s = vscode.getState() || {}; s.ui = _ui; vscode.setState(s); } catch(e){}
   }
   applyPanelState();
-  edgeL.addEventListener("click", function(){
-    _ui.leftCollapsed = !document.body.classList.contains("no-left");
-    applyPanelState(); savePanelState();
-  });
-  edgeR.addEventListener("click", function(){
+  if (edgeR) edgeR.addEventListener("click", function(){
     _ui.rightCollapsed = !document.body.classList.contains("no-right");
     applyPanelState(); savePanelState();
+  });
+  /* Todo popup close button */
+  var todoPopCloseBtn = document.getElementById("todo-pop-close");
+  if (todoPopCloseBtn) todoPopCloseBtn.addEventListener("click", function(){
+    if (todoPop) todoPop.style.display = "none";
+  });
+  /* Todo popup header: click to collapse/expand */
+  var todoPopHd = document.getElementById("todo-pop-hd");
+  if (todoPopHd) todoPopHd.addEventListener("click", function(e){
+    if (e.target.closest("#todo-pop-close")) return;
+    if (todoPop) todoPop.classList.toggle("collapsed");
   });
   /* Scope buttons: filter sessions by current workspace or all */
   var scopeMode = "ws"; /* "ws" | "all" */
@@ -481,6 +484,27 @@
       if (p && p.text !== undefined) return p.text;
     } catch(e) {}
     return out;
+  }
+
+  /* Strip ANSI escape codes and collapse \r-overwrite progress bars.
+     tqdm/rich etc. use \r to rewrite the current line — keep only the last
+     overwrite so 100 progress-bar frames become 1 clean line. */
+  function stripAnsi(s) {
+    s = String(s || '');
+    /* Collapse \r overwrites: keep the last segment on each \n-line */
+    s = s.split('\n').map(function(line) {
+      var parts = line.split('\r');
+      return parts[parts.length - 1];
+    }).join('\n');
+    /* Strip ANSI/VT escape sequences */
+    s = s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');           /* CSI: \e[...m */
+    s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, ''); /* OSC: title etc. */
+    s = s.replace(/\x1b[@-Z\\-_]/g, '');                    /* 2-byte escapes */
+    /* Remove leftover non-printable control chars (\n and \t are kept) */
+    s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+    /* Collapse 3+ consecutive blank lines to 2 */
+    s = s.replace(/\n{3,}/g, '\n\n');
+    return s.trim();
   }
 
   function renderMd(s){
@@ -818,8 +842,43 @@
     return d;
   }
 
-  /* Thinking chips removed — reasoning is silently accumulated but not shown. */
-  function makeThinkChip() { }
+  /* Restore reasoning display: create an inline collapsible thinking chip
+     inside .flow. Called once per turn when the first thinkingDelta arrives.
+     curThkHead / curThk are read by the thinkingDelta, replyDelta and
+     newTurn handlers — do not rename those variables. */
+  function makeThinkChip() {
+    ensureBubble();
+    var flow = curBubble.querySelector('.flow');
+    if (!flow) return;
+
+    var slot = document.createElement('div');
+    slot.className = 'think-slot';
+
+    var head = document.createElement('div');
+    head.className = 'thinkhead';
+    head.style.display = 'none'; // revealed on first thinkingDelta token
+    head.innerHTML =
+      '<span class="th-chev">\u25be</span>' +
+      '<span class="th-lbl">Thinking\u2026</span>';
+
+    var body = document.createElement('pre');
+    body.className = 'thinkblk';
+    body.style.display = 'block'; // expanded while streaming; collapsed on reply
+
+    head.addEventListener('click', function() {
+      var open = body.style.display === 'block';
+      body.style.display = open ? 'none' : 'block';
+      var chev = head.querySelector('.th-chev');
+      if (chev) chev.textContent = open ? '\u25b8' : '\u25be';
+    });
+
+    slot.appendChild(head);
+    slot.appendChild(body);
+    flow.appendChild(slot);
+
+    curThkHead = head;
+    curThk = body;
+  }
 
   /* Group the trailing run of consecutive tool elements (.tl-wrap and .tool
      cards) into a collapsible .tl-group. Called when text starts streaming
@@ -851,24 +910,127 @@
     return nmEl ? nmEl.textContent.trim() : "Tool";
   }
 
+  /* Build a GH-Copilot-style semantic summary from a group of tool nodes.
+     Returns an HTML string (safe — all dynamic values go through escHtml/chip).
+     Examples:
+       read_file ×3 same file  → "Reviewed <chip>bg-shell.js</chip>"
+       read_file ×2 diff files → "Read <chip>a.js</chip> <chip>b.js</chip>"
+       grep_search             → "Searched <chip>pattern</chip>"
+       run_shell ×2 powershell → "Ran <chip>powershell</chip> ×2"          */
+  function makeSemanticLabel(nodes) {
+    function chip(s) {
+      return '<code class="tl-chip">' + escHtml(String(s || "")) + '</code>';
+    }
+    var reads = [], writes = [], searches = [], shells = [], agents = [], others = [];
+    nodes.forEach(function(el) {
+      /* Determine kind from the .k-* class on the inner .tl or card root */
+      var tlEl = el.classList.contains("tl-wrap") ? el.querySelector(".tl") : el;
+      var kind = "other";
+      ["read", "write", "search", "shell", "plan", "agent"].forEach(function(k) {
+        if (tlEl && tlEl.classList.contains("k-" + k)) kind = k;
+      });
+      /* Primary <code> in .tl-prose holds the key target value */
+      var codeEl = el.querySelector(".tl-prose code");
+      var rawTarget = codeEl ? codeEl.textContent.trim()
+                             : (el.querySelector(".tgt") ? el.querySelector(".tgt").textContent.trim() : "");
+      /* Filename only (strip directory prefix) */
+      var filename = rawTarget ? rawTarget.split(/[\/\\]/).pop() : "";
+      if (kind === "read") {
+        reads.push(filename || rawTarget);
+      } else if (kind === "write") {
+        writes.push(filename || rawTarget);
+      } else if (kind === "search") {
+        searches.push(rawTarget);
+      } else if (kind === "shell") {
+        /* Use verb (detected shell name) as identifier */
+        var proseEl = el.querySelector(".tl-prose");
+        var shVerb = proseEl ? proseEl.textContent.trim().split(/\s+/)[0] : "command";
+        shells.push(shVerb);
+      } else if (kind === "agent") {
+        agents.push(rawTarget);
+      } else {
+        others.push(getToolVerb(el));
+      }
+    });
+
+    var parts = [];
+
+    if (reads.length > 0) {
+      var uniq = [];
+      reads.forEach(function(v) { if (v && uniq.indexOf(v) < 0) uniq.push(v); });
+      if (uniq.length === 1) {
+        parts.push("Reviewed " + chip(uniq[0]));
+      } else if (uniq.length <= 3) {
+        parts.push("Read " + uniq.map(chip).join(" "));
+      } else {
+        parts.push("Read " + reads.length + " files");
+      }
+    }
+
+    if (writes.length > 0) {
+      var uniq = [];
+      writes.forEach(function(v) { if (v && uniq.indexOf(v) < 0) uniq.push(v); });
+      if (uniq.length === 1) parts.push("Edited " + chip(uniq[0]));
+      else parts.push("Edited " + writes.length + " files");
+    }
+
+    if (searches.length > 0) {
+      if (searches.length > 1) {
+        parts.push("Searched \xd7" + searches.length);
+      } else {
+        var pat = searches[0];
+        parts.push("Searched " + (pat && pat.length <= 30 ? chip(pat) : ""));
+      }
+    }
+
+    if (shells.length > 0) {
+      var uniq = [];
+      shells.forEach(function(v) { if (v && uniq.indexOf(v) < 0) uniq.push(v); });
+      if (shells.length === 1) {
+        parts.push("Ran " + chip(uniq[0] || "command"));
+      } else if (uniq.length === 1) {
+        parts.push("Ran " + chip(uniq[0]) + " \xd7" + shells.length);
+      } else {
+        parts.push("Ran " + shells.length + " commands");
+      }
+    }
+
+    if (agents.length > 0) {
+      parts.push("Sub-agent" + (agents.length > 1 ? " \xd7" + agents.length : ""));
+    }
+
+    var otherCounts = {};
+    others.forEach(function(v) { otherCounts[v] = (otherCounts[v] || 0) + 1; });
+    Object.keys(otherCounts).forEach(function(v) {
+      parts.push(otherCounts[v] > 1 ? escHtml(v) + " \xd7" + otherCounts[v] : escHtml(v));
+    });
+
+    /* Fallback to mechanical label if nothing matched */
+    if (!parts.length) {
+      var verbCounts = {};
+      nodes.forEach(function(el) {
+        var v = getToolVerb(el);
+        verbCounts[v] = (verbCounts[v] || 0) + 1;
+      });
+      return Object.keys(verbCounts).map(function(v) {
+        return verbCounts[v] > 1 ? escHtml(v) + " \xd7" + verbCounts[v] : escHtml(v);
+      }).join("  \xb7  ");
+    }
+
+    return parts.join(' <span class="tl-dot">\xb7</span> ');
+  }
+
   /* Wrap a contiguous array of tool nodes into a single collapsible .tl-group. */
   function makeToolGroup(flow, nodes) {
     if (!nodes || nodes.length < 2) return;
-    var verbCounts = {};
-    nodes.forEach(function(el) {
-      var v = getToolVerb(el);
-      verbCounts[v] = (verbCounts[v] || 0) + 1;
-    });
-    var label = Object.keys(verbCounts).map(function(v){
-      return verbCounts[v] > 1 ? v + " \xd7" + verbCounts[v] : v;
-    }).join("  \xb7  ");
+    var labelHtml = makeSemanticLabel(nodes);
     var firstIco = nodes[0].querySelector(".ico");
     var icoHtml = firstIco ? firstIco.outerHTML : "";
     var grp = document.createElement("div");
     grp.className = "tl-group";
     var sumRow = document.createElement("div");
     sumRow.className = "tl-summary";
-    sumRow.innerHTML = icoHtml + "<span class=\"tl-prose\">" + escHtml(label) + "</span><span class=\"tl-chev\">\u2228</span>";
+    sumRow.innerHTML = icoHtml + "<span class=\"tl-prose\">" + labelHtml + "</span><span class=\"tl-chev\">\u2228</span>";
     var listEl = document.createElement("div");
     listEl.className = "tl-list";
     /* Insert group in place of first node, then migrate all nodes into listEl */
@@ -877,6 +1039,7 @@
     grp.appendChild(sumRow);
     grp.appendChild(listEl);
     (function(g){ sumRow.addEventListener("click", function(){ g.classList.toggle("open"); }); })(grp);
+    return grp;
   }
 
   /* Scan the entire .flow and group ALL contiguous runs of tool elements.
@@ -901,6 +1064,51 @@
     });
     if (current.length >= 2) runs.push(current);
     runs.forEach(function(run){ makeToolGroup(flow, run); });
+  }
+
+  /* Progressive live grouping: called after each toolResult.
+     Dissolves any previous groups, then re-groups all completed (non-running)
+     consecutive tool elements into one collapsible group, leaving the actively
+     running tool visible below it. Preserves the user open/closed state. */
+  function liveGroupCompleted() {
+    if (!curBubble) return;
+    var flow = curBubble.querySelector(".flow");
+    if (!flow) return;
+    /* Preserve open state of any existing group before dissolving */
+    var existingGroups = Array.from(flow.querySelectorAll(":scope > .tl-group"));
+    var wasOpen = existingGroups.some(function(g){ return g.classList.contains("open"); });
+    /* Dissolve all existing groups back into the flow (preserving document order) */
+    existingGroups.forEach(function(grp) {
+      var list = grp.querySelector(".tl-list");
+      if (list) Array.from(list.children).forEach(function(c){ flow.insertBefore(c, grp); });
+      grp.remove();
+    });
+    /* Re-group consecutive COMPLETED (non-running) tool elements */
+    var children = Array.from(flow.children);
+    var runs = [], current = [];
+    children.forEach(function(el) {
+      var isTool = el.classList.contains("tl-wrap") ||
+                   (el.classList.contains("tool") && !el.classList.contains("tl-group"));
+      var isRunning = el.classList.contains("run") ||
+                      !!(el.querySelector && el.querySelector(".tl.run"));
+      if (isTool && !isRunning) {
+        current.push(el);
+      } else {
+        if (current.length >= 2) runs.push(current.slice());
+        current = [];
+      }
+    });
+    if (current.length >= 2) runs.push(current);
+    if (!runs.length) return;
+    runs.forEach(function(run) {
+      var grp = makeToolGroup(flow, run);
+      if (grp && wasOpen) {
+        grp.classList.add("open");
+        var list = grp.querySelector(".tl-list");
+        /* Scroll to bottom so the latest completed entry is visible */
+        if (list) list.scrollTop = list.scrollHeight;
+      }
+    });
   }
 
   /* Ensure there is a current text segment to stream markdown into.
@@ -940,6 +1148,8 @@
     if (!s) return "shell";
     /* strip leading "& " or env assignments */
     s = s.replace(/^&\s+/, "").replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)+/, "");
+    /* strip leading "cd dir &&" chains so "cd analysis && python foo.py" → "python foo.py" */
+    s = s.replace(/^(?:cd\s+\S+\s*&&\s*)+/i, "");
     var first = s.split(/\s+/)[0] || "";
     /* trim quotes & path */
     first = first.replace(/^['\"]+|['\"]+$/g, "");
@@ -970,7 +1180,10 @@
     if (name === "write_file") return o.path || o.file || "";
     if (name === "list_dir") return o.path || o.dir || ".";
     if (name === "grep_search") return (o.pattern || o.query || "") + (o.path ? "  in " + o.path : "");
-    if (name === "run_shell") return o.command || o.cmd || "";
+    if (name === "run_shell") {
+      var rc = String(o.command || o.cmd || "").replace(/^(?:cd\s+\S+\s*&&\s*)+/i, "").trim();
+      return rc.slice(0, 70);
+    }
     if (name === "read_terminal"){
       var tn = o.terminal ? String(o.terminal) : "active terminal";
       var ln = o.lastN ? ", last " + o.lastN : "";
@@ -1002,7 +1215,7 @@
       return verb + " for " + code(pat) + (inPath ? " in " + code(inPath) : "");
     }
     if (name === "run_shell"){
-      var cmd = String(o.command || o.cmd || "");
+      var cmd = String(o.command || o.cmd || "").replace(/^(?:cd\s+\S+\s*&&\s*)+/i, "").trim();
       return verb + " " + code(cmd.length > 60 ? cmd.slice(0,60) + "\u2026" : cmd);
     }
     if (name === "spawn_agent"){
@@ -1039,8 +1252,9 @@
       if (!d.classList.contains("has-detail")) return;
       var open = d.classList.toggle("open");
       detail.style.display = open ? "block" : "none";
+      var rec = toolMap[id]; if (rec) rec._userToggled = true;
     });
-    toolMap[id] = { root:d, body:detail, status:d.querySelector(".tl-res"), isLine:true, name:name, args:args };
+    toolMap[id] = { root:d, body:detail, status:d.querySelector(".tl-res"), isLine:true, name:name, args:args, _startedAt:Date.now(), _userToggled:false };
     ascroll();
     return d;
   }
@@ -1062,7 +1276,7 @@
         "<span class=\"tgt\" title=\"" + escHtml(target) + "\">" + escHtml(target) + "</span>" +
         "<span class=\"st\">" + escHtml(statusTxt) + "</span>" +
       "</div>" +
-      "<div class=\"b\"><div class=\"args\">" + escHtml(shortArgs(args)) + "</div><div class=\"out\"></div></div>";
+      "<div class=\"b\"><div class=\"out\"></div></div>";
     holder.appendChild(d);
     /* Tool card breaks the current text run; next replyDelta will start a new segment. */
     if (cur && cur.classList && cur.classList.contains("seg")) cur.setAttribute("data-raw", curText || "");
@@ -1121,39 +1335,37 @@
     return t || ("Step " + (i + 1));
   }
   function renderPlan(steps, todos){
-    if (!steps || !steps.length){
-      planBody.innerHTML = "<div class=\"empty\">No active plan</div>"; planCnt.textContent = ""; renderTodos(todos || []); return;
-    }
-    var html = "<ul class=\"plan-list\">";
-    steps.forEach(function(s, i){
+    var allItems = [];
+    (steps || []).forEach(function(s, i){
       var st = normStatus(s && s.status);
-      var ic = ICONS[st] || ICONS.pending;
-      html += "<li class=\"st-" + st + "\"><span class=\"ic\">" + ic + "</span><span>" + (i+1) + ". " + escapeHtml(stepTitle(s, i)) + "</span></li>";
+      allItems.push({ text: stepTitle(s, i), st: st });
     });
-    html += "</ul>";
-    planBody.innerHTML = html;
-    var done = steps.filter(function(s){return normStatus(s && s.status) === "done";}).length;
-    planCnt.textContent = done + "/" + steps.length;
-    renderTodos((todos && todos.length) ? todos : steps);
-  }
-  function renderTodos(items){
-    if (!items || !items.length){
-      todoBody.innerHTML = "<div class=\"empty\">No todos</div>"; todoCnt.textContent = ""; return;
+    // Only append todos if they are a distinct non-empty array
+    if (todos && todos.length && todos !== steps){
+      todos.forEach(function(t, i){
+        var st = !!(t && t.done) ? "done" : normStatus(t && t.status);
+        allItems.push({ text: stepTitle(t, i), st: st });
+      });
     }
-    var done = items.filter(function(s){ return !!(s && s.done) || normStatus(s && s.status) === "done"; }).length;
-    var pct = Math.round((done / items.length) * 100);
-    var html = "<div class=\"todo-stat\">" + done + " / " + items.length + " 完成 (" + pct + "%)</div>";
-    html += "<div class=\"todo-bar\"><div class=\"fill\" style=\"width:" + pct + "%\"></div></div>";
-    html += "<ul class=\"todo-list\">";
-    items.forEach(function(s, i){
-      var isDone = !!(s && s.done) || normStatus(s && s.status) === "done";
-      if (isDone) return;
-      var st = normStatus(s && s.status);
-      var ic = ICONS[st] || ICONS.pending;
-      html += "<li><span>" + ic + "</span><span>" + escapeHtml(stepTitle(s, i)) + "</span></li>";
+    if (!allItems.length){
+      if (todoPop) todoPop.style.display = "none";
+      return;
+    }
+    var done = allItems.filter(function(x){ return x.st === "done"; }).length;
+    if (todoPopCnt) todoPopCnt.textContent = done + "/" + allItems.length;
+    var html = "";
+    allItems.forEach(function(item){
+      html += "<li class=\"tp-item tp-" + item.st + "\"><span class=\"tp-ic\"></span><span class=\"tp-label\">" + escapeHtml(item.text) + "</span></li>";
     });
-    html += "</ul>";
-    todoBody.innerHTML = html; todoCnt.textContent = done + "/" + items.length;
+    if (todoPopList) todoPopList.innerHTML = html;
+    if (todoPop) {
+      todoPop.classList.remove("collapsed");
+      todoPop.style.display = "flex";
+      /* Auto-hide when all tasks are done */
+      if (done === allItems.length) {
+        setTimeout(function(){ if (todoPop) todoPop.style.display = "none"; }, 600);
+      }
+    }
   }
   function addTask(){ return null; }
   function updateTask(){ /* no-op since v0.16: Tasks panel removed; sessions drawer replaces it */ }
@@ -1605,14 +1817,25 @@
     'Assembling…','Percolating…','Ideating…','Transmuting…','Conjuring…'
   ];
 
-  function setBusy(on){
+  /* preserveTimerMap: pass true when hiding the spinner due to a session switch.
+     Keeps _sessionTimerMap[_busySessionId] and _busySessionId intact so that
+     the eventual replyEnd/stopped (which may fire while a different session is
+     active) can still delete the correct map entry. */
+  function setBusy(on, preserveTimerMap){
     busy = !!on;
     if (!busy) {
+      if (!preserveTimerMap) {
+        if (_busySessionId !== null) delete _sessionTimerMap[_busySessionId];
+        _busySessionId = null;
+      }
       _stopping = false; _busyStartTs = 0; _curPhase = ""; _curTool = ""; _verbTick = 0; _stopElapsedTimer();
       if (_dcSpinner && _dcSpinner.parentNode) { _dcSpinner.parentNode.removeChild(_dcSpinner); }
       _dcSpinner = null;
     } else if (!_busyStartTs) {
-      _busyStartTs = Date.now(); _startElapsedTimer();
+      _busyStartTs = Date.now();
+      _busySessionId = activeSessionId;
+      if (_busySessionId) _sessionTimerMap[_busySessionId] = _busyStartTs;
+      _startElapsedTimer();
       var _sp = document.createElement("div");
       _sp.className = "dc-spinner";
       _sp.innerHTML =
@@ -1634,7 +1857,9 @@
   }
 
   /* Issue #58: phase + elapsed indicator */
-  var _stopping = false, _busyStartTs = 0, _elapsedTimer = null, _curPhase = "", _curTool = "", _dcSpinner = null, _verbTick = 0;
+  var _stopping = false, _busyStartTs = 0, _elapsedTimer = null, _curPhase = "", _curTool = "", _dcSpinner = null, _verbTick = 0, _busySessionId = null;
+  /* Per-session timer map: preserves each session's busy start timestamp across switches. */
+  var _sessionTimerMap = {};
   var _phaseLabels = {
     thinking: "\u601D\u8003\u4E2D",
     streaming: "\u751F\u6210\u4E2D",
@@ -1659,10 +1884,10 @@
     }
     _verbTick++;
     if (textEl) {
-      // Cycle verbs every ~3s (PR description's contract). With a 1Hz tick,
-      // mod-3 lets us fade out at tick 2 and swap at tick 3.
-      var mod = _verbTick % 3;
-      if (mod === 2) {
+      // Cycle verbs every ~10s: display 8s, fade out at tick 8, swap at tick 0.
+      // With a 1Hz tick: mod-10 gives 1s fade-out + 1s fade-in = 2s visible transition.
+      var mod = _verbTick % 10;
+      if (mod === 8) {
         textEl.classList.add('fade-out');
       } else if (mod === 0) {
         textEl.textContent = DC_VERBS[Math.floor(Math.random() * DC_VERBS.length)];
@@ -1752,7 +1977,7 @@
     ftTokens.textContent = "0 tokens"; ftCost.textContent = "¥0.0000";
     if (ftCache) { ftCache.textContent = "💾 0%"; ftCache.classList.remove("good"); }
     renderPlan([]);
-    curBubble = null; cur = null; curText = ""; curThk = null; toolMap = {}; _userMsgCount = 0; _editPendingIdx = -1;
+    curBubble = null; cur = null; curText = ""; curThk = null; toolMap = {}; _readTermCardMap = {}; _userMsgCount = 0; _editPendingIdx = -1;
   }
   // Detect "#<ref>:<arg>" tokens that have been explicitly committed by the
   // user. We commit when:
@@ -2125,12 +2350,9 @@
          next replyDelta starts a fresh segment after any tool cards. */
       if (curThkHead && !curThkHead.dataset.done) {
         curThkHead.dataset.done = "1";
-        curThkHead.classList.add("done");
-        var lbl_nt = "Thought";
-        curThkHead.dataset.label = lbl_nt;
-        if (curThk) curThk.style.display = "none";
-        var lblEl_nt = curThkHead.querySelector(".th-lbl"); if (lblEl_nt) lblEl_nt.textContent = lbl_nt;
-        var chevEl_nt = curThkHead.querySelector(".th-chev"); if (chevEl_nt) chevEl_nt.textContent = "\u25b8";
+        /* hide the entire thinking block — disappears once turn completes */
+        var slot_nt = curThkHead.parentNode;
+        if (slot_nt) slot_nt.style.display = "none";
       }
       curThk = null; curThkHead = null;
       if (cur && cur.classList && cur.classList.contains("seg")) { flushRender(); cur.setAttribute("data-raw", curText || ""); }
@@ -2143,13 +2365,19 @@
       var th2 = curThkHead;
       if (th2 && !th2.dataset.done) {
         th2.dataset.done = "1";
-        th2.classList.add("done");
-        var lbl = "Thought";
-        th2.dataset.label = lbl;
-        /* auto-collapse once real reply begins */
-        if (curThk) curThk.style.display = "none";
-        var lblEl = th2.querySelector(".th-lbl"); if (lblEl) lblEl.textContent = lbl;
-        var chevEl = th2.querySelector(".th-chev"); if (chevEl) chevEl.textContent = "▸";
+        /* Switch label to "Thought for Ns" and collapse the body, but keep
+           the head visible so the user can click to re-expand. */
+        var startMs = parseInt(th2.dataset.start || '0', 10);
+        var dur = startMs ? Math.max(1, Math.round((Date.now() - startMs) / 1000)) : 0;
+        var lbl = th2.querySelector('.th-lbl');
+        if (lbl) lbl.textContent = dur > 0 ? ('Thought for ' + dur + 's') : 'Thought';
+        var slot2 = th2.parentNode;
+        if (slot2) {
+          var body2 = slot2.querySelector('.thinkblk');
+          if (body2) body2.style.display = 'none';
+          var chev2 = th2.querySelector('.th-chev');
+          if (chev2) chev2.textContent = '\u25b8';
+        }
       }
       showCursor();
       ascroll();
@@ -2167,20 +2395,43 @@
         /* default-collapsed — user can click to expand */
       }
       if (curThk) curThk.textContent += (m.text || "");
-      if (th && !th.dataset.done) {
-        var chevEl3 = th.querySelector(".th-chev");
-        if (chevEl3) chevEl3.textContent = (curThk && curThk.style.display === "block" ? "\u25BE" : "\u25B8");
-      }
       /* keep view pinned to the latest reasoning text */
-      if (curThk && curThk.style.display === "block") curThk.scrollTop = curThk.scrollHeight;
+      if (curThk) curThk.scrollTop = curThk.scrollHeight;
       ascroll();
     } else if (m.type === "toolStart"){
       /* Shell, web-search and sub-agent calls get an expandable card so the
          user can click to see the full output. Everything else stays as a
          lightweight prose line (GH Copilot convention). */
-      var _cardTools = { run_shell:1, web_search:1, spawn_agent:1, read_terminal:1 };
+      var _cardTools = { read_terminal:1 };
       if (_cardTools[m.name]) {
-        addToolCard(m.id, m.name, m.args);
+        if (m.name === 'read_terminal') {
+          /* Reuse the existing card for the same terminal to prevent card flooding
+             during background-job polling loops (e.g. run_shell_bg + read_terminal). */
+          var _rtA; try { _rtA = JSON.parse(m.args || '{}'); } catch(e) { _rtA = {}; }
+          var _rtKey = String(_rtA.terminal || '_active_');
+          var _prev = _readTermCardMap[_rtKey];
+          if (_prev && _prev.root && _prev.root.parentNode) {
+            /* Reset card to running state in-place */
+            _prev.root.classList.remove('ok', 'err');
+            _prev.root.classList.add('run');
+            if (_prev.status) _prev.status.textContent = '\u2026';
+            if (_prev.body) _prev.body.textContent = '';
+            _prev._startedAt = Date.now();
+            _prev._userToggled = false;
+            _prev.args = m.args;
+            /* Break current text segment — same effect as addToolCard */
+            if (cur && cur.classList && cur.classList.contains("seg")) cur.setAttribute("data-raw", curText || "");
+            cur = null; curText = "";
+            toolMap[m.id] = _prev;
+            ascroll();
+          } else {
+            addToolCard(m.id, m.name, m.args);
+            var _rtRec = toolMap[m.id];
+            if (_rtRec) { _rtRec._rtKey = _rtKey; _readTermCardMap[_rtKey] = _rtRec; }
+          }
+        } else {
+          addToolCard(m.id, m.name, m.args);
+        }
       } else {
         addToolLine(m.id, m.name, m.args);
       }
@@ -2250,6 +2501,11 @@
         livePre.className = "live-out";
         tcSd.body.appendChild(livePre);
         tcSd._livePre = livePre;
+        /* Prose lines: auto-expand detail pane at stream start */
+        if (tcSd.isLine) {
+          tcSd.root.classList.add("has-detail", "open");
+          tcSd.body.style.display = "block";
+        }
       }
       if (!tcSd._livePending){
         tcSd._livePending = true;
@@ -2259,7 +2515,7 @@
           /* Keep DOM cheap: show only the last 6000 chars */
           var s = tcSd._liveBuf;
           if (s.length > 6000) s = "…\n" + s.slice(-6000);
-          tcSd._livePre.textContent = s;
+          tcSd._livePre.textContent = stripAnsi(s);
           /* Auto-scroll body to bottom */
           if (tcSd.body) tcSd.body.scrollTop = tcSd.body.scrollHeight;
         };
@@ -2323,9 +2579,32 @@
       tc.status.textContent = resTxt;
       if (tc.body && out) {
         if (tc.isLine) {
-          /* Prose line with output — write to detail pane, reveal hover-expand arrow */
-          tc.body.textContent = out;
-          tc.root.classList.add("has-detail");
+          /* Prose line: run_shell/web_search/spawn_agent now use prose rows.
+             Mirror per-tool card logic, using tc.body as the expandable detail pane. */
+          if (tc.name === "run_shell" || m.name === "run_shell") {
+            if (tc._livePre){ tc._livePre.remove(); tc._livePre = null; }
+            var runShellBody = getShellText(out);
+            var outPre = document.createElement("pre");
+            outPre.className = "final-out";
+            outPre.textContent = stripAnsi(runShellBody);
+            tc.body.innerHTML = ""; tc.body.appendChild(outPre);
+            tc.root.classList.add("has-detail");
+            if (!tc._userToggled){
+              if (m.ok) { tc.root.classList.remove("open"); tc.body.style.display = "none"; }
+              else      { tc.root.classList.add("open");    tc.body.style.display = "block"; }
+            }
+          } else if (tc.name === "spawn_agent" || m.name === "spawn_agent") {
+            tc.body.innerHTML = renderMd(out);
+            tc.root.classList.add("has-detail", "open");
+            tc.body.style.display = "block";
+          } else {
+            tc.body.textContent = out;
+            tc.root.classList.add("has-detail");
+            if (!tc._userToggled){
+              if (m.ok) { tc.root.classList.remove("open"); tc.body.style.display = "none"; }
+              else      { tc.root.classList.add("open");    tc.body.style.display = "block"; }
+            }
+          }
         } else if (tc.name === "spawn_agent" || m.name === "spawn_agent") {
           /* spawn_agent returns Markdown — render it inside the card body */
           tc.body.innerHTML = renderMd(out);
@@ -2341,12 +2620,21 @@
           var runShellBody = getShellText(out);
           var outPre = document.createElement("pre");
           outPre.className = "final-out";
-          outPre.textContent = runShellBody;
+          outPre.textContent = stripAnsi(runShellBody);
           tc.body.appendChild(outPre);
           if (!tc._userToggled){
             if (m.ok) tc.root.classList.remove("open");
             else      tc.root.classList.add("open");
           }
+        } else if (tc.name === "read_terminal" || m.name === "read_terminal") {
+          /* Terminal poll: strip ANSI/progress-bar noise, keep collapsed on success */
+          tc.body.textContent = stripAnsi(out);
+          if (!tc._userToggled){
+            if (m.ok) tc.root.classList.remove("open");
+            else      tc.root.classList.add("open");
+          }
+          /* Refresh dedup map so the next poll can find this card */
+          if (tc._rtKey) _readTermCardMap[tc._rtKey] = tc;
         } else if (tc.name === "web_search" || m.name === "web_search") {
           /* web_search: same rule as shell — collapse on success, expand on failure */
           tc.body.textContent = out;
@@ -2359,6 +2647,7 @@
           if (!tc._userToggled) tc.root.classList.remove("open");
         }
       }
+      liveGroupCompleted();
       ascroll();
     } else if (m.type === "plan"){
       renderPlan(m.steps || [], m.todos || []);
@@ -2420,6 +2709,8 @@
       sb.style.display = m.running ? "none" : "block";
       if (!m.running) sb.textContent = "⚠ 后端服务器未启动 — 发送时将自动启动";
       dot.className = "dot" + (m.running ? "" : " err");
+    } else if (m.type === "providersInfo"){
+      applyProvidersInfo(m.providers);
     } else if (m.type === "modelInfo"){
       if (m.provider){ switchToProvider(m.provider); }
       if (m.model){
@@ -2465,12 +2756,18 @@
       renderSessions();
     } else if (m.type === "sessionLoaded"){
       activeSessionId = m.id || null;
+      /* Only restore spinner timer if the extension confirms the run is still
+         in-flight (m.busy === true).  Completed runs are deleted from memory
+         on the extension side, so their events are never replayed — without
+         this guard a stale _sessionTimerMap entry would resurrect the spinner
+         for a session whose reply is long done. */
+      var _savedTs = (m.busy && activeSessionId) ? _sessionTimerMap[activeSessionId] : 0;
+      if (!m.busy && activeSessionId) delete _sessionTimerMap[activeSessionId];
       resetChat();
-      /* When switching sessions, reset busy/status to a clean state. If the
-         newly-foregrounded session has an in-flight run, the provider will
-         immediately replay its buffered events (replyStart, deltas, etc.)
-         which will set busy back to true. */
-      setBusy(false);
+      /* Pass preserveTimerMap=true so that if the PREVIOUS session is still
+         running in the background, its _sessionTimerMap entry is kept alive
+         until replyEnd/stopped fires and can clean it up with the correct id. */
+      setBusy(false, true);
       sb.style.display = "none";
       var msgsArr = m.messages || [];
       for (var k=0; k<msgsArr.length; k++){
@@ -2487,6 +2784,16 @@
           /* Action bar only on the very last assistant bubble (post-load) */
           if (k === msgsArr.length - 1) d.insertAdjacentHTML("beforeend", actionBarHtml());
         }
+      }
+      /* Restore timer if this session was mid-run when we switched away.
+         Call setBusy(true) first so it creates the spinner and starts the
+         interval; then override _busyStartTs with the real start time so
+         the elapsed display shows the correct accumulated duration rather
+         than resetting to 0. Also sync the map entry. */
+      if (_savedTs) {
+        setBusy(true);
+        _busyStartTs = _savedTs;
+        if (activeSessionId) _sessionTimerMap[activeSessionId] = _savedTs;
       }
       renderSessions(); ascroll();
     } else if (m.type === "fileSearchResults"){

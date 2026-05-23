@@ -27,6 +27,106 @@ let   _idSeq = 0;
 let _disposables = [];
 let _started = false;
 
+// Subscribers notified when a deepseek-job-* terminal completes.
+const _bgJobEndCallbacks = new Set();
+function onBgJobEnded(cb)  { _bgJobEndCallbacks.add(cb); }
+function offBgJobEnded(cb) { _bgJobEndCallbacks.delete(cb); }
+
+// Active bg-job registry — populated by bg-shell.js on start, cleared here on end.
+// Allows agent-loop.js to keep the loop alive while jobs are still running.
+const _activeBgJobs = new Set();
+function addActiveBgJob(jobId)  { _activeBgJobs.add(jobId); }
+function getActiveBgJobs()       { return new Set(_activeBgJobs); } // snapshot copy
+
+// Jobs whose end event was already consumed synchronously by the tool itself
+// (e.g. bg-shell early-exit window). Agent-loop should skip these when
+// injecting bg-job-end <system-reminder> blocks so the model doesn't see the
+// same finish event twice. Entries auto-expire after 5 minutes.
+const _syncReturnedJobs = new Map(); // jobId -> expiresAt
+function markSyncReturnedJob(jobId) {
+    if (!jobId) return;
+    _syncReturnedJobs.set(jobId, Date.now() + 5 * 60_000);
+}
+function wasSyncReturned(jobId) {
+    if (!jobId) return false;
+    const exp = _syncReturnedJobs.get(jobId);
+    if (!exp) return false;
+    if (Date.now() > exp) { _syncReturnedJobs.delete(jobId); return false; }
+    return true;
+}
+function _gcSyncReturnedJobs() {
+    const now = Date.now();
+    for (const [k, v] of _syncReturnedJobs) { if (now > v) _syncReturnedJobs.delete(k); }
+}
+
+/**
+ * Returns a Promise that resolves with the next bg-job-end payload, or null
+ * on timeout / abort.  Designed for agent-loop.js to `await` without spinning.
+ *
+ * @param {AbortSignal|null} signal  - AbortController signal to cancel the wait
+ * @param {number} timeoutMs         - max wait in ms (default 15 s)
+ */
+function waitForNextBgJobEvent(signal, timeoutMs = 15_000) {
+    return new Promise(resolve => {
+        let settled = false;
+        const done = (value) => {
+            if (settled) return;
+            settled = true;
+            offBgJobEnded(onEvent);
+            clearTimeout(timer);
+            if (signal) try { signal.removeEventListener('abort', onAbort); } catch {}
+            resolve(value);
+        };
+        const onEvent = (payload) => done(payload);
+        onBgJobEnded(onEvent);
+        const timer = setTimeout(() => done(null), timeoutMs);
+        const onAbort = () => done(null);
+        if (signal) try { signal.addEventListener('abort', onAbort, { once: true }); } catch {}
+    });
+}
+
+/**
+ * Remove stale entries from _activeBgJobs.
+ *
+ * A job is considered stale when:
+ *   a) Its terminal no longer exists in vscode.window.terminals (was closed
+ *      without triggering onDidCloseTerminal — e.g. VS Code restart).
+ *   b) Its terminal exists but the last buffered execution is no longer
+ *      running (process exited but onDidEndTerminalShellExecution didn't fire).
+ *
+ * Fires callbacks with exitCode: null for each removed entry so that any
+ * `await waitForNextBgJobEvent()` callers can unblock.
+ *
+ * Safe to call at any time; no-op if _activeBgJobs is empty.
+ */
+function cleanupStaleJobs() {
+    if (_activeBgJobs.size === 0) return;
+    const liveNames = new Set(
+        [...(vscode.window.terminals || [])].map(t => t.name).filter(Boolean),
+    );
+    for (const jobId of [..._activeBgJobs]) {
+        let stale = false;
+        if (!liveNames.has(jobId)) {
+            // Terminal no longer exists at all
+            stale = true;
+        } else {
+            // Terminal exists — check if the last recorded execution already finished
+            const t    = findTerminalByName(jobId);
+            const list = t ? (_buffers.get(t) || []) : [];
+            if (list.length > 0) {
+                const last = list[list.length - 1];
+                if (!last.running) stale = true; // ended without event
+            }
+        }
+        if (stale) {
+            _activeBgJobs.delete(jobId);
+            const payload = { jobId, exitCode: null, output: '', durationMs: 0, stale: true };
+            for (const cb of _bgJobEndCallbacks) { try { cb(payload); } catch {} }
+            try { Logger.info('BG_JOB_STALE_CLEANED', { jobId }); } catch {}
+        }
+    }
+}
+
 function _terminalId(terminal) {
     let id = _terminalIds.get(terminal);
     if (!id) {
@@ -121,12 +221,43 @@ function start(context) {
                 rec.endedAt  = Date.now();
                 rec.exitCode = typeof e.exitCode === 'number' ? e.exitCode : null;
                 if (e.execution) try { _execToRec.delete(e.execution); } catch {}
+                // Notify bg-job subscribers when a deepseek-job-* terminal completes.
+                if (e.terminal.name && e.terminal.name.startsWith('deepseek-job-')) {
+                    _activeBgJobs.delete(e.terminal.name);
+                    const payload = {
+                        jobId:      e.terminal.name,
+                        exitCode:   rec.exitCode,
+                        output:     rec.output.length > 2048 ? rec.output.slice(-2048) : rec.output,
+                        durationMs: rec.endedAt - rec.startedAt,
+                    };
+                    for (const cb of _bgJobEndCallbacks) { try { cb(payload); } catch {} }
+                }
             } catch { /* non-fatal */ }
         })
         : null;
 
     const closeSub = vscode.window.onDidCloseTerminal((terminal) => {
-        try { _buffers.delete(terminal); _terminalIds.delete(terminal); } catch {}
+        try {
+            // If a deepseek-job-* terminal is closed by the user before the process
+            // ends naturally, onDidEndTerminalShellExecution will never fire.
+            // Synthesise a completion event (exitCode: null = unknown) so that
+            // agent-loop.js waitForNextBgJobEvent() can resolve and the loop exits.
+            if (terminal.name && terminal.name.startsWith('deepseek-job-') && _activeBgJobs.has(terminal.name)) {
+                _activeBgJobs.delete(terminal.name);
+                const list = _buffers.get(terminal) || [];
+                const last = list[list.length - 1];
+                const payload = {
+                    jobId:      terminal.name,
+                    exitCode:   null,
+                    output:     last && last.output ? last.output.slice(-2048) : '',
+                    durationMs: last ? Date.now() - last.startedAt : 0,
+                    closedByUser: true,
+                };
+                for (const cb of _bgJobEndCallbacks) { try { cb(payload); } catch {} }
+            }
+            _buffers.delete(terminal);
+            _terminalIds.delete(terminal);
+        } catch {}
     });
 
     _disposables.push(startSub);
@@ -197,6 +328,14 @@ module.exports = {
     getRecentExecutions,
     findTerminalByName,
     listTerminals,
+    onBgJobEnded,
+    offBgJobEnded,
+    addActiveBgJob,
+    getActiveBgJobs,
+    waitForNextBgJobEvent,
+    cleanupStaleJobs,
+    markSyncReturnedJob,
+    wasSyncReturned,
     MAX_EXECUTIONS_PER_TERMINAL,
     MAX_BYTES_PER_EXECUTION,
 };
