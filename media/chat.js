@@ -206,10 +206,12 @@
   var todoPopCnt = document.getElementById("todo-pop-cnt");
   var busy = false;
   var cur = null, curText = "", curThk = null, curThkHead = null, curBubble = null;
-  // Null-prototype map so that ids coming from extension messages (e.g. `__proto__`,
-  // `constructor`) cannot pollute Object.prototype or alias unrelated properties.
-  var toolMap = Object.create(null);
-  var _readTermCardMap = Object.create(null); // terminal name → card record, for read_terminal deduplication
+  // Use real Map instances so that tool ids coming from extension messages
+  // (e.g. `__proto__`, `constructor`) can never become a property write on a
+  // plain object — eliminates the prototype-pollution / remote-property-
+  // injection sink that CodeQL flags on `toolMap[id] = ...`.
+  var toolMap = new Map();
+  var _readTermCardMap = new Map(); // terminal name → card record, for read_terminal deduplication
   var _userMsgCount = 0; // tracks index of each .msgU for editUserMessage
   var _editPendingIdx = -1; // index of msgU being edited, set before postMessage
   var sess = { tokens:0, cost:0, cacheHit:0, promptTotal:0 };
@@ -1254,9 +1256,9 @@
       if (!d.classList.contains("has-detail")) return;
       var open = d.classList.toggle("open");
       detail.style.display = open ? "block" : "none";
-      var rec = toolMap[id]; if (rec) rec._userToggled = true;
+      var rec = toolMap.get(id); if (rec) rec._userToggled = true;
     });
-    toolMap[id] = { root:d, body:detail, status:d.querySelector(".tl-res"), isLine:true, name:name, args:args, _startedAt:Date.now(), _userToggled:false };
+    toolMap.set(id, { root:d, body:detail, status:d.querySelector(".tl-res"), isLine:true, name:name, args:args, _startedAt:Date.now(), _userToggled:false });
     ascroll();
     return d;
   }
@@ -1286,7 +1288,7 @@
     d.querySelector(".h").addEventListener("click", function(){
       d.classList.toggle("open");
       /* User manually toggled — lock against auto-collapse on completion */
-      var rec = toolMap[id]; if (rec) rec._userToggled = true;
+      var rec = toolMap.get(id); if (rec) rec._userToggled = true;
     });
     /* run_shell: start expanded so the live stdout tail is visible while
        the command is running (GH Copilot terminal-card convention).
@@ -1310,13 +1312,13 @@
         d.querySelector(".st").textContent = "拒绝"; d.classList.remove("run"); d.classList.add("err");
       });
     }
-    toolMap[id] = {
+    toolMap.set(id, {
       root:d, body:d.querySelector(".b .out"), status:d.querySelector(".st"),
       name:name, args:args,
       _startedAt: Date.now(),
       _liveBuf: "",          /* accumulated streamed bytes (shell live tail)   */
       _userToggled: false,   /* set when user clicks header — locks auto-state */
-    };
+    });
     ascroll();
     return d;
   }
@@ -2079,7 +2081,7 @@
     ftTokens.textContent = "0 tokens"; ftCost.textContent = "¥0.0000";
     if (ftCache) { ftCache.textContent = "💾 0%"; ftCache.classList.remove("good"); }
     renderPlan([]);
-    curBubble = null; cur = null; curText = ""; curThk = null; toolMap = Object.create(null); _readTermCardMap = Object.create(null); _userMsgCount = 0; _editPendingIdx = -1;
+    curBubble = null; cur = null; curText = ""; curThk = null; toolMap = new Map(); _readTermCardMap = new Map(); _userMsgCount = 0; _editPendingIdx = -1;
   }
   // Detect "#<ref>:<arg>" tokens that have been explicitly committed by the
   // user. We commit when:
@@ -2443,7 +2445,7 @@
       inp.value = m.text || ""; autosize(); inp.focus();
       if (es && msgs.querySelectorAll(".msgU,.msgA").length === 0) es.style.display = "block";
     } else if (m.type === "replyStart"){
-      curBubble = null; cur = null; curThk = null; curThkHead = null; curText = ""; toolMap = Object.create(null);
+      curBubble = null; cur = null; curThk = null; curThkHead = null; curText = ""; toolMap = new Map();
       ensureBubble(); ascroll();
       setBusy(true); showCursor();
     } else if (m.type === "newTurn"){
@@ -2501,7 +2503,7 @@
              during background-job polling loops (e.g. run_shell_bg + read_terminal). */
           var _rtA; try { _rtA = JSON.parse(m.args || '{}'); } catch(e) { _rtA = {}; }
           var _rtKey = String(_rtA.terminal || '_active_');
-          var _prev = _readTermCardMap[_rtKey];
+          var _prev = _readTermCardMap.get(_rtKey);
           if (_prev && _prev.root && _prev.root.parentNode) {
             /* Reset card to running state in-place */
             _prev.root.classList.remove('ok', 'err');
@@ -2514,12 +2516,12 @@
             /* Break current text segment — same effect as addToolCard */
             if (cur && cur.classList && cur.classList.contains("seg")) cur.setAttribute("data-raw", curText || "");
             cur = null; curText = "";
-            toolMap[m.id] = _prev;
+            toolMap.set(m.id, _prev);
             ascroll();
           } else {
             addToolCard(m.id, m.name, m.args);
-            var _rtRec = toolMap[m.id];
-            if (_rtRec) { _rtRec._rtKey = _rtKey; _readTermCardMap[_rtKey] = _rtRec; }
+            var _rtRec = toolMap.get(m.id);
+            if (_rtRec) { _rtRec._rtKey = _rtKey; _readTermCardMap.set(_rtKey, _rtRec); }
           }
         } else {
           addToolCard(m.id, m.name, m.args);
@@ -2544,8 +2546,8 @@
       cur = null; curText = "";
       d.querySelector(".h").addEventListener("click", function(){ d.classList.toggle("open"); });
     } else if (m.type === "toolArgsDelta"){
-      var tcs = toolMap[m.id];
-      if (!tcs){ addToolLine(m.id, m.name || "write_file", "{}"); tcs = toolMap[m.id]; }
+      var tcs = toolMap.get(m.id);
+      if (!tcs){ addToolLine(m.id, m.name || "write_file", "{}"); tcs = toolMap.get(m.id); }
       var pre = tcs._streamPre;
       if (!pre){
         pre = document.createElement("pre");
@@ -2577,13 +2579,13 @@
       }
       ascroll();
     } else if (m.type === "toolArgsFinal"){
-      var tcF = toolMap[m.id];
+      var tcF = toolMap.get(m.id);
       if (tcF) tcF.args = m.args || tcF.args;
     } else if (m.type === "toolStreamDelta"){
       /* Live stdout/stderr chunks from a running tool (currently run_shell).
          Append to the card body as a <pre> so the user sees a tail-like
          preview while the command runs.  Throttled via requestAnimationFrame. */
-      var tcSd = toolMap[m.id];
+      var tcSd = toolMap.get(m.id);
       if (!tcSd || !tcSd.body) return;
       tcSd._liveBuf = (tcSd._liveBuf || "") + (m.delta || "");
       /* Ensure a <pre class="live"> exists inside the body */
@@ -2615,8 +2617,8 @@
         else setTimeout(doLive, 16);
       }
     } else if (m.type === "toolResult"){
-      var tc = toolMap[m.id];
-      if (!tc){ addToolLine(m.id, m.name || "tool", "{}"); tc = toolMap[m.id]; }
+      var tc = toolMap.get(m.id);
+      if (!tc){ addToolLine(m.id, m.name || "tool", "{}"); tc = toolMap.get(m.id); }
       tc.root.classList.remove("run");
       tc.root.classList.add(m.ok ? "ok" : "err");
       if (tc._streamPre){
@@ -2726,7 +2728,7 @@
             else      tc.root.classList.add("open");
           }
           /* Refresh dedup map so the next poll can find this card */
-          if (tc._rtKey) _readTermCardMap[tc._rtKey] = tc;
+          if (tc._rtKey) _readTermCardMap.set(tc._rtKey, tc);
         } else if (tc.name === "web_search" || m.name === "web_search") {
           /* web_search: same rule as shell — collapse on success, expand on failure */
           tc.body.textContent = out;
