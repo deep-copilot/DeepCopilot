@@ -58,8 +58,11 @@ function _lcsDiff(a, b) {
     if (m === 0) return { added: n, removed: 0 };
     if (n === 0) return { added: 0, removed: m };
 
-    // Two-row DP to keep memory at O(min(m,n)).
-    const [shorter, longer, swapped] = m <= n ? [a, b, false] : [b, a, true];
+    // Two-row DP to keep memory at O(min(m,n)). We only need to keep the DP
+    // table on the shorter axis; `added`/`removed` are still derived from the
+    // original a/b lengths below, so we don't need to track which side was
+    // swapped here.
+    const [shorter, longer] = m <= n ? [a, b] : [b, a];
     const sm = shorter.length, lm = longer.length;
     let prev = new Uint32Array(sm + 1);
     let curr = new Uint32Array(sm + 1);

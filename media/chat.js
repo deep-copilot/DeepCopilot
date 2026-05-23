@@ -206,8 +206,10 @@
   var todoPopCnt = document.getElementById("todo-pop-cnt");
   var busy = false;
   var cur = null, curText = "", curThk = null, curThkHead = null, curBubble = null;
-  var toolMap = {};
-  var _readTermCardMap = {}; // terminal name → card record, for read_terminal deduplication
+  // Null-prototype map so that ids coming from extension messages (e.g. `__proto__`,
+  // `constructor`) cannot pollute Object.prototype or alias unrelated properties.
+  var toolMap = Object.create(null);
+  var _readTermCardMap = Object.create(null); // terminal name → card record, for read_terminal deduplication
   var _userMsgCount = 0; // tracks index of each .msgU for editUserMessage
   var _editPendingIdx = -1; // index of msgU being edited, set before postMessage
   var sess = { tokens:0, cost:0, cacheHit:0, promptTotal:0 };

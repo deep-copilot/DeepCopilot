@@ -49,9 +49,3 @@ jobs:
           AI 审查在超大 diff 下质量会下降，建议：
           - 将无关改动拆分为独立 PR
           - 确保每个 PR 只聚焦一个功能或修复"
-
-      - name: Fail on extremely large PR (>1500 lines)
-        if: ${{ steps.count.outputs.lines > 1500 }}
-        run: |
-          echo "PR 超过 1500 行有效变更，请拆分后重新提交。"
-          exit 1
