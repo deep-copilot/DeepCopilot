@@ -115,7 +115,19 @@ function cleanupStaleJobs() {
             const list = t ? (_buffers.get(t) || []) : [];
             if (list.length > 0) {
                 const last = list[list.length - 1];
-                if (!last.running) stale = true; // ended without event
+                if (!last.running) {
+                    stale = true; // ended without event
+                } else if (last.startedAt && Date.now() - last.startedAt > 4 * 60 * 60_000) {
+                    // Still flagged as running after 4 h — onDidEndTerminalShellExecution
+                    // was dropped (VS Code shell integration reliability issue).
+                    stale = true;
+                }
+            } else {
+                // Terminal exists but has no buffered executions.  This can happen
+                // when onDidStartTerminalShellExecution never fired (SI race) even
+                // though addActiveBgJob was already called.  We cannot confirm the
+                // job is still running, so treat it as stale to unblock the loop.
+                stale = true;
             }
         }
         if (stale) {

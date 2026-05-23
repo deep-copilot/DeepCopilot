@@ -497,6 +497,35 @@ class AgentLoop {
                         // jobs that ended without firing their SI end event.
                         cleanupStaleJobs();
 
+                        // Skip bg-wait when the model has produced a non-empty
+                        // conclusive reply AND there are no pending job-end events
+                        // to deliver.
+                        //
+                        // Rationale: if a bg job ended *during* the current API
+                        // call, _bgJobEndHandler already queued its event in
+                        // run._pendingBgJobEvents synchronously.  A non-empty
+                        // _pendingBgJobEvents means the model should hear about
+                        // that result → keep the loop alive for ONE more iteration.
+                        //
+                        // Conversely, if _pendingBgJobEvents is empty, the bg job
+                        // is still running (dev server, watcher, etc.).  The model
+                        // already knows — it just told the user about it.  There is
+                        // nothing new to report, so exit the turn immediately rather
+                        // than blocking for up to BG_SNAPSHOT_MS (4 min) or longer.
+                        //
+                        // NOTE: we intentionally do NOT gate on whether the model
+                        // mentioned the jobId by name.  Models routinely include
+                        // "terminal deepseek-job-X is running" in status summaries
+                        // even when the task is fully complete, which would falsely
+                        // bypass this guard if we used a text-match heuristic.
+                        if (assistantText.trim()) {
+                            const _hasPendingEvents = !!(run._pendingBgJobEvents && run._pendingBgJobEvents.length);
+                            if (!_hasPendingEvents) {
+                                Logger.info('BG_WAIT_SKIPPED_MODEL_DONE', { jobs: [...getActiveBgJobs()] });
+                                break;
+                            }
+                        }
+
                         // Honour the turn-level budget: if we have already waited
                         // MAX_BG_WAIT_PER_TURN in this turn (across multiple outer
                         // iterations), give up and exit the loop rather than
@@ -524,10 +553,11 @@ class AgentLoop {
 
                             const ev = await waitForNextBgJobEvent(signal, BG_POLL_MS);
                             if (ev) {
-                                // A job ended — queue event; outer continue will inject
-                                // it as a system-reminder and then call the API once.
-                                if (!run._pendingBgJobEvents) run._pendingBgJobEvents = [];
-                                run._pendingBgJobEvents.push(ev);
+                                // A job ended — _bgJobEndHandler already pushed this
+                                // event to run._pendingBgJobEvents synchronously when
+                                // the SI end event fired.  Do NOT push again here or
+                                // the model will see two identical <system-reminder>
+                                // blocks for the same job completion.
                                 break;
                             }
 

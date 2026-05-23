@@ -26,3 +26,6 @@ scripts/**
 refine-logs/**
 dangerfile.js
 commitlint.config.mjs
+
+# 测试示例
+demo_test/**
