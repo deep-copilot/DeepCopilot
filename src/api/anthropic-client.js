@@ -133,7 +133,7 @@ function convertMessages(openaiMessages) {
  *
  * @returns {Promise<{ toolCalls: Array<{id,name,args}>, usage: object|null }>}
  */
-async function streamChat({ apiKey, baseUrl, messages, model, noTools, tools }, callbacks, abortSignal) {
+async function streamChat({ apiKey, baseUrl, messages, model, noTools, tools, maxOutputTokens }, callbacks, abortSignal) {
     const client = new Anthropic({
         apiKey:  apiKey || '',
         ...(baseUrl ? { baseURL: baseUrl.replace(/\/$/, '') } : {}),
@@ -143,7 +143,7 @@ async function streamChat({ apiKey, baseUrl, messages, model, noTools, tools }, 
 
     const reqPayload = {
         model:      model || 'claude-sonnet-4-6',
-        max_tokens: 16000,
+        max_tokens: maxOutputTokens || 16000,
         messages:   anthropicMessages,
     };
     if (system) reqPayload.system = system;
@@ -264,7 +264,7 @@ async function testConnection({ apiKey, baseUrl, model }) {
     try {
         await client.messages.create({
             model:     model || 'claude-sonnet-4-6',
-            max_tokens: 1,
+            max_tokens: 64,
             messages:  [{ role: 'user', content: 'hi' }],
         });
         return { ok: true };

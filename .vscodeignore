@@ -1,18 +1,28 @@
-.vscode/**
+# VCS / 工程配置
 .gitignore
+.gitleaksignore
+.eslintrc.json
+.github/**
+.deep-copilot/**
+**/.git/**
+
+# 打包产物 / 日志
 *.vsix
 session-*.log
-.deep-copilot/**
+**/*.map
+release/**
+
+# 源码（已通过 esbuild 打包到 out/）
 src/**
 esbuild.config.js
 node_modules/**
-**/*.map
-**/.git/**
-extension.js
-media/logo-original.png
-release/**
-collection-claude-code-source-code-main/**
-vscode-copilot-chat-main/**
-docs/**
+
+# 文档（保留 README.md 给 Marketplace）
 **/*.md
 !README.md
+
+# 杂项脚本 / 工具
+scripts/**
+refine-logs/**
+dangerfile.js
+commitlint.config.mjs

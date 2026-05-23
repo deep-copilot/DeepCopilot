@@ -47,6 +47,10 @@ class ChatViewProvider {
         this._views      = new Set();  // all live WebviewView instances
         this._panel      = null;
         this._runs       = new Map();
+        // pendingEdits live at the *session* level (not the per-turn run) so
+        // that the review panel stays clickable after the agent's reply ends
+        // and the run is reaped by AgentLoop.
+        this._pendingEditsBySession = new Map();
 
         this._store = new SessionStore(context.globalState, {
             getCurrentWs: () => this._currentWs(),
@@ -55,6 +59,8 @@ class ChatViewProvider {
             onDeleteRun:  (id)  => {
                 const run = this._runs.get(id);
                 if (run) { run.discarded = true; try { run.abortCtrl?.abort(); } catch {} this._runs.delete(id); }
+                // Session was deleted → drop its pending edits map too.
+                this._pendingEditsBySession.delete(id);
             },
         });
 
@@ -83,6 +89,11 @@ class ChatViewProvider {
     }
 
     _newRun(sessionId, seedMessages = []) {
+        // Reuse (or lazily create) the per-session pendingEdits map so the
+        // review panel survives the run-reaping at end-of-turn.
+        if (!this._pendingEditsBySession.has(sessionId)) {
+            this._pendingEditsBySession.set(sessionId, new Map());
+        }
         const run = {
             sessionId,
             messages:      seedMessages.length ? seedMessages.slice() : [],
@@ -92,11 +103,31 @@ class ChatViewProvider {
             events:        [],
             toolCache:     new Map(),
             turnSnapshots: new Map(),
+            pendingEdits:  this._pendingEditsBySession.get(sessionId), // shared ref
             plan:          null,
             planUpdatedIter: -1,
         };
         this._runs.set(sessionId, run);
         return run;
+    }
+
+    /** Get the live pendingEdits map for a session, even after the run is reaped. */
+    _pendingFor(sessionId) {
+        if (!sessionId) return null;
+        return this._pendingEditsBySession.get(sessionId) || null;
+    }
+
+    /**
+     * Lookup helper used by the `deepcopilot-before:` TextDocumentContentProvider
+     * registered in extension.js. Returns the pre-edit snapshot for a file in a
+     * given session, or an empty string when unavailable (file was new).
+     */
+    getPendingBefore(sessionId, absPath) {
+        const map = this._pendingFor(sessionId);
+        if (!map) return '';
+        const entry = map.get(absPath);
+        if (!entry) return '';
+        return typeof entry.before === 'string' ? entry.before : '';
     }
 
     _runPost(run, msg) {
@@ -157,6 +188,13 @@ class ChatViewProvider {
         switch (msg.type) {
             case 'ready': {
                 const cfg = vscode.workspace.getConfiguration('deepseekAgent');
+                // Push the dynamic provider registry first so the webview can
+                // build its model picker / settings dropdown from real data
+                // rather than the previously-hardcoded JS objects.
+                try {
+                    const { listProviders } = require('../providers');
+                    this._post({ type: 'providersInfo', providers: listProviders() });
+                } catch { /* registry failure shouldn't break the chat UI */ }
                 this._post({
                     type: 'modelInfo',
                     model: cfg.get('defaultModel') || 'deepseek-v4-pro',
@@ -200,6 +238,14 @@ class ChatViewProvider {
             case 'sessionPin':     this._store.pin(msg.id); break;
             case 'sessionUnread':  this._store.unread(msg.id); break;
             case 'sessionArchive': this._store.archive(msg.id); break;
+
+            // ─── Pending edits panel (Copilot-style review of agent writes) ───
+            case 'keepEdit':        this._handlePendingEdit('keep',    msg.path); break;
+            case 'keepAllEdits':    this._handlePendingEdit('keepAll'); break;
+            case 'discardEdit':     this._handlePendingEdit('discard', msg.path); break;
+            case 'discardAllEdits': this._handlePendingEdit('discardAll'); break;
+            case 'openEditDiff':    await this._handleOpenEditDiff(msg.path); break;
+
             case 'setInteractionMode': {
                 const cfg = vscode.workspace.getConfiguration('deepseekAgent');
                 cfg.update('interactionMode', msg.mode, vscode.ConfigurationTarget.Global)
@@ -262,8 +308,14 @@ class ChatViewProvider {
                             const https = require('https');
                             const http  = require('http');
                             const base  = resolved.baseUrl.replace(/\/$/, '');
-                            const urlObj = new URL('/chat/completions', base);
-                            const body   = JSON.stringify({ model: resolved.model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 });
+                            const urlObj = new URL(base + '/chat/completions');
+                            const tokenKey = resolved.useMaxCompletionTokens ? 'max_completion_tokens' : 'max_tokens';
+                            // Token budget for the test ping:
+                            //   1. Use provider-declared testConnectionMaxTokens if set (e.g. Anthropic rejects < 64)
+                            //   2. Reasoning models (useMaxCompletionTokens) need room for reasoning budget → 2048
+                            //   3. Everything else: 1 token is enough to confirm reachability
+                            const tokenBudget = resolved.testConnectionMaxTokens ?? (resolved.useMaxCompletionTokens ? 2048 : 1);
+                            const body   = JSON.stringify({ model: resolved.model, messages: [{ role: 'user', content: 'hi' }], [tokenKey]: tokenBudget });
                             const isHttps = urlObj.protocol === 'https:';
                             result = await new Promise((resolve) => {
                                 const req = (isHttps ? https : http).request({
@@ -272,7 +324,7 @@ class ChatViewProvider {
                                     path:     urlObj.pathname,
                                     method:   'POST',
                                     headers:  {
-                                        'Authorization':  `Bearer ${testKey || 'ollama'}`,
+                                        'Authorization':  `Bearer ${testKey || 'no-key'}`,
                                         'Content-Type':   'application/json',
                                         'Content-Length': Buffer.byteLength(body),
                                     },
@@ -553,8 +605,10 @@ class ChatViewProvider {
     }
 
     async _loadSession(id) {
-        await this._store.load(id);
+        // Check run before load — completed runs are deleted from _runs, so
+        // run will be null for finished sessions and truthy for in-flight ones.
         const run = this._runs.get(id);
+        await this._store.load(id, { busy: !!(run && run.busy) });
         if (run) for (const ev of run.events) this._post(ev);
     }
 
@@ -991,12 +1045,125 @@ class ChatViewProvider {
             } catch { failed.push(path.basename(absPath)); }
         }
         run.turnSnapshots.clear();
+        if (run.pendingEdits) {
+            run.pendingEdits.clear();
+            this._runPost(run, { type: 'pendingEdits', items: [] });
+        }
         const msg = isZh()
             ? `已回滚 ${reverted.length} 个文件：${reverted.join('、')}`
             : `Reverted ${reverted.length} file(s): ${reverted.join(', ')}`;
         failed.length
             ? vscode.window.showWarningMessage(msg + (isZh() ? `；失败：${failed.join('、')}` : `; Failed: ${failed.join(', ')}`))
             : vscode.window.showInformationMessage(msg);
+    }
+
+    // ─── Pending edits panel handlers ────────────────────────────────────────
+
+    /**
+     * Apply the user's keep/discard decision on agent-authored edits.
+     *  - 'keep'        : mark the entry as accepted, drop it from the panel.
+     *  - 'keepAll'     : same for every pending entry.
+     *  - 'discard'     : restore the snapshotted `before` content on disk and drop.
+     *  - 'discardAll'  : discard every pending entry.
+     */
+    _handlePendingEdit(action, targetPath) {
+        const sid = this._store.sessionId;
+        const pending = this._pendingFor(sid);
+        if (!pending || pending.size === 0) {
+            this._post({ type: 'pendingEdits', items: [] });
+            return;
+        }
+        const matches = (abs) => {
+            if (action === 'keepAll' || action === 'discardAll') return true;
+            return abs === targetPath;
+        };
+        const failed = [];
+        for (const [abs, entry] of [...pending]) {
+            if (entry.status !== 'pending' || !matches(abs)) continue;
+            if (action === 'keep' || action === 'keepAll') {
+                entry.status = 'accepted';
+            } else {
+                // discard → restore the snapshotted "before"
+                try {
+                    if (entry.before === null || entry.before === undefined) {
+                        if (fs.existsSync(abs)) fs.unlinkSync(abs);
+                    } else {
+                        fs.writeFileSync(abs, entry.before, 'utf8');
+                    }
+                    entry.status = 'discarded';
+                    // Keep turnSnapshots untouched: revert_last_turn must still
+                    // see the original `before` if the user later asks to undo
+                    // the whole turn — and writing the same `before` back is a
+                    // no-op for the snapshot-based restore.
+                } catch (e) {
+                    failed.push(`${path.basename(abs)}: ${e.message}`);
+                }
+            }
+            // Drop resolved entries from the map so the panel cleans up.
+            pending.delete(abs);
+        }
+        if (failed.length) {
+            vscode.window.showWarningMessage(
+                (isZh() ? 'Deep Copilot：部分文件回退失败：' : 'Deep Copilot: some files failed to revert: ')
+                + failed.join('; ')
+            );
+        }
+        // Build the post payload from the session map directly so it works
+        // even when no run is active.
+        const items = [];
+        for (const [abs, e] of pending) {
+            if (e.status !== 'pending') continue;
+            items.push({
+                path: abs, rel: e.rel, tool: e.tool,
+                added: e.added, removed: e.removed,
+                isNew: !!e.isNew, isDelete: !!e.isDelete,
+                binary: !!e.binary, approximate: !!e.approximate,
+                updatedAt: e.updatedAt,
+            });
+        }
+        items.sort((a, b) => b.updatedAt - a.updatedAt);
+        this._post({ type: 'pendingEdits', items });
+    }
+
+    /**
+     * Open a native VS Code diff editor comparing the snapshotted `before` of
+     * a pending edit against the current on-disk content. The left-hand side is
+     * served by the `deepcopilot-before:` TextDocumentContentProvider that
+     * extension.js registers; it calls back into `getPendingBefore(sid, abs)`.
+     */
+    async _handleOpenEditDiff(targetPath) {
+        const sid     = this._store.sessionId;
+        const pending = this._pendingFor(sid);
+        if (!pending) return;
+        const entry = pending.get(targetPath);
+        if (!entry) return;
+        try {
+            // Cache-busting `t` ensures every click yields a fresh URI so VS
+            // Code always opens a new diff editor instead of silently
+            // re-using a previously closed one. Combined with the
+            // `_invalidatePendingBefore` event below it also forces the
+            // content provider to be re-queried.
+            const ts     = Date.now();
+            const beforeUri = vscode.Uri.parse(
+                'deepcopilot-before:' + path.basename(targetPath)
+                + '?sid=' + encodeURIComponent(sid)
+                + '&p='   + encodeURIComponent(targetPath)
+                + '&t='   + ts
+            );
+            try { this._invalidatePendingBefore && this._invalidatePendingBefore(beforeUri); } catch {}
+            const afterUri  = vscode.Uri.file(targetPath);
+            const title     = isZh()
+                ? `Deep Copilot 待审阅: ${path.basename(targetPath)}`
+                : `Deep Copilot pending: ${path.basename(targetPath)}`;
+            // Drop `preview: true` so the diff tab survives the next click;
+            // otherwise repeated clicks can replace and instantly close it.
+            await vscode.commands.executeCommand('vscode.diff', beforeUri, afterUri, title);
+        } catch (e) {
+            Logger.info('OPEN_EDIT_DIFF_ERROR', { message: e.message });
+            vscode.window.showWarningMessage(
+                (isZh() ? '无法打开差异视图: ' : 'Cannot open diff view: ') + e.message
+            );
+        }
     }
 
     async _refreshBalance(force) {
@@ -1007,7 +1174,7 @@ class ChatViewProvider {
         const apiKey   = await this._context.secrets.get('deepseekAgent.apiKey') || '';
         const resolved = resolveProviderConfig(provider, cfg.get('apiBaseUrl') || '', '');
         if (!apiKey) { this._post({ type: 'balanceUpdate', unsupported: true }); return; }
-        const result = await fetchBalance({ apiKey, baseUrl: resolved.baseUrl });
+        const result = await fetchBalance({ apiKey, baseUrl: resolved.baseUrl, balanceEndpoint: resolved.balanceEndpoint });
         if (result === null) { this._post({ type: 'balanceUpdate', unsupported: true }); return; }
         this._balanceLastAt = Date.now();
         this._post({ type: 'balanceUpdate', ...result });

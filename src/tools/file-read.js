@@ -259,4 +259,52 @@ async function toolFindFiles(args) {
     } catch (e) { return `Error: ${e.message}`; }
 }
 
-module.exports = { toolReadFile, toolListDir, toolGrepSearch, toolFindFiles };
+// ─── get_diagnostics ────────────────────────────────────────────────────────
+
+async function toolGetDiagnostics(args) {
+    const sevName = s => ['Error', 'Warning', 'Info', 'Hint'][s] || 'Info';
+    const lines = [];
+    let totalErr = 0, totalWarn = 0;
+
+    if (args && args.path) {
+        let abs;
+        try { abs = resolvePath(args.path); } catch (e) { return `Error: ${e.message}`; }
+        const uri  = vscode.Uri.file(abs);
+        const diags = vscode.languages.getDiagnostics(uri) || [];
+        const filt  = diags.filter(d =>
+            d.severity === vscode.DiagnosticSeverity.Error ||
+            d.severity === vscode.DiagnosticSeverity.Warning);
+        if (!filt.length) return `No errors or warnings found in ${args.path}.`;
+        lines.push(`- ${args.path}:`);
+        for (const d of filt) {
+            const ln  = (d.range && d.range.start && d.range.start.line + 1) || '?';
+            const src = d.source ? `[${d.source}] ` : '';
+            const msg = String(d.message || '').replace(/\s+/g, ' ').slice(0, 200);
+            if (d.severity === vscode.DiagnosticSeverity.Error) totalErr++;
+            else totalWarn++;
+            lines.push(`  L${ln} ${sevName(d.severity)}: ${src}${msg}`);
+        }
+    } else {
+        const all = vscode.languages.getDiagnostics();
+        for (const [uri, diags] of all) {
+            const filt = diags.filter(d =>
+                d.severity === vscode.DiagnosticSeverity.Error ||
+                d.severity === vscode.DiagnosticSeverity.Warning).slice(0, 10);
+            if (!filt.length) continue;
+            const rel = vscode.workspace.asRelativePath(uri);
+            lines.push(`- ${rel}:`);
+            for (const d of filt) {
+                const ln  = (d.range && d.range.start && d.range.start.line + 1) || '?';
+                const src = d.source ? `[${d.source}] ` : '';
+                const msg = String(d.message || '').replace(/\s+/g, ' ').slice(0, 200);
+                if (d.severity === vscode.DiagnosticSeverity.Error) totalErr++;
+                else totalWarn++;
+                lines.push(`  L${ln} ${sevName(d.severity)}: ${src}${msg}`);
+            }
+        }
+        if (!lines.length) return 'No errors or warnings found in workspace.';
+    }
+    return [`diagnostics: ${totalErr} error(s), ${totalWarn} warning(s)`, ...lines].join('\n');
+}
+
+module.exports = { toolReadFile, toolListDir, toolGrepSearch, toolFindFiles, toolGetDiagnostics };

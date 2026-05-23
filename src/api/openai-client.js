@@ -1,6 +1,5 @@
 // Stream a chat completion via the OpenAI-compatible client.
-// Works with DeepSeek, OpenAI, Groq, Together, OpenRouter, and any other
-// OpenAI-compatible provider — swap baseUrl + model and it just works.
+// Works with DeepSeek, OpenAI, and any other OpenAI-compatible provider.
 'use strict';
 
 const { OpenAI } = require('openai');
@@ -11,7 +10,7 @@ const { TOOL_DEFS } = require('../tools/schema');
 /**
  * @returns Promise<{ toolCalls: Array<{id, name, args}>, usage: object|null }>
  */
-async function streamChat({ apiKey, baseUrl, messages, model, noTools, toolChoice, tools, httpAgent, streamOptions, parallelTools }, callbacks, abortSignal) {
+async function streamChat({ apiKey, baseUrl, messages, model, noTools, toolChoice, tools, httpAgent, streamOptions, parallelTools, useMaxCompletionTokens, reasoningField, maxOutputTokens }, callbacks, abortSignal) {
   const client = new OpenAI({
     apiKey,
     baseURL: (baseUrl || 'https://api.deepseek.com').replace(/\/$/, ''),
@@ -25,10 +24,9 @@ async function streamChat({ apiKey, baseUrl, messages, model, noTools, toolChoic
     model: model || 'deepseek-chat',
     messages,
     stream: true,
-    max_tokens: 32768,
+    ...(useMaxCompletionTokens ? { max_completion_tokens: maxOutputTokens || 32768 } : { max_tokens: maxOutputTokens || 32768 }),
   };
   // Only include stream_options when the provider supports it (e.g. DeepSeek, OpenAI).
-  // Providers like Groq, Gemini do not support this field and return 400 if sent.
   if (streamOptions !== false) {
     reqPayload.stream_options = { include_usage: true };
   }
@@ -101,7 +99,7 @@ async function streamChat({ apiKey, baseUrl, messages, model, noTools, toolChoic
       const delta = choice.delta || {};
 
       if (delta.content) callbacks.onDelta && callbacks.onDelta(delta.content);
-      if (delta.reasoning_content) callbacks.onThinking && callbacks.onThinking(delta.reasoning_content);
+      if (reasoningField && delta[reasoningField]) callbacks.onThinking && callbacks.onThinking(delta[reasoningField]);
 
       if (delta.tool_calls) {
         for (const tc of delta.tool_calls) {
@@ -137,23 +135,19 @@ async function streamChat({ apiKey, baseUrl, messages, model, noTools, toolChoic
 }
 
 /**
- * Query account balance from DeepSeek /user/balance.
- * Returns null silently unless the configured base URL is an official DeepSeek endpoint.
+ * Query account balance from the provider's declared balance endpoint.
+ * Returns null silently when the provider has no `balanceEndpoint` quirk set.
  * @returns {Promise<{available: boolean, balance_cny: number, balance_usd: number, topped_up_cny: number, granted_cny: number}|null>}
  */
-function fetchBalance({ apiKey, baseUrl }) {
+function fetchBalance({ apiKey, baseUrl, balanceEndpoint }) {
+  if (!balanceEndpoint) return Promise.resolve(null);
   const https = require('https');
   const http = require('http');
   return new Promise((resolve) => {
     const base = typeof baseUrl === 'string' ? baseUrl.trim().replace(/\/$/, '') : '';
     if (!base) { resolve(null); return; }
     let urlObj;
-    try { urlObj = new URL('/user/balance', base); } catch { resolve(null); return; }
-    const hostname = (urlObj.hostname || '').toLowerCase();
-    // Only query official DeepSeek endpoints; 3rd-party APIs may not support this route.
-    if (!(hostname === 'api.deepseek.com' || hostname.endsWith('.deepseek.com'))) {
-      resolve(null); return;
-    }
+    try { urlObj = new URL(balanceEndpoint, base); } catch { resolve(null); return; }
     const isHttps = urlObj.protocol === 'https:';
     const reqOpts = {
       hostname: urlObj.hostname,

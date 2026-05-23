@@ -65,12 +65,14 @@ const TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'run_shell',
-            description: 'Execute a shell command in a NEW child process at the workspace root. Use ONLY for things that genuinely need a shell: package managers (npm/pip/cargo), build tools, git, test runners, system info. Do NOT use to read, write, list, or search files — use the dedicated read_file / write_file / list_dir / grep_search tools instead. IMPORTANT: `run_shell` only sees the output of the process IT starts; it CANNOT see what is happening in the user\'s VS Code integrated terminal. When the user mentions "my terminal", an error/port/process already running there, or asks you to "look at the terminal", call `read_terminal` instead — never try to reproduce by re-running their command in `run_shell`. If the result contains "[Note: no output for last …s]" or "[Note: process was silent for last …s before timeout]", the process may be hung or stalled (e.g. port in use, waiting for input, blocked on external resource) — do NOT retry blindly; verify the cause (check port usage, add verbose flags, etc.) or report the situation to the user.',
+            description: 'Execute a shell command in a NEW child process at the workspace root. Use ONLY for quick commands (expected to finish within 60s): package managers (npm/pip/cargo), build tools, git, test runners, system info. Do NOT use to read, write, list, or search files — use the dedicated read_file / write_file / list_dir / grep_search tools instead. IMPORTANT: `run_shell` only sees the output of the process IT starts; it CANNOT see what is happening in the user\'s VS Code integrated terminal. When the user mentions "my terminal", an error/port/process already running there, or asks you to "look at the terminal", call `read_terminal` instead. EXECUTION MODE: by default the command runs silently in a hidden subprocess; set `in_terminal: true` to instead run it inside a visible VS Code integrated terminal so the user can watch the output live (helpful for installers, builds, or anything the user explicitly wants to see). The user setting `deepseekAgent.shellExecutionMode` controls the default. AUTO-REDIRECT: commands that clearly do not finish in 60s (training scripts with --epochs, dev servers like `npm run dev` / `uvicorn` / `flask run`, `docker build`, `torchrun`, `jupyter`, etc.) are automatically delegated to run_shell_bg — you do NOT need to switch tools manually, but you SHOULD prefer calling run_shell_bg directly when you know the command is long-running. Pass `force_foreground: true` to opt out of the auto-redirect (rare). CRITICAL: Do NOT pass timeout_ms > 60000 as a workaround for long-running tasks (model training, large builds, servers) — use `run_shell_bg` directly instead. It runs in the VS Code terminal with the correct shell environment and notifies you automatically when done. If the result contains "[Note: no output for last …s]", the process is stalled — do NOT retry with a larger timeout; switch to `run_shell_bg` immediately.',
             parameters: {
                 type: 'object',
                 properties: {
-                    command: { type: 'string', description: 'Shell command to execute.' },
-                    timeout_ms: { type: 'integer', description: 'Timeout in milliseconds (default 30000, hard capped at 1800000 = 30 min). For tasks expected to run longer than 30 min (model training, large builds), use run_shell_bg instead.' },
+                    command: { type: 'string', description: 'Shell command to execute. For quick tasks only (< 60s).' },
+                    timeout_ms: { type: 'integer', description: 'Timeout in milliseconds (default 30000). Do NOT exceed 60000 — use run_shell_bg for longer tasks.' },
+                    in_terminal: { type: 'boolean', description: 'Optional override. true = run visibly inside a VS Code integrated terminal; false = run silently in a hidden subprocess. Omit to honor the user setting deepseekAgent.shellExecutionMode (default: silent).' },
+                    force_foreground: { type: 'boolean', description: 'Set to true to disable the long-running auto-redirect to run_shell_bg. Use only when you are certain a heuristic-matched command will still finish in <60s.' },
                 },
                 required: ['command'],
             },
@@ -98,11 +100,12 @@ const TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'run_shell_bg',
-            description: 'Start a long-running shell command in a named VS Code integrated terminal and return immediately. Use ONLY for tasks that are expected to run longer than run_shell\'s timeout — model training, large builds, servers, extended test suites. Returns a terminalName (jobId). Poll progress with read_terminal(terminal: jobId) — each execution line is prefixed with "[running]", "[finished]", or "[exit N]" in the returned text; the job is complete when you see "[exit N]" or "[finished]". Do NOT use for quick commands — use run_shell instead.',
+            description: 'Start a long-running shell command in a named VS Code integrated terminal and return immediately. Use for model training, large builds, servers, or any task expected to take more than ~60s. ALWAYS prefer this over run_shell with a large timeout_ms. You will be notified automatically when the job finishes — no need to poll unless you want intermediate output. WINDOWS / POWERSHELL NOTE: The terminal on Windows uses PowerShell which does NOT support `&&` (bash syntax). Use `;` to chain commands (e.g. `cd path; python train.py`). Better yet, use the `cwd` parameter to set the working directory instead of `cd` entirely.',
             parameters: {
                 type: 'object',
                 properties: {
-                    command: { type: 'string', description: 'Shell command to execute in the background terminal.' },
+                    command: { type: 'string', description: 'Shell command to run. On Windows/PowerShell use `;` not `&&` to chain commands.' },
+                    cwd: { type: 'string', description: 'Optional working directory for the terminal. Preferred over `cd path;` — avoids shell syntax issues entirely.' },
                 },
                 required: ['command'],
             },
@@ -341,6 +344,171 @@ const TOOL_DEFS = [
             },
         },
     },
+    // ─── diagnostics ────────────────────────────────────────────────────
+    {
+        type: 'function',
+        function: {
+            name: 'get_diagnostics',
+            description:
+                'Return language-server diagnostics (TypeScript, ESLint, Pylance, etc.) for a ' +
+                'file or the whole workspace. Use to verify code after edits or to list all ' +
+                'current errors/warnings. Returns errors and warnings only (not info/hints). ' +
+                'Much faster than running a compiler — reads from VS Code\'s live engine.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: {
+                        type: 'string',
+                        description: 'File path to query (relative or absolute). Omit to get all errors/warnings across the workspace.',
+                    },
+                },
+                required: [],
+            },
+        },
+    },
+    // ─── editor context ─────────────────────────────────────────────────
+    {
+        type: 'function',
+        function: {
+            name: 'get_editor_context',
+            description:
+                'Return the current editor state: active file path, language, cursor position, ' +
+                'selected text (if any), and list of all open files/tabs. Use when the user ' +
+                'says "this file", "the current file", "what I have open", or "this selection" — ' +
+                'resolves the ambiguity before calling read_file or making edits.',
+            parameters: { type: 'object', properties: {}, required: [] },
+        },
+    },
+    // ─── git ─────────────────────────────────────────────────────────────
+    {
+        type: 'function',
+        function: {
+            name: 'git_status',
+            description:
+                'Show working-tree status (modified, staged, untracked files) and current branch. ' +
+                'Prefer over run_shell("git status") — faster and no shell overhead.',
+            parameters: { type: 'object', properties: {}, required: [] },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'git_diff',
+            description:
+                'Show the diff of unstaged changes (or staged if staged=true). Optionally ' +
+                'filter to a specific file. Use to understand what changed before committing.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    staged: {
+                        type: 'boolean',
+                        description: 'If true, show staged (cached) diff. Default false.',
+                    },
+                    path: {
+                        type: 'string',
+                        description: 'Limit diff to this file path (optional).',
+                    },
+                },
+                required: [],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'git_log',
+            description:
+                'Show recent commit history in one-line format with branch decoration. Use to ' +
+                'understand project history or find the commit that introduced a change.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    n: {
+                        type: 'integer',
+                        description: 'Number of commits to show (default 10, max 50).',
+                    },
+                },
+                required: [],
+            },
+        },
+    },
+    // ─── symbol navigation (LSP) ─────────────────────────────────────────
+    {
+        type: 'function',
+        function: {
+            name: 'find_references',
+            description:
+                'Find all usages of a symbol (function, class, variable, etc.) using the active ' +
+                'language server (LSP). More accurate than grep_search — understands scoping and ' +
+                'ignores string literals / comments. Requires the file to be open in VS Code with ' +
+                'a language server active.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path:   { type: 'string', description: 'File that contains the symbol.' },
+                    symbol: { type: 'string', description: 'Exact name of the symbol to find.' },
+                },
+                required: ['path', 'symbol'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'go_to_definition',
+            description:
+                'Find where a symbol is defined using the active language server (LSP). Returns ' +
+                'the file path and line number. More accurate than grep_search for symbols with ' +
+                'common names. Requires the file to be open with a language server active.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path:   { type: 'string', description: 'File that contains a usage of the symbol.' },
+                    symbol: { type: 'string', description: 'Exact name of the symbol to look up.' },
+                },
+                required: ['path', 'symbol'],
+            },
+        },
+    },
+    // ─── project memory ───────────────────────────────────────────────────
+    {
+        type: 'function',
+        function: {
+            name: 'memory_read',
+            description:
+                'Read the persistent project memory file (.deep-copilot/memory.md). Contains ' +
+                'facts, conventions, and preferences recorded for this workspace (e.g. package ' +
+                'manager, test commands, architecture decisions). Read at the start of a new ' +
+                'task if unsure about project conventions.',
+            parameters: { type: 'object', properties: {}, required: [] },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'memory_write',
+            description:
+                'Persist a project fact or convention to the memory file (.deep-copilot/memory.md). ' +
+                'Use when the user explicitly tells you something worth remembering for future ' +
+                'sessions (package manager, build commands, coding style, architecture decisions). ' +
+                'Creates the file if it does not exist; replaces the section if it already exists.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    section: {
+                        type: 'string',
+                        description: 'Short heading for this memory entry (e.g. "Package Manager", "Test Commands").',
+                    },
+                    content: {
+                        type: 'string',
+                        description: 'The fact or convention to remember.',
+                    },
+                },
+                required: ['section', 'content'],
+            },
+        },
+    },
+    // ─── sub-agent ───────────────────────────────────────────────────────
     {
         type: 'function',
         function: {

@@ -2,7 +2,7 @@
   "name": "deep-copilot",
   "displayName": "Deep Copilot",
   "description": "Deep Copilot — AI coding agent embedded in VS Code. Powered by DeepSeek V4, with file editing, terminal, search, and plan/todos. Standalone, no backend required.",
-  "version": "0.35.3",
+  "version": "0.40.4",
   "publisher": "ZhouChaunge",
   "icon": "imgs/logo.png",
   "repository": {
@@ -144,22 +144,21 @@
           "enum": [
             "deepseek",
             "openai",
-            "groq",
-            "ollama",
-            "gemini",
             "anthropic",
             "custom"
           ],
           "enumDescriptions": [
             "DeepSeek — api.deepseek.com",
             "OpenAI — api.openai.com/v1",
-            "Groq — api.groq.com/openai/v1 (fast Llama/Mixtral, no streaming usage)",
-            "Ollama — localhost:11434/v1 (local, no API key required)",
-            "Google Gemini (OpenAI-compat endpoint)",
             "Anthropic — api.anthropic.com (Claude models, native SDK)",
             "Custom — use the Base URL configured above"
           ],
           "description": "AI provider. Selecting a preset auto-fills the Base URL in the settings UI."
+        },
+        "deepseekAgent.providersDir": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to a directory containing additional provider JSON files (same schema as the built-in ones in src/providers/). Files here override built-in providers with the same id, letting you add new vendors or replace model lists without rebuilding the extension. Reload the window after editing."
         },
         "deepseekAgent.defaultModel": {
           "type": "string",
@@ -227,6 +226,19 @@
           },
           "default": [],
           "description": "Tool names to always deny (overrides approvalMode), e.g. [\"run_shell\"]"
+        },
+        "deepseekAgent.shellExecutionMode": {
+          "type": "string",
+          "default": "silent",
+          "enum": [
+            "silent",
+            "terminal"
+          ],
+          "enumDescriptions": [
+            "Silent — run_shell 在隐藏的子进程中静默执行命令，输出仅回传给模型（默认，速度最快）。",
+            "Terminal — run_shell 在 VS Code 集成终端中可见地执行命令，用户可以实时看到完整输出。"
+          ],
+          "description": "run_shell 工具的默认执行方式。silent = 后台静默执行；terminal = 在 VS Code 集成终端中执行（用户可见）。可被工具调用的 in_terminal 参数覆盖。"
         },
         "deepseekAgent.enableDebugLog": {
           "type": "boolean",

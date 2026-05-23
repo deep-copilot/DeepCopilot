@@ -1,0 +1,38 @@
+{
+  "$schema": "./_schema.json",
+  "id": "anthropic",
+  "displayName": "Anthropic",
+  "baseUrl": "https://api.anthropic.com",
+  "apiKeyUrl": "https://console.anthropic.com/settings/keys",
+  "protocol": "anthropic",
+  "defaultModel": "claude-opus-4-7",
+  "subAgentModel": "claude-sonnet-4-6",
+  "quirks": {
+    "streamOptions": false,
+    "parallelTools": false,
+    "testConnectionMaxTokens": 64
+  },
+  "models": [
+    {
+      "id": "claude-opus-4-7",
+      "displayName": "Claude Opus 4.7",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "capabilities": { "tools": true, "reasoning": true, "vision": true }
+    },
+    {
+      "id": "claude-opus-4-6",
+      "displayName": "Claude Opus 4.6",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "capabilities": { "tools": true, "reasoning": true, "vision": true }
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "displayName": "Claude Sonnet 4.6",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "capabilities": { "tools": true, "reasoning": true, "vision": true }
+    }
+  ]
+}

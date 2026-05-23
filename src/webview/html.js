@@ -34,6 +34,14 @@ function buildWebviewHtml(webview, extensionUri) {
         interactionMode: t('wvInteractionMode'),
         balanceTitle:    t('wvBalanceTitle'),
         balanceInit:     t('wvBalanceInit'),
+        pendingEditsTitle:      t('wvPendingEditsTitle'),
+        pendingEditsKeep:       t('wvPendingEditsKeep'),
+        pendingEditsKeepAll:    t('wvPendingEditsKeepAll'),
+        pendingEditsDiscard:    t('wvPendingEditsDiscard'),
+        pendingEditsDiscardAll: t('wvPendingEditsDiscardAll'),
+        pendingEditsNew:        t('wvPendingEditsNew'),
+        pendingEditsDeleted:    t('wvPendingEditsDeleted'),
+        pendingEditsBinary:     t('wvPendingEditsBinary'),
     };
     const nonce   = Buffer.from(Date.now().toString() + Math.random().toString()).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
     const csp = [
@@ -56,23 +64,8 @@ function buildWebviewHtml(webview, extensionUri) {
 <div id="prog" class="prog"></div>
 <!-- #cbt kept hidden: chat.js references it for /clear command & Ctrl+K shortcut -->
 <button id="cbt" style="display:none" aria-hidden="true"></button>
-<button id="edgeL" class="edge-toggle edge-l" title="Plan / Todos" aria-label="toggle left panel"></button>
 <button id="edgeR" class="edge-toggle edge-r" title="${ui.sessions}" aria-label="toggle right panel"></button>
 <div id="sb"></div>
-<aside id="left">
-  <section class="pnl" id="planPnl" data-open="1">
-    <div class="ph"><span class="pchev">▾</span> Plan <span class="cnt" id="plan-cnt"></span></div>
-    <div class="pb" id="plan-body"><div class="empty">No active plan</div></div>
-  </section>
-  <section class="pnl" id="todoPnl" data-open="1">
-    <div class="ph"><span class="pchev">▾</span> Todos <span class="cnt" id="todo-cnt"></span></div>
-    <div class="pb" id="todo-body"><div class="empty">No todos</div></div>
-  </section>
-  <section class="pnl pnl-mini" id="agentPnl" data-open="0">
-    <div class="ph"><span class="pchev">▸</span> Agents <span class="cnt" id="agent-cnt">0</span></div>
-    <div class="pb" id="agent-body" style="display:none"><div class="empty">No agents</div></div>
-  </section>
-</aside>
 <div id="main">
   <div id="es">
     <div class="big"><img class="welcome-logo" src="${welcomeLogoUri}" alt="Deep Copilot"/></div>
@@ -99,7 +92,25 @@ function buildWebviewHtml(webview, extensionUri) {
 </aside>
 <div id="ia">
   <div id="pop" class="pop" style="display:none"></div>
+  <div id="todo-pop" class="todo-pop" style="display:none">
+    <div class="todo-pop-hd" id="todo-pop-hd">
+      <span class="todo-pop-chev" id="todo-pop-chev">&#8250;</span><span class="todo-pop-title">Tasks</span>
+      <span class="todo-pop-cnt" id="todo-pop-cnt"></span>
+      <button class="todo-pop-close" id="todo-pop-close" title="Close">✕</button>
+    </div>
+    <ul class="todo-pop-list" id="todo-pop-list"></ul>
+  </div>
   <div id="composer-card">
+    <div id="pending-edits-panel" class="pending-edits-panel" style="display:none">
+      <div class="pe-header">
+        <span class="pe-title">${ui.pendingEditsTitle || 'Pending edits'}</span>
+        <span class="pe-count" id="pe-count">0</span>
+        <span class="pe-spacer"></span>
+        <button class="pe-btn pe-btn-secondary" id="pe-discard-all" title="${ui.pendingEditsDiscardAll || 'Discard all'}">${ui.pendingEditsDiscardAll || 'Discard all'}</button>
+        <button class="pe-btn pe-btn-primary"   id="pe-keep-all"    title="${ui.pendingEditsKeepAll    || 'Keep all'}">${ui.pendingEditsKeepAll    || 'Keep all'}</button>
+      </div>
+      <ul class="pe-list" id="pe-list"></ul>
+    </div>
     <div id="at-chips"></div>
     <div id="inp-row">
       <div id="skill-notice"></div>
@@ -108,7 +119,7 @@ function buildWebviewHtml(webview, extensionUri) {
     <div id="composer-bar">
       <div class="cb-left">
         <div id="iModePicker" class="mode-picker" data-im="agent">
-          <button id="iModeBtn" class="cbtn mode-trigger" title="${ui.interactionMode}"><i class="codicon codicon-tools"></i> Agent</button>
+          <button id="iModeBtn" class="cbtn mode-trigger" title="${ui.interactionMode}"><i class="codicon codicon-tools"></i>&#160;Agent&#160;<span class="mode-chev">▾</span></button>
         </div>
         <div id="modelPicker" class="mode-picker" data-model="deepseek-v4-pro">
           <button id="modelBtn" class="cbtn mode-trigger" title="${ui.switchModel}">⚡ v4-pro <span class="mode-chev">▾</span></button>
@@ -149,13 +160,7 @@ function buildWebviewHtml(webview, extensionUri) {
         <div class="settings-field">
           <label class="settings-label" for="s-provider">Provider</label>
           <select id="s-provider" class="settings-input settings-select">
-            <option value="deepseek">DeepSeek</option>
-            <option value="openai">OpenAI</option>
-            <option value="groq">Groq (Llama/Mixtral)</option>
-            <option value="ollama">Ollama (local)</option>
-            <option value="gemini">Google Gemini</option>
-            <option value="anthropic">Anthropic (Claude)</option>
-            <option value="custom">Custom</option>
+            <!-- Options populated dynamically from the provider registry (chat.js handles 'providersInfo'). -->
           </select>
         </div>
         <div class="settings-field">

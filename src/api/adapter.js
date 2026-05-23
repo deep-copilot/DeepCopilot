@@ -1,90 +1,108 @@
+// Adapter: thin routing layer between higher-level callers and the per-protocol
+// API clients (OpenAI-compatible vs native Anthropic). All vendor/model data
+// now lives in src/providers/*.json — consult `src/providers/index.js`.
 'use strict';
 
 const { streamChat: streamChatBase, fetchBalance } = require('./openai-client');
 const { streamChat: streamChatAnthropic }          = require('./anthropic-client');
 
-// Preset configuration per provider.
-// streamOptions: whether to send stream_options.include_usage (true = supported).
-// parallelTools: whether to send parallel_tool_calls (true = supported).
-// noApiKey:      provider does not require an API key (e.g. local Ollama).
-// isAnthropic:   routes to the native Anthropic SDK client instead of OpenAI-compatible.
-const PROVIDER_PRESETS = {
-  deepseek:  { baseUrl: 'https://api.deepseek.com',                               defaultModel: 'deepseek-v4-pro',         streamOptions: true,  parallelTools: true  },
-  openai:    { baseUrl: 'https://api.openai.com/v1',                              defaultModel: 'gpt-4o',                  streamOptions: true,  parallelTools: true  },
-  groq:      { baseUrl: 'https://api.groq.com/openai/v1',                         defaultModel: 'llama-3.3-70b-versatile', streamOptions: false, parallelTools: false },
-  ollama:    { baseUrl: 'http://localhost:11434/v1',                              defaultModel: 'llama3.2',                streamOptions: false, parallelTools: false, noApiKey: true },
-  gemini:    { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', defaultModel: 'gemini-2.0-flash',      streamOptions: false, parallelTools: false },
-  anthropic: { baseUrl: 'https://api.anthropic.com',                              defaultModel: 'claude-sonnet-4-6',       isAnthropic: true,   streamOptions: false, parallelTools: false },
-  custom:    { streamOptions: false, parallelTools: false },
-};
+const {
+    getProvider,
+    getModel,
+    getEffectiveQuirks,
+    sanitizeMessages,
+    resolveModel,
+} = require('../providers');
+
+const MODEL_CONFIG_DEFAULT = { contextWindow: 65536, maxOutputTokens: 16384 };
 
 /**
- * Decide whether to use the stored override model for a given provider.
- * Prevents passing a DeepSeek-specific model name to OpenAI/Groq/Gemini.
- */
-function shouldUseOverrideModel(provider, overrideModel) {
-  if (!overrideModel) return false;
-  const m = String(overrideModel);
-  // Ignore provider-specific model names when the provider doesn't match.
-  if (provider !== 'deepseek'  && m.startsWith('deepseek-'))  return false;
-  if (provider !== 'anthropic' && m.startsWith('claude-'))    return false;
-  return true;
-}
-
-/**
- * Resolve the effective baseUrl, model, and flags for a given provider.
- * @param {string} provider - one of the PROVIDER_PRESETS keys
- * @param {string} overrideBaseUrl - user-set base URL override (may be empty)
- * @param {string} overrideModel   - deepseekAgent.defaultModel setting value
+ * Resolve everything `chat/provider.js` needs to issue a one-shot HTTP request
+ * (connection test, balance refresh): protocol-level URL, the actual model id,
+ * and the relevant quirks. Higher-level callers (`streamChat`) inline these
+ * lookups themselves.
  */
 function resolveProviderConfig(provider, overrideBaseUrl, overrideModel) {
-  const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
-  const model = shouldUseOverrideModel(provider, overrideModel)
-    ? overrideModel
-    : (preset.defaultModel || 'deepseek-chat');
-
-  return {
-    baseUrl:      overrideBaseUrl || preset.baseUrl || 'https://api.deepseek.com',
-    model,
-    noApiKey:     !!preset.noApiKey,
-    streamOptions: preset.streamOptions !== false,
-    parallelTools: preset.parallelTools !== false,
-  };
+    const p     = getProvider(provider) || getProvider('custom');
+    const pid   = p ? p.id : (provider || 'deepseek');
+    const model = resolveModel(pid, overrideModel);
+    const cfg   = getModel(pid, model) || MODEL_CONFIG_DEFAULT;
+    const quirks = getEffectiveQuirks(pid, model);
+    // Built-in providers (openai/anthropic/deepseek) ship their canonical baseUrl in
+    // their JSON; the global `apiBaseUrl` setting only applies when the provider has
+    // no built-in baseUrl (i.e. the `custom` provider). Otherwise a stale override
+    // from a previous provider selection would silently misroute requests.
+    return {
+        baseUrl:                p?.baseUrl || overrideBaseUrl || 'https://api.deepseek.com',
+        model,
+        noApiKey:               !!p?.noApiKey,
+        streamOptions:          quirks.streamOptions !== false,
+        parallelTools:          quirks.parallelTools !== false,
+        useMaxCompletionTokens: !!quirks.useMaxCompletionTokens,
+        testConnectionMaxTokens: quirks.testConnectionMaxTokens ?? null,
+        balanceEndpoint:        quirks.balanceEndpoint || null,
+        reasoningField:         quirks.reasoningField  || null,
+        contextWindow:          cfg.contextWindow,
+        maxOutputTokens:        cfg.maxOutputTokens,
+    };
 }
 
-/**
- * Route a chat streaming request through the correct provider configuration.
- * Anthropic uses its own native SDK client; all others use the OpenAI-compatible client.
- */
-function streamChat({ provider, apiKey, baseUrl, model, ...rest }, callbacks, abortSignal) {
-  const preset = PROVIDER_PRESETS[provider] || PROVIDER_PRESETS.custom;
+// ─── streamChat: the only routing entry point ────────────────────────────
 
-  if (preset.isAnthropic) {
-    const effectiveModel  = shouldUseOverrideModel(provider, model) ? model : (preset.defaultModel || 'claude-sonnet-4-6');
-    const effectiveUrl    = baseUrl || preset.baseUrl;
-    return streamChatAnthropic(
-      { ...rest, apiKey: apiKey || '', baseUrl: effectiveUrl, model: effectiveModel },
-      callbacks,
-      abortSignal,
+function streamChat({ provider, apiKey, baseUrl, model, messages, ...rest }, callbacks, abortSignal) {
+    const providerId = provider || 'deepseek';
+    const p          = getProvider(providerId) || getProvider('custom');
+    const pid        = p ? p.id : providerId;
+    const effProtocol = p?.protocol || 'openai';
+    const effModel    = resolveModel(pid, model);
+    // Same precedence rule as `resolveProviderConfig`: built-in baseUrl wins to
+    // prevent a stale global override from misrouting cross-provider requests.
+    const effBaseUrl  = p?.baseUrl || baseUrl || 'https://api.deepseek.com';
+    const modelCfg    = getModel(pid, effModel) || MODEL_CONFIG_DEFAULT;
+    const quirks      = getEffectiveQuirks(pid, effModel);
+
+    // Apply provider-declared input sanitisation (e.g. DeepSeek strips
+    // `reasoning_content` for non-reasoning models; reasoning models are exempt
+    // because the API requires reasoning_content to be passed back each turn).
+    const cleanMessages = sanitizeMessages(pid, messages, effModel);
+
+    if (effProtocol === 'anthropic') {
+        return streamChatAnthropic(
+            {
+                ...rest,
+                apiKey:           apiKey || '',
+                baseUrl:          effBaseUrl,
+                model:            effModel,
+                messages:         cleanMessages,
+                maxOutputTokens:  modelCfg.maxOutputTokens,
+            },
+            callbacks,
+            abortSignal,
+        );
+    }
+
+    // OpenAI-compatible path (DeepSeek / OpenAI / Custom / etc.)
+    const effApiKey = p?.noApiKey ? 'no-key' : (apiKey || '');
+    return streamChatBase(
+        {
+            ...rest,
+            apiKey:                effApiKey,
+            baseUrl:               effBaseUrl,
+            model:                 effModel,
+            messages:              cleanMessages,
+            streamOptions:         quirks.streamOptions !== false,
+            parallelTools:         quirks.parallelTools !== false,
+            useMaxCompletionTokens: !!quirks.useMaxCompletionTokens,
+            reasoningField:        quirks.reasoningField || null,
+            maxOutputTokens:       modelCfg.maxOutputTokens,
+        },
+        callbacks,
+        abortSignal,
     );
-  }
-
-  const resolved = resolveProviderConfig(provider || 'deepseek', baseUrl, model);
-  // For providers that don't need an API key (Ollama), use a dummy value
-  // so the OpenAI SDK doesn't reject the request.
-  const effectiveApiKey = resolved.noApiKey ? 'ollama' : (apiKey || '');
-  return streamChatBase(
-    {
-      ...rest,
-      apiKey:        effectiveApiKey,
-      baseUrl:       resolved.baseUrl,
-      model:         resolved.model,
-      streamOptions: resolved.streamOptions,
-      parallelTools: resolved.parallelTools,
-    },
-    callbacks,
-    abortSignal,
-  );
 }
 
-module.exports = { streamChat, fetchBalance, PROVIDER_PRESETS, resolveProviderConfig };
+module.exports = {
+    streamChat,
+    fetchBalance,
+    resolveProviderConfig,
+};

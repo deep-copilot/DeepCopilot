@@ -25,6 +25,21 @@ function syncDomPurify() {
     if (fs.existsSync(src)) fs.copyFileSync(src, dst);
 }
 
+// Copy provider definition JSONs from src/providers/ → out/providers/.
+// The runtime registry (src/providers/index.js) does fs.readdirSync on this
+// directory; esbuild would otherwise inline JSON via require() and the
+// dynamic discovery / user providersDir feature would not work.
+function syncProviders() {
+    const src = path.join(__dirname, 'src', 'providers');
+    const dst = path.join(__dirname, 'out', 'providers');
+    if (!fs.existsSync(src)) return;
+    if (!fs.existsSync(dst)) fs.mkdirSync(dst, { recursive: true });
+    for (const f of fs.readdirSync(src)) {
+        if (!f.endsWith('.json')) continue;
+        fs.copyFileSync(path.join(src, f), path.join(dst, f));
+    }
+}
+
 // Keep KaTeX distributable in sync with node_modules on every build.
 function syncKatex() {
     const src = path.join(__dirname, 'node_modules', 'katex', 'dist');
@@ -45,6 +60,7 @@ function syncKatex() {
 syncCodicons();
 syncKatex();
 syncDomPurify();
+syncProviders();
 
 const watch = process.argv.includes('--watch');
 const isProd = !watch && process.env.NODE_ENV !== 'development';

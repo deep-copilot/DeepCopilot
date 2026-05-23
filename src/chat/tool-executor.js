@@ -18,11 +18,16 @@ const { t }            = require('../utils/i18n');
 const { wsRoot, resolvePath } = require('../utils/paths');
 const { runHooks }     = require('../hooks');
 const { mcpManager }   = require('../mcp');
+const { lineDiffStats } = require('./diff-utils');
 
 const {
     toolReadFile, toolListDir, toolGrepSearch, toolFindFiles,
     toolWriteFile, toolStrReplaceInFile, toolApplyPatch, toolRunShell, toolRunShellBg, toolReadTerminal, toolWebSearch, toolWebFetch,
     toolSavePlan,
+    toolGetDiagnostics, toolGetEditorContext,
+    toolGitStatus, toolGitDiff, toolGitLog,
+    toolFindReferences, toolGoToDefinition,
+    toolMemoryRead, toolMemoryWrite,
 } = require('../tools/exec');
 const { skillInvoke, skillCreate } = require('../tools/skill-tools');
 
@@ -30,7 +35,9 @@ class ToolExecutor {
     // Read-only tools whose results can be cached until workspace changes.
     static CACHEABLE = new Set(['read_file', 'grep_search', 'find_files', 'list_dir', 'web_search', 'web_fetch']);
     // Mutating tools that invalidate the file cache after execution.
-    static MUTATING  = new Set(['write_file', 'str_replace_in_file', 'apply_patch', 'run_shell', 'run_shell_bg', 'skill_create']);
+    static MUTATING  = new Set(['write_file', 'str_replace_in_file', 'apply_patch', 'run_shell', 'run_shell_bg', 'skill_create', 'memory_write']);
+    // Maximum cached entries per run; oldest entry is evicted on overflow (insertion-order LRU).
+    static CACHE_MAX_ENTRIES = 200;
 
     /**
      * @param {vscode.ExtensionContext} context
@@ -65,6 +72,15 @@ class ToolExecutor {
             ['web_search',          (args, ctx) => toolWebSearch(args, ctx)],
             ['web_fetch',           (args, ctx) => toolWebFetch(args, ctx)],
             ['save_plan',           (args)      => toolSavePlan(args)],
+            ['get_diagnostics',     (args)      => toolGetDiagnostics(args)],
+            ['get_editor_context',  ()          => toolGetEditorContext()],
+            ['git_status',          ()          => toolGitStatus()],
+            ['git_diff',            (args)      => toolGitDiff(args)],
+            ['git_log',             (args)      => toolGitLog(args)],
+            ['find_references',     (args)      => toolFindReferences(args)],
+            ['go_to_definition',    (args)      => toolGoToDefinition(args)],
+            ['memory_read',         ()          => toolMemoryRead()],
+            ['memory_write',        (args)      => toolMemoryWrite(args)],
         ]);
     }
 
@@ -209,6 +225,39 @@ class ToolExecutor {
     // ─── Pre-edit snapshot ───────────────────────────────────────────────────
 
     snapshotForEdit(run, name, args) {
+        const paths = this._collectEditPaths(name, args);
+        for (const rel of paths) {
+            let abs;
+            try { abs = resolvePath(rel); } catch { continue; }
+            if (run.turnSnapshots.has(abs)) continue; // only capture once per turn
+            let before;
+            try { before = fs.readFileSync(abs, 'utf8'); }
+            catch { before = null; } // null = file didn't exist
+            run.turnSnapshots.set(abs, before);
+            // Initialise a pendingEdits skeleton so the recorder pass below has
+            // somewhere to land. Keep the earliest captured `before` if the same
+            // file is edited multiple times in the turn (matches turnSnapshots).
+            if (run.pendingEdits && !run.pendingEdits.has(abs)) {
+                run.pendingEdits.set(abs, {
+                    tool:     name,
+                    before,
+                    after:    null,
+                    added:    0,
+                    removed:  0,
+                    isNew:    before === null,
+                    isDelete: false,
+                    binary:   false,
+                    approximate: false,
+                    status:   'pending',
+                    rel:      this._relFromAbs(abs),
+                    updatedAt: Date.now(),
+                });
+            }
+        }
+    }
+
+    /** Extract the list of relative paths a write tool will touch. */
+    _collectEditPaths(name, args) {
         const paths = [];
         if ((name === 'write_file' || name === 'str_replace_in_file') && args && args.path) {
             paths.push(String(args.path));
@@ -221,13 +270,72 @@ class ToolExecutor {
                 if (paths.length >= 20) break;
             }
         }
+        return paths;
+    }
+
+    _relFromAbs(abs) {
+        const root = wsRoot() || process.cwd();
+        try { return path.relative(root, abs).replace(/\\/g, '/'); }
+        catch { return abs; }
+    }
+
+    /**
+     * After a successful write-tool execution, read the file's new contents,
+     * compute +N/-M against the snapshotted `before`, update run.pendingEdits,
+     * and emit a `pendingEdits` event for the webview.
+     *
+     * Idempotent: safe to call multiple times for the same path within a turn
+     * (the latest `after` wins; `before` is preserved as the very first one).
+     */
+    recordEditResult(run, name, args) {
+        if (!run || !run.pendingEdits) return;
+        const paths = this._collectEditPaths(name, args);
         for (const rel of paths) {
             let abs;
             try { abs = resolvePath(rel); } catch { continue; }
-            if (run.turnSnapshots.has(abs)) continue; // only capture once per turn
-            try { run.turnSnapshots.set(abs, fs.readFileSync(abs, 'utf8')); }
-            catch { run.turnSnapshots.set(abs, null); } // null = file didn't exist
+            const entry = run.pendingEdits.get(abs);
+            if (!entry) continue; // snapshotForEdit should have created one
+            let after;
+            let isDelete = false;
+            try { after = fs.readFileSync(abs, 'utf8'); }
+            catch { after = null; isDelete = true; }
+            entry.after    = after;
+            entry.isDelete = isDelete;
+            const stats = lineDiffStats(entry.before, after);
+            entry.added       = stats.added;
+            entry.removed     = stats.removed;
+            entry.isNew       = stats.isNew;
+            entry.isDelete    = stats.isDelete || isDelete;
+            entry.binary      = !!stats.binary;
+            entry.approximate = !!stats.approximate;
+            entry.status      = 'pending';
+            entry.updatedAt   = Date.now();
         }
+        this._postToRun(run, { type: 'pendingEdits', items: this.serializePendingEdits(run) });
+    }
+
+    /** Trim the in-memory map down to the wire-safe shape for the webview. */
+    serializePendingEdits(run) {
+        if (!run || !run.pendingEdits) return [];
+        const out = [];
+        for (const [abs, e] of run.pendingEdits) {
+            if (e.status !== 'pending') continue;
+            out.push({
+                path:        abs,
+                rel:         e.rel,
+                tool:        e.tool,
+                added:       e.added,
+                removed:     e.removed,
+                isNew:       !!e.isNew,
+                isDelete:    !!e.isDelete,
+                binary:      !!e.binary,
+                approximate: !!e.approximate,
+                updatedAt:   e.updatedAt,
+            });
+        }
+        // Most recent first — matches the order a user expects to review.
+        out.sort((a, b) => b.updatedAt - a.updatedAt);
+        return out;
     }
 
     // ─── Post-edit diagnostics ───────────────────────────────────────────────
@@ -364,6 +472,10 @@ class ToolExecutor {
                 try { entry.mtime = fs.statSync(resolvePath(args.path)).mtimeMs; } catch {}
             }
             cache.set(key, entry);
+            // P0-1: LRU eviction — keep cache bounded to prevent memory leaks in long sessions.
+            if (cache.size > ToolExecutor.CACHE_MAX_ENTRIES) {
+                cache.delete(cache.keys().next().value);
+            }
         }
 
         // Cache invalidation (mutating)
@@ -383,6 +495,10 @@ class ToolExecutor {
         // Post-edit diagnostics
         if (typeof result === 'string' && !result.startsWith('Error') &&
             (name === 'write_file' || name === 'str_replace_in_file' || name === 'apply_patch')) {
+            // Update the pending-edits panel with the latest after-state.
+            try { this.recordEditResult(run, name, args); }
+            catch (e) { Logger.info('PENDING_EDIT_RECORD_ERROR', { message: e.message }); }
+
             const cfg2 = vscode.workspace.getConfiguration('deepseekAgent');
             if (cfg2.get('postEditDiagnostics', true)) {
                 try {
@@ -490,6 +606,10 @@ class ToolExecutor {
             }
         }
         run.turnSnapshots.clear();
+        if (run.pendingEdits) {
+            run.pendingEdits.clear();
+            this._postToRun(run, { type: 'pendingEdits', items: [] });
+        }
         let msg = `Reverted ${reverted.length} file(s) to pre-turn state: ${reverted.join(', ')}`;
         if (failed.length) msg += `\nFailed to revert: ${failed.join('; ')}`;
         return msg;

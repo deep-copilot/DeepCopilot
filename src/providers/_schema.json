@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DeepCopilot Provider Definition",
+  "description": "Declarative spec for a chat-completion provider. Drop this file in src/providers/ (built-in) or in the user-configured providersDir to register a new vendor.",
+  "type": "object",
+  "required": ["id", "displayName", "protocol", "models"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$",
+      "description": "Unique provider identifier. Used in settings, routing, and the wire protocol."
+    },
+    "displayName": {
+      "type": "string",
+      "description": "Human-readable name shown in the UI."
+    },
+    "baseUrl": {
+      "type": "string",
+      "description": "Default API base URL. User-set apiBaseUrl overrides this."
+    },
+    "apiKeyUrl": {
+      "type": "string",
+      "description": "URL where the user can obtain an API key. Shown as a help link in settings."
+    },
+    "protocol": {
+      "type": "string",
+      "enum": ["openai", "anthropic"],
+      "description": "Wire protocol. 'openai' routes to the OpenAI-compatible client; 'anthropic' routes to the native Anthropic SDK."
+    },
+    "defaultModel": {
+      "type": "string",
+      "description": "Model id used when no explicit override matches this provider."
+    },
+    "subAgentModel": {
+      "type": "string",
+      "description": "Optional override used by spawn_agent. Falls back to defaultModel."
+    },
+    "noApiKey": {
+      "type": "boolean",
+      "description": "When true, the provider does not require an API key (e.g. local LLM servers)."
+    },
+    "quirks": {
+      "type": "object",
+      "description": "Per-provider behavior flags consumed by the request layer.",
+      "additionalProperties": false,
+      "properties": {
+        "streamOptions": {
+          "type": "boolean",
+          "description": "Send `stream_options.include_usage: true`. OpenAI/DeepSeek support; some compat servers don't."
+        },
+        "parallelTools": {
+          "type": "boolean",
+          "description": "Send `parallel_tool_calls: true`. Anthropic-compat shims often reject this."
+        },
+        "useMaxCompletionTokens": {
+          "type": "boolean",
+          "description": "Use `max_completion_tokens` instead of `max_tokens`. Required for OpenAI GPT-5 series."
+        },
+        "testConnectionMaxTokens": {
+          "type": "integer",
+          "description": "Override the max_tokens value used during testConnection probes. Anthropic Claude 4 rejects values < 64."
+        },
+        "balanceEndpoint": {
+          "type": "string",
+          "description": "Path of the provider's account-balance REST endpoint (e.g. '/user/balance'). When absent, balance queries are skipped for this provider."
+        },
+        "reasoningField": {
+          "type": "string",
+          "description": "Name of the streaming delta field that carries chain-of-thought text (e.g. 'reasoning_content' for DeepSeek). When absent, thinking callbacks are not fired."
+        },
+        "stripInputFields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Field names to strip from every input message before sending. E.g. DeepSeek rejects requests that include `reasoning_content` in input."
+        }
+      }
+    },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "contextWindow", "maxOutputTokens"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "displayName": { "type": "string" },
+          "contextWindow": { "type": "integer" },
+          "maxOutputTokens": { "type": "integer" },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "tools":     { "type": "boolean" },
+              "reasoning": { "type": "boolean" },
+              "vision":    { "type": "boolean" }
+            }
+          },
+          "quirks": {
+            "type": "object",
+            "description": "Model-level quirks. Merged on top of provider-level quirks.",
+            "additionalProperties": true
+          },
+          "pricing": {
+            "type": "object",
+            "description": "CNY per 1M tokens. Omit when pricing is unknown — UI will show usage without cost.",
+            "additionalProperties": false,
+            "properties": {
+              "input":     { "type": "number" },
+              "cache_hit": { "type": "number" },
+              "output":    { "type": "number" },
+              "currency":  { "type": "string" },
+              "discount":  {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["until", "input", "cache_hit", "output"],
+                "properties": {
+                  "until":     { "type": "string", "description": "ISO 8601 timestamp. While Date.now() < until, the discount table replaces the base." },
+                  "label":     { "type": "string" },
+                  "input":     { "type": "number" },
+                  "cache_hit": { "type": "number" },
+                  "output":    { "type": "number" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

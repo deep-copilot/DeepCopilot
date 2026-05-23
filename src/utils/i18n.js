@@ -92,6 +92,16 @@ const EN = {
     wvBalanceTitle:     'Account balance (click to refresh)',
     wvBalanceInit:      '💰 Checking...',
 
+    // Pending-edits panel (review agent-authored writes before keep/discard)
+    wvPendingEditsTitle:      'Pending edits',
+    wvPendingEditsKeep:       'Keep',
+    wvPendingEditsKeepAll:    'Keep all',
+    wvPendingEditsDiscard:    'Discard',
+    wvPendingEditsDiscardAll: 'Discard all',
+    wvPendingEditsNew:        'new',
+    wvPendingEditsDeleted:    'deleted',
+    wvPendingEditsBinary:     'binary',
+
     // Sidebar launcher hint page — shown in the left activity-bar view.
     sidebarHintLead:    'For the best experience, open Deep Copilot as an editor tab',
     sidebarHintBenefit1:'Larger, dedicated chat area',
@@ -186,6 +196,16 @@ const ZH = {
     wvInteractionMode:  '交互模式',
     wvBalanceTitle:     '账户余额（点击刷新）',
     wvBalanceInit:      '💰 查询中…',
+
+    // Pending-edits panel (review agent-authored writes before keep/discard)
+    wvPendingEditsTitle:      '待审阅修改',
+    wvPendingEditsKeep:       '保留',
+    wvPendingEditsKeepAll:    '全部保留',
+    wvPendingEditsDiscard:    '丢弃',
+    wvPendingEditsDiscardAll: '全部丢弃',
+    wvPendingEditsNew:        '新建',
+    wvPendingEditsDeleted:    '已删除',
+    wvPendingEditsBinary:     '二进制',
 
     // Sidebar launcher hint page — shown in the left activity-bar view.
     sidebarHintLead:    '为了更好的使用体验，建议以「标签页」形式打开 Deep Copilot',
