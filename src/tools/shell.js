@@ -175,7 +175,7 @@ async function _runInVscodeTerminal(command, ctx, timeoutMs) {
 
     if (usedSI) {
         terminal.shellIntegration.executeCommand(adapted);
-        addActiveBgJob(jobId);
+        addActiveBgJob(jobId, ctx.sessionId || null);
     } else {
         terminal.sendText(adapted);
     }
