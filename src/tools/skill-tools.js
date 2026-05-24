@@ -86,9 +86,14 @@ const SKILL_CREATOR_NAMES = new Set(['skill-creator', 'skill_creator', 'skillcre
  *
  * @param {{messages?: any[]}|null|undefined} run
  * @param {string|null|undefined} [currentTcId] - ID of the current tool call
+ * @param {Set<string>|null|undefined} [allowedNames] - Lower-cased set of
+ *     skill names that are *actually installed* and count as the meta-skill.
+ *     Invoking a variant not present in this set does NOT satisfy the gate.
+ *     Falls back to all known variants when omitted (used only by tests).
  * @returns {boolean}
  */
-function _skillCreatorInvokedThisTurn(run, currentTcId) {
+function _skillCreatorInvokedThisTurn(run, currentTcId, allowedNames) {
+    const accepted = (allowedNames && allowedNames.size) ? allowedNames : SKILL_CREATOR_NAMES;
     const msgs = run && Array.isArray(run.messages) ? run.messages : null;
     if (!msgs || !msgs.length) return false;
 
@@ -144,28 +149,36 @@ function _skillCreatorInvokedThisTurn(run, currentTcId) {
             let parsed = null;
             try { parsed = JSON.parse(fn.arguments || '{}'); } catch { /* ignore */ }
             const invokedName = String(parsed && parsed.name || '').trim().toLowerCase();
-            if (SKILL_CREATOR_NAMES.has(invokedName)) return true;
+            if (accepted.has(invokedName)) return true;
         }
     }
     return false;
 }
 
 /**
- * Issue #146 — Returns true if a skill named "skill-creator" (or a known
- * variant) is installed on the user's machine. When absent, the gate is
- * downgraded to a soft warning so users who never set up the meta-skill
- * are not locked out of skill creation entirely.
+ * Issue #146 — Returns the lower-cased set of meta-skill names that are
+ * actually installed locally (intersection of SKILL_CREATOR_NAMES with the
+ * discovered skills). Empty set ⇒ no creator installed (soft-warn path).
  */
-function _skillCreatorInstalled() {
+function _installedSkillCreatorNames() {
+    const installed = new Set();
     try {
-        // Lazy/live require so test harnesses that monkey-patch
-        // `skills.discoverSkills` after module load are honored.
         const { discoverSkills: live } = require('../skills');
         const all = live(wsRoot());
-        return all.some(s => SKILL_CREATOR_NAMES.has(String(s.name || '').toLowerCase()));
-    } catch {
-        return false;
-    }
+        for (const s of all) {
+            const n = String(s && s.name || '').toLowerCase();
+            if (SKILL_CREATOR_NAMES.has(n)) installed.add(n);
+        }
+    } catch { /* fall through to empty set */ }
+    return installed;
+}
+
+/**
+ * Issue #146 — Returns true if any skill-creator variant is installed.
+ * Kept as a thin wrapper for readability at call sites.
+ */
+function _skillCreatorInstalled() {
+    return _installedSkillCreatorNames().size > 0;
 }
 
 /**
@@ -199,8 +212,9 @@ function skillCreate(args, run, tcId) {
 
     // Issue #146 — Skill-creator quality gate. Run BEFORE field validation so
     // the model gets the most actionable error first; the check is cheap.
-    const creatorInstalled = _skillCreatorInstalled();
-    const creatorInvoked   = _skillCreatorInvokedThisTurn(run, tcId || null);
+    const installedCreators = _installedSkillCreatorNames();
+    const creatorInstalled  = installedCreators.size > 0;
+    const creatorInvoked    = _skillCreatorInvokedThisTurn(run, tcId || null, installedCreators);
     if (creatorInstalled && !creatorInvoked) {
         return 'Error: skill_create is gated by the `skill-creator` meta-skill. '
             + 'Before persisting a new skill you MUST first call '

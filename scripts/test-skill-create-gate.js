@@ -203,5 +203,23 @@ test('T9 skill_invoke appearing after skill_create in same message is rejected',
     assert.deepStrictEqual(_writes, []);
 });
 
+// ── T10: invoking a *non-installed* variant name does NOT satisfy gate ────
+// If skill_creator (underscore) is installed but the model invokes
+// skill-creator (hyphen, not installed), skill_invoke itself would error,
+// so the meta-skill never actually ran. The gate must reject the bypass.
+test('T10 invoking a variant name that is not actually installed is rejected', () => {
+    // Only `skill_creator` (underscore) is installed.
+    stubDiscover([{ ...skillCreatorStub, name: 'skill_creator' }]);
+    const run = { messages: [
+        userMsg('make a skill'),
+        // Model tries to satisfy the gate by invoking the hyphen spelling,
+        // which is NOT installed locally — skill_invoke would have failed.
+        invokeCall('skill-creator'),
+    ] };
+    const out = skillCreate(validArgs, run);
+    assert.match(out, /^Error: skill_create is gated/, `bypass via uninstalled variant must be rejected; got: ${out}`);
+    assert.deepStrictEqual(_writes, []);
+});
+
 // Final summary — printed once, after ALL tests have actually run.
-console.log(`\nAll ${passed} tests passed (including T8 and T9 edge-case tests).`);
+console.log(`\nAll ${passed} tests passed (including T8/T9/T10 edge-case tests).`);
