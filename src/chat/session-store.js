@@ -85,13 +85,6 @@ function _dropOrphanToolCallGroups(msgs) {
     return out;
 }
 
-// Back-compat alias: kept so external imports (if any) don't break. Prefer
-// `_dropOrphanToolCallGroups` for new code — it handles head/mid/tail orphans
-// in a single pass.
-function _trimOrphanTailToolCalls(msgs) {
-    return _dropOrphanToolCallGroups(msgs);
-}
-
 class SessionStore {
     /**
      * @param {vscode.Memento}  globalState
