@@ -93,12 +93,12 @@ const SKILL_CREATOR_NAMES = new Set(['skill-creator', 'skill_creator', 'skillcre
  * @returns {boolean}
  */
 function _skillCreatorInvokedThisTurn(run, currentTcId, allowedNames) {
-    // Match case-insensitively for robustness, but the allowed set is keyed
-    // off the on-disk spellings (so the gate degrades to false if nothing
-    // matching is installed).
-    const accepted = new Set();
-    const src = (allowedNames && allowedNames.size) ? allowedNames : SKILL_CREATOR_NAMES;
-    for (const n of src) accepted.add(String(n).toLowerCase());
+    // Match EXACT spelling (case-sensitive) to mirror skillInvoke's
+    // resolution: if the gate accepted a casing that skillInvoke would have
+    // rejected, the meta-skill would never actually run and the gate would
+    // become a no-op for that path. When no installed set is supplied (test
+    // fallback only), fall back to the canonical lower-case variants.
+    const accepted = (allowedNames && allowedNames.size) ? allowedNames : SKILL_CREATOR_NAMES;
     const msgs = run && Array.isArray(run.messages) ? run.messages : null;
     if (!msgs || !msgs.length) return false;
 
@@ -153,7 +153,7 @@ function _skillCreatorInvokedThisTurn(run, currentTcId, allowedNames) {
             if (!fn || fn.name !== 'skill_invoke') continue;
             let parsed = null;
             try { parsed = JSON.parse(fn.arguments || '{}'); } catch { /* ignore */ }
-            const invokedName = String(parsed && parsed.name || '').trim().toLowerCase();
+            const invokedName = String(parsed && parsed.name || '').trim();
             if (accepted.has(invokedName)) return true;
         }
     }

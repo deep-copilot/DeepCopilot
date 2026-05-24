@@ -225,27 +225,41 @@ test('T10 invoking a variant name that is not actually installed is rejected', (
     assert.deepStrictEqual(_writes, []);
 });
 
-// ── T11: mixed-case installed name — invocation accepted, error preserves casing ──
-// skill_invoke matches names case-sensitively, so if the installed skill is
-// "Skill-Creator" the rejection message must reference that exact spelling,
-// not a lower-cased canonical form. Conversely, an invocation that differs
-// only in casing should still satisfy the gate (case-insensitive compare).
-test('T11 mixed-case installed name preserves casing in error and accepts any casing in invocation', () => {
+// ── T11: mixed-case installed name — case-sensitive matching ──────────────
+// skill_invoke matches skill names case-sensitively, so the gate must do
+// the same: otherwise an invocation that differs only in casing would
+// satisfy the gate even though skill_invoke would have errored out and the
+// meta-skill never actually ran. The error message must also reference the
+// on-disk spelling exactly so the model has an actionable retry path.
+test('T11 mixed-case installed name: gate matches case-sensitively, error preserves casing', () => {
+    const installedSpelling = 'Skill-Creator';
+
     // a) Not invoked → rejected, message must name the on-disk spelling exactly.
-    stubDiscover([{ ...skillCreatorStub, name: 'Skill-Creator' }]);
+    stubDiscover([{ ...skillCreatorStub, name: installedSpelling }]);
     let run = { messages: [userMsg('make a skill')] };
     let out = skillCreate(validArgs, run);
     assert.match(out, /^Error: skill_create is gated/);
-    assert.ok(out.includes('Skill-Creator'), `error should name the exact installed spelling; got: ${out}`);
+    assert.ok(out.includes(installedSpelling), `error should name the exact installed spelling; got: ${out}`);
 
-    // b) Invocation with different casing still satisfies the gate.
-    stubDiscover([{ ...skillCreatorStub, name: 'Skill-Creator' }]);
+    // b) Invocation with a different casing must NOT satisfy the gate,
+    //    because skill_invoke itself would fail to resolve that spelling.
+    stubDiscover([{ ...skillCreatorStub, name: installedSpelling }]);
     run = { messages: [
         userMsg('make a skill'),
         invokeCall('SKILL-CREATOR'),
     ] };
     out = skillCreate(validArgs, run);
-    assert.match(out, /^Created skill/, `case-insensitive invocation should pass the gate; got: ${out}`);
+    assert.match(out, /^Error: skill_create is gated/, `case-mismatched invocation must NOT pass the gate; got: ${out}`);
+    assert.deepStrictEqual(_writes, []);
+
+    // c) Exact-spelling invocation satisfies the gate.
+    stubDiscover([{ ...skillCreatorStub, name: installedSpelling }]);
+    run = { messages: [
+        userMsg('make a skill'),
+        invokeCall(installedSpelling),
+    ] };
+    out = skillCreate(validArgs, run);
+    assert.match(out, /^Created skill/, `exact-spelling invocation should pass the gate; got: ${out}`);
     assert.strictEqual(_writes.length, 1);
 });
 
