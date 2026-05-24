@@ -218,6 +218,14 @@
   function _ctxPopOutside(e){ if (_ctxPop && !_ctxPop.contains(e.target) && e.target !== ftCtxBtn && !ftCtxBtn.contains(e.target)) closeCtxPop(); }
   function openCtxPop(){
     if (_ctxPop) { closeCtxPop(); return; }
+    /* Escape any value that flows into innerHTML to satisfy CodeQL
+       js/xss-through-dom — even though modelTxt / _curIMode originate from
+       extension-side messages, treat them as untrusted. */
+    function _esc(s){
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
     var pop = document.createElement('div');
     pop.className = 'ft-ctx-pop';
     var pct = _lastCtx.pct|0;
@@ -227,8 +235,8 @@
     pop.innerHTML =
       '<div class="ft-ctx-pop-h">Context usage</div>' +
       '<div class="ft-ctx-pop-row"><span>Used</span><b>' + tk + 'K / ' + wn + 'K (' + pct + '%)</b></div>' +
-      '<div class="ft-ctx-pop-row"><span>Model</span><b>' + modelTxt + '</b></div>' +
-      '<div class="ft-ctx-pop-row"><span>Mode</span><b>' + (_curIMode||'agent') + '</b></div>' +
+      '<div class="ft-ctx-pop-row"><span>Model</span><b>' + _esc(modelTxt) + '</b></div>' +
+      '<div class="ft-ctx-pop-row"><span>Mode</span><b>' + _esc(_curIMode||'agent') + '</b></div>' +
       '<div class="ft-ctx-pop-tip">' +
         '<div><code>/context</code> — detailed token breakdown</div>' +
         '<div><code>/compact [focus]</code> — summarise history</div>' +

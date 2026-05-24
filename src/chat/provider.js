@@ -736,7 +736,6 @@ class ChatViewProvider {
     async _handleContextCommand() {
         try {
             const { estimateMessagesTokens, estimateTokens } = require('./compact');
-            const sid = this._store.sessionId;
             const run = this._activeRun();
             const cfg = vscode.workspace.getConfiguration('deepseekAgent');
             const provider = cfg.get('provider') || 'deepseek';

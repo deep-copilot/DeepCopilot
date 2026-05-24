@@ -46,9 +46,8 @@ function estimateMessagesTokens(messages) {
 const TOOL_RESULT_LONG      = 2000; // chars — threshold for truncation
 const TOOL_RESULT_KEEP_HEAD = 1200; // chars — keep from the front
 const TOOL_RESULT_KEEP_TAIL = 400;  // chars — keep from the end
-// Aggressive variant used by nuclearCompact when token pressure is extreme.
-const TOOL_RESULT_NUKE_HEAD = 300;
-const TOOL_RESULT_NUKE_TAIL = 120;
+// nuclearCompact uses inline 800/200 head/tail values; the earlier constants
+// were never read — removed to satisfy CodeQL js/useless-assignment-to-local.
 
 function _truncateBody(body, headKeep, tailKeep) {
     const total = body.length;

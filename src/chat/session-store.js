@@ -274,7 +274,14 @@ class SessionStore {
         const src = list.find(x => x.id === id);
         if (!src) return null;
         const clone = JSON.parse(JSON.stringify(src));
-        clone.id = `s_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        // Use crypto.randomUUID for session id rather than Math.random to satisfy
+        // CodeQL js/insecure-randomness, though session ids are not security-critical.
+        let _rand4 = '0000';
+        try {
+            const _crypto = require('crypto');
+            _rand4 = _crypto.randomBytes(2).toString('hex');
+        } catch { /* fallback only if node:crypto unavailable */ }
+        clone.id = `s_${Date.now().toString(36)}${_rand4}`;
         clone.title = String(title || `${src.title || 'Fork'} (fork)`).slice(0, 80);
         clone.createdAt = Date.now();
         clone.updatedAt = Date.now();

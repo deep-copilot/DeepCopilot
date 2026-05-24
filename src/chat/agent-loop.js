@@ -427,7 +427,8 @@ class AgentLoop {
                                 ? `🔥 上下文越限，已执行核弹级压缩（${Math.round(before / 1000)}K→${Math.round(after / 1000)}K tokens）…`
                                 : `🔥 Nuclear compaction applied (${Math.round(before / 1000)}K→${Math.round(after / 1000)}K tokens)…`,
                         });
-                        preflightTokens = after;
+                        // preflightTokens is intentionally not re-read after this point;
+                        // the next iteration recalculates it from scratch.
                     }
                 }
                 checkAbort();
