@@ -13,21 +13,26 @@
 'use strict';
 
 const Module = require('module');
-const origResolve = Module._resolveFilename;
-Module._resolveFilename = function (request, parent, ...rest) {
-    if (request === 'vscode') return require.resolve('./_vscode-stub.js');
-    return origResolve.call(this, request, parent, ...rest);
-};
-// Restore the global patch when the process exits so the module stays clean
-// if this script is ever required from another runner or test harness.
-process.on('exit', () => { Module._resolveFilename = origResolve; });
-
 const path = require('path');
 const fs   = require('fs');
 const assert = require('assert');
 
-const skillsMod = require(path.join('..', 'src', 'skills'));
-const { skillCreate } = require(path.join('..', 'src', 'tools', 'skill-tools'));
+// Patch the module resolver ONLY while requiring the modules that pull in
+// `vscode`. Wrap in try/finally so the global resolver is restored even if a
+// require throws — and is never left active when this file is loaded from
+// another runner/harness (where `process.on('exit')` would be too late).
+const origResolve = Module._resolveFilename;
+let skillsMod, skillCreate;
+Module._resolveFilename = function (request, parent, ...rest) {
+    if (request === 'vscode') return require.resolve('./_vscode-stub.js');
+    return origResolve.call(this, request, parent, ...rest);
+};
+try {
+    skillsMod    = require(path.join('..', 'src', 'skills'));
+    ({ skillCreate } = require(path.join('..', 'src', 'tools', 'skill-tools')));
+} finally {
+    Module._resolveFilename = origResolve;
+}
 
 // ── harness ────────────────────────────────────────────────────────────────
 let passed = 0;
@@ -154,8 +159,6 @@ test('T7 gate fires before field validation', () => {
     assert.match(out, /^Error: skill_create is gated/, 'gate error should come first, not field errors');
 });
 
-console.log(`\nAll ${passed} tests passed.`);
-
 // ── T8: <system-reminder> user message is NOT a turn boundary ─────────────
 // The agent loop injects synthetic user messages wrapping <system-reminder>
 // (e.g. background job snapshots). These must not be treated as a new turn;
@@ -200,4 +203,5 @@ test('T9 skill_invoke appearing after skill_create in same message is rejected',
     assert.deepStrictEqual(_writes, []);
 });
 
-console.log(`\n  (including T8 and T9 edge-case tests)`);
+// Final summary — printed once, after ALL tests have actually run.
+console.log(`\nAll ${passed} tests passed (including T8 and T9 edge-case tests).`);
