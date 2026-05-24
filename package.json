@@ -362,7 +362,8 @@
     "package": "npm run build && vsce package --out release/",
     "publish": "npm run build && vsce publish",
     "vscode:prepublish": "npm run build",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "test": "node scripts/test-orphan-toolcalls.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

@@ -9,38 +9,77 @@ const vscode = require('vscode');
 const { randomBytes } = require('crypto');
 const { t } = require('../utils/i18n');
 
-// ─── Tail-sanitizer ────────────────────────────────────────────────────────
-// Removes an incomplete assistant{tool_calls} group from the END of a message
-// array.  Mirrors the head-sanitizer in loadApiMessages (issue #70) but targets
-// the tail: if the last assistant message has tool_calls whose tool_call_ids are
-// not all covered by the tool messages that follow it, the whole group is stripped.
+// ─── Orphan tool_calls sanitizer ───────────────────────────────────────────
+// Removes ANY incomplete assistant{tool_calls} group from a message array,
+// regardless of position (head / middle / tail).
 //
-// This prevents a broken sequence from being persisted or loaded, which would
-// otherwise cause every subsequent API call to fail with HTTP 400.
-function _trimOrphanTailToolCalls(msgs) {
+// DeepSeek/OpenAI Chat Completions require every `assistant` message that
+// declares `tool_calls` to be IMMEDIATELY followed by a contiguous block of
+// `tool` messages — one per declared `tool_call_id`. If any id is missing
+// (or the block is interrupted by a non-tool message), the API returns
+// HTTP 400 "insufficient tool messages following tool_calls message".
+//
+// Earlier versions only fixed orphan groups at the very tail (issue #70).
+// Issue #145 showed that history compaction, truncation, or a mid-turn crash
+// can also produce orphans in the MIDDLE of the array — those slipped past
+// the old tail-only check and corrupted every subsequent turn.
+//
+// Algorithm (single forward pass):
+//   - Skip any leading orphan `tool` messages.
+//   - On each `assistant` with non-empty `tool_calls`:
+//       1. Collect the expected `tool_call_id` set.
+//       2. Walk forward consuming the contiguous `tool` block, recording the
+//          ids actually present.
+//       3. If every expected id is present → keep the whole group.
+//          Otherwise → drop the assistant message AND the (partial) tool
+//          block that followed it. The next iteration resumes at the first
+//          non-tool message after the dropped block.
+//   - All other messages pass through unchanged.
+//
+// Returns a NEW array. Original input is never mutated.
+function _dropOrphanToolCallGroups(msgs) {
     if (!Array.isArray(msgs) || msgs.length === 0) return msgs;
-    // Walk backwards past any trailing tool messages, collecting their ids.
-    const tailToolIds = new Set();
-    let j = msgs.length - 1;
-    while (j >= 0 && msgs[j].role === 'tool') {
-        if (msgs[j].tool_call_id) tailToolIds.add(msgs[j].tool_call_id);
-        j--;
-    }
-    // If the message just before the trailing tool block is an assistant with
-    // tool_calls, verify every declared call_id has a matching tool response.
-    if (j >= 0 && msgs[j].role === 'assistant' &&
-        Array.isArray(msgs[j].tool_calls) && msgs[j].tool_calls.length > 0) {
-        const expectedIds = msgs[j].tool_calls.map(tc => tc.id);
-        const allPresent  = expectedIds.every(id => tailToolIds.has(id));
-        if (!allPresent) {
-            // Incomplete group — strip from the assistant message onward.
-            return msgs.slice(0, j);
+    const out = [];
+    let i = 0;
+    // Skip leading orphan tool messages.
+    while (i < msgs.length && msgs[i].role === 'tool') i++;
+    while (i < msgs.length) {
+        const m = msgs[i];
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+            const expectedIds = m.tool_calls.map(tc => tc && tc.id).filter(Boolean);
+            // Walk forward through the contiguous tool block.
+            let j = i + 1;
+            const seenIds = new Set();
+            const toolBlock = [];
+            while (j < msgs.length && msgs[j].role === 'tool') {
+                if (msgs[j].tool_call_id) seenIds.add(msgs[j].tool_call_id);
+                toolBlock.push(msgs[j]);
+                j++;
+            }
+            const complete = expectedIds.length > 0 && expectedIds.every(id => seenIds.has(id));
+            if (complete) {
+                out.push(m);
+                for (const t of toolBlock) out.push(t);
+            }
+            // If incomplete, drop both the assistant and its partial tool block.
+            i = j;
+            continue;
         }
-    } else if (j < 0) {
-        // All messages were tool messages with no preceding assistant — broken.
-        return [];
+        // Orphan `tool` message mid-stream (assistant{tool_calls} above was
+        // already dropped, or it never existed). Skip it — keeping it would
+        // re-introduce the same HTTP 400.
+        if (m.role === 'tool') { i++; continue; }
+        out.push(m);
+        i++;
     }
-    return msgs;
+    return out;
+}
+
+// Back-compat alias: kept so external imports (if any) don't break. Prefer
+// `_dropOrphanToolCallGroups` for new code — it handles head/mid/tail orphans
+// in a single pass.
+function _trimOrphanTailToolCalls(msgs) {
+    return _dropOrphanToolCallGroups(msgs);
 }
 
 class SessionStore {
@@ -115,15 +154,12 @@ class SessionStore {
     loadApiMessages(sid) {
         const s = this.all().find(x => x.id === sid);
         if (!s || !Array.isArray(s.apiMessages)) return [];
-        // Self-heal legacy sessions: skip any orphan `tool` messages at the
-        // start (they would otherwise trigger HTTP 400 — see issue #70).
-        let i = 0;
-        while (i < s.apiMessages.length && s.apiMessages[i].role === 'tool') i++;
-        const headFixed = i > 0 ? s.apiMessages.slice(i) : s.apiMessages;
-        // Self-heal: also strip an incomplete assistant{tool_calls} group at the
-        // tail — if a turn was interrupted before all tool results were pushed,
-        // the persisted sequence would cause HTTP 400 on the very next API call.
-        return _trimOrphanTailToolCalls(headFixed);
+        // Self-heal legacy sessions: drop ANY orphan `assistant{tool_calls}`
+        // group (head, middle, or tail) plus any orphan `tool` messages.
+        // See issues #70 and #145 — a mid-array orphan was the missing case
+        // that the old tail-only sanitizer could not repair, causing every
+        // subsequent API call on that session to fail with HTTP 400.
+        return _dropOrphanToolCallGroups(s.apiMessages);
     }
 
     /**
@@ -181,9 +217,10 @@ class SessionStore {
                 }
                 sanitized = stripped.slice(startIdx);
             }
-            // Also strip any incomplete assistant{tool_calls} group at the tail
-            // so a mid-turn interruption never persists a broken sequence.
-            sanitized = _trimOrphanTailToolCalls(sanitized);
+            // Drop ANY orphan assistant{tool_calls} group (head/middle/tail)
+            // so a mid-turn interruption or a slice-induced split never
+            // persists a broken sequence. See issue #145.
+            sanitized = _dropOrphanToolCallGroups(sanitized);
 
             // Issue #142 P0-3: token-aware pre-compaction before persistence.
             // Without this, a "full" session is reloaded as-is on next open and
@@ -199,7 +236,9 @@ class SessionStore {
                 if (estimateMessagesTokens(sanitized) > persistBudget) {
                     const res = await autoCompactIfNeeded(sanitized, persistBudget, 12, null);
                     if (res && res.compacted) {
-                        sanitized = _trimOrphanTailToolCalls(res.messages);
+                        // Compaction itself may slice through a tool_calls block;
+                        // run the full-array sanitizer rather than tail-only.
+                        sanitized = _dropOrphanToolCallGroups(res.messages);
                     }
                 }
             } catch (_e) {
@@ -434,4 +473,4 @@ class SessionStore {
     }
 }
 
-module.exports = { SessionStore };
+module.exports = { SessionStore, _dropOrphanToolCallGroups };
