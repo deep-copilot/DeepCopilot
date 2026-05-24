@@ -281,7 +281,9 @@ class SessionStore {
             const _crypto = require('crypto');
             _rand4 = _crypto.randomBytes(2).toString('hex');
         } catch { /* fallback only if node:crypto unavailable */ }
-        clone.id = `s_${Date.now().toString(36)}${_rand4}`;
+        // Keep id shape consistent with ensure(): `s_<ts>_<rand>` (Copilot
+        // review feedback on PR #144).
+        clone.id = `s_${Date.now().toString(36)}_${_rand4}`;
         clone.title = String(title || `${src.title || 'Fork'} (fork)`).slice(0, 80);
         clone.createdAt = Date.now();
         clone.updatedAt = Date.now();

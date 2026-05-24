@@ -75,11 +75,15 @@ function _smartTruncateByTool(body, toolName, headKeep, tailKeep) {
 
     if (toolName === 'grep_search') {
         // Dedup by (file:line) prefix, keep first occurrence.
+        // Greedy match on the path so Windows drive letters (e.g.
+        // `C:\foo\bar.js:12:hit`) still parse correctly — the previous
+        // `^([^:]+:\d+):` regex would only match up to the first colon and
+        // drop drive-letter paths from the dedup (Copilot review feedback).
         const seen = new Set();
         const deduped = [];
         for (const ln of lines) {
-            const key = ln.match(/^([^:]+:\d+):/);
-            const k = key ? key[1] : ln;
+            const key = ln.match(/^(.+):(\d+):/);
+            const k = key ? `${key[1]}:${key[2]}` : ln;
             if (seen.has(k)) continue;
             seen.add(k);
             deduped.push(ln);
@@ -237,9 +241,13 @@ function dedupRepeatedReads(messages) {
         const body = typeof m.content === 'string' ? m.content : '';
         if (body.length < 400) return m; // not worth replacing small ones
         replaced++;
+        // Use a structured placeholder tag so the LLM (and any downstream
+        // post-processing) can reliably detect collapsed reads — matches the
+        // shape documented in the PR description (Copilot review feedback).
+        const path = meta.key.split('::')[1] || '';
         return {
             ...m,
-            content: `[deduped — this ${meta.name} of "${meta.key.split('::')[1]}" was re-read later in the conversation; see the later tool result for current contents]`,
+            content: `<${meta.name} path="${path}" read-collapsed="true" reason="re-read later in conversation; see the later tool result for current contents"/>`,
         };
     });
     return { messages: out, replaced };

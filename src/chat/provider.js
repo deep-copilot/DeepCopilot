@@ -638,14 +638,24 @@ class ChatViewProvider {
         // events flood in. We also wrap the burst in replayStart/replayEnd
         // envelopes so the webview can suppress per-event scroll-to-bottom
         // (each ascroll() schedules a RAF, causing visible scrollbar jitter).
+        //
+        // Post replayStart IMMEDIATELY (not inside setTimeout): if the agent
+        // is still streaming when the user switches to this session, live
+        // streamDelta events posted during the 0-ms delay would otherwise
+        // arrive before replayStart and reintroduce per-event scroll jitter
+        // (Copilot review feedback on PR #144).
         const evs = run.events.slice();
+        this._post({ type: 'replayStart', count: evs.length });
         setTimeout(() => {
             // Guard: the active session may have changed again during the
             // 0-ms delay (rapid clicking). In that case the events are still
             // buffered on `run.events`, so the next _loadSession(id) for this
-            // session will replay them; we just no-op here.
-            if (run.sessionId !== this._store.sessionId) return;
-            this._post({ type: 'replayStart', count: evs.length });
+            // session will replay them; close the envelope here so the webview
+            // does not stay in replay-suppress mode forever.
+            if (run.sessionId !== this._store.sessionId) {
+                this._post({ type: 'replayEnd' });
+                return;
+            }
             for (const ev of evs) this._post(ev);
             this._post({ type: 'replayEnd' });
         }, 0);
@@ -730,9 +740,12 @@ class ChatViewProvider {
         }
     }
 
-    // Issue #142 P3-4: `/context` status report.  Breaks down current context
-    // usage into system / history / tool-def buckets so the user can decide
-    // whether to /compact or /fork.
+    // Issue #142 P3-4: `/context` status report.  Reports a coarse breakdown
+    // (system prompt + message history) so the user can decide whether to
+    // /compact or /fork.  Note: tool definitions, file/hint payloads sent
+    // alongside the request are NOT included here — the on-wire request can
+    // be a few K larger than the number shown.  Aligning this with the real
+    // wire size is tracked separately (Copilot review feedback).
     async _handleContextCommand() {
         try {
             const { estimateMessagesTokens, estimateTokens } = require('./compact');
