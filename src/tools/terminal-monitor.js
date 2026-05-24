@@ -33,10 +33,20 @@ function onBgJobEnded(cb)  { _bgJobEndCallbacks.add(cb); }
 function offBgJobEnded(cb) { _bgJobEndCallbacks.delete(cb); }
 
 // Active bg-job registry — populated by bg-shell.js on start, cleared here on end.
-// Allows agent-loop.js to keep the loop alive while jobs are still running.
-const _activeBgJobs = new Set();
-function addActiveBgJob(jobId)  { _activeBgJobs.add(jobId); }
-function getActiveBgJobs()       { return new Set(_activeBgJobs); } // snapshot copy
+// Keyed by jobId; value is the sessionId that started the job.  Scoping by session
+// prevents unrelated sessions from entering the bg-wait loop for someone else's job.
+const _activeBgJobs = new Map(); // jobId → sessionId
+function addActiveBgJob(jobId, sessionId) { _activeBgJobs.set(jobId, sessionId || null); }
+// Returns all active job IDs across all sessions (used internally by cleanupStaleJobs).
+function getActiveBgJobs() { return new Set(_activeBgJobs.keys()); }
+// Returns job IDs owned by a specific session (used by agent-loop.js).
+function getActiveBgJobsForSession(sessionId) {
+    const jobs = new Set();
+    for (const [jobId, sid] of _activeBgJobs) {
+        if (sid === sessionId) jobs.add(jobId);
+    }
+    return jobs;
+}
 
 // Jobs whose end event was already consumed synchronously by the tool itself
 // (e.g. bg-shell early-exit window). Agent-loop should skip these when
@@ -104,7 +114,7 @@ function cleanupStaleJobs() {
     const liveNames = new Set(
         [...(vscode.window.terminals || [])].map(t => t.name).filter(Boolean),
     );
-    for (const jobId of [..._activeBgJobs]) {
+    for (const jobId of [..._activeBgJobs.keys()]) {
         let stale = false;
         if (!liveNames.has(jobId)) {
             // Terminal no longer exists at all
@@ -131,8 +141,9 @@ function cleanupStaleJobs() {
             }
         }
         if (stale) {
+            const sessionId = _activeBgJobs.get(jobId);
             _activeBgJobs.delete(jobId);
-            const payload = { jobId, exitCode: null, output: '', durationMs: 0, stale: true };
+            const payload = { jobId, exitCode: null, output: '', durationMs: 0, stale: true, sessionId };
             for (const cb of _bgJobEndCallbacks) { try { cb(payload); } catch {} }
             try { Logger.info('BG_JOB_STALE_CLEANED', { jobId }); } catch {}
         }
@@ -235,12 +246,14 @@ function start(context) {
                 if (e.execution) try { _execToRec.delete(e.execution); } catch {}
                 // Notify bg-job subscribers when a deepseek-job-* terminal completes.
                 if (e.terminal.name && e.terminal.name.startsWith('deepseek-job-')) {
+                    const sessionId = _activeBgJobs.get(e.terminal.name);
                     _activeBgJobs.delete(e.terminal.name);
                     const payload = {
                         jobId:      e.terminal.name,
                         exitCode:   rec.exitCode,
                         output:     rec.output.length > 2048 ? rec.output.slice(-2048) : rec.output,
                         durationMs: rec.endedAt - rec.startedAt,
+                        sessionId,
                     };
                     for (const cb of _bgJobEndCallbacks) { try { cb(payload); } catch {} }
                 }
@@ -255,6 +268,7 @@ function start(context) {
             // Synthesise a completion event (exitCode: null = unknown) so that
             // agent-loop.js waitForNextBgJobEvent() can resolve and the loop exits.
             if (terminal.name && terminal.name.startsWith('deepseek-job-') && _activeBgJobs.has(terminal.name)) {
+                const sessionId = _activeBgJobs.get(terminal.name);
                 _activeBgJobs.delete(terminal.name);
                 const list = _buffers.get(terminal) || [];
                 const last = list[list.length - 1];
@@ -264,6 +278,7 @@ function start(context) {
                     output:     last && last.output ? last.output.slice(-2048) : '',
                     durationMs: last ? Date.now() - last.startedAt : 0,
                     closedByUser: true,
+                    sessionId,
                 };
                 for (const cb of _bgJobEndCallbacks) { try { cb(payload); } catch {} }
             }
@@ -344,6 +359,7 @@ module.exports = {
     offBgJobEnded,
     addActiveBgJob,
     getActiveBgJobs,
+    getActiveBgJobsForSession,
     waitForNextBgJobEvent,
     cleanupStaleJobs,
     markSyncReturnedJob,

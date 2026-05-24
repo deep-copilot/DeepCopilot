@@ -22,7 +22,7 @@ const {
 } = require('./compact');
 const {
     onBgJobEnded, offBgJobEnded,
-    getActiveBgJobs, waitForNextBgJobEvent,
+    getActiveBgJobsForSession, waitForNextBgJobEvent,
     cleanupStaleJobs, findTerminalByName, getRecentExecutions, wasSyncReturned,
 } = require('../tools/terminal-monitor');
 
@@ -252,8 +252,18 @@ class AgentLoop {
         // ── Bg-job end notifications (terminal-monitor push) ──────────────────
         // Collect events from background terminals; injected as system-reminders
         // at the top of each iteration so the model learns of completion promptly.
+        // Session-scoped helper: only returns bg jobs started by THIS session so
+        // that an unrelated session's long-running job doesn't trap this loop.
+        const myBgJobs = () => getActiveBgJobsForSession(sid);
         run._pendingBgJobEvents = [];
-        const _bgJobEndHandler = (payload) => { run._pendingBgJobEvents.push(payload); };
+        // Only accept job-end events for jobs that belong to THIS session.
+        // Events from other sessions (cross-session _activeBgJobs contamination)
+        // are silently dropped to prevent irrelevant system-reminders and
+        // spurious bg-wait iterations.
+        const _bgJobEndHandler = (payload) => {
+            if (payload && payload.sessionId && payload.sessionId !== sid) return;
+            run._pendingBgJobEvents.push(payload);
+        };
         onBgJobEnded(_bgJobEndHandler);
 
         // Clean up stale active-job entries from previous turns BEFORE starting
@@ -492,7 +502,7 @@ class AgentLoop {
                     //     snapshot; break inner loop → ONE API call so model can
                     //     narrate progress if desired.
                     //   - MAX_WAIT_MS hard ceiling prevents eternal wait (e.g. 4 h).
-                    if (getActiveBgJobs().size > 0) {
+                    if (myBgJobs().size > 0) {
                         // Remove stale entries before waiting so we don't spin on
                         // jobs that ended without firing their SI end event.
                         cleanupStaleJobs();
@@ -521,7 +531,7 @@ class AgentLoop {
                         if (assistantText.trim()) {
                             const _hasPendingEvents = !!(run._pendingBgJobEvents && run._pendingBgJobEvents.length);
                             if (!_hasPendingEvents) {
-                                Logger.info('BG_WAIT_SKIPPED_MODEL_DONE', { jobs: [...getActiveBgJobs()] });
+                                Logger.info('BG_WAIT_SKIPPED_MODEL_DONE', { jobs: [...myBgJobs()] });
                                 break;
                             }
                         }
@@ -531,9 +541,9 @@ class AgentLoop {
                         // iterations), give up and exit the loop rather than
                         // re-entering the inner wait for another 4 hours.
                         const turnWaitRemaining = MAX_BG_WAIT_PER_TURN - (Date.now() - BG_WAIT_TURN_START);
-                        if (turnWaitRemaining <= 0 || getActiveBgJobs().size === 0) {
-                            if (getActiveBgJobs().size > 0) {
-                                Logger.info('BG_WAIT_TURN_BUDGET_EXCEEDED', { jobs: [...getActiveBgJobs()] });
+                        if (turnWaitRemaining <= 0 || myBgJobs().size === 0) {
+                            if (myBgJobs().size > 0) {
+                                Logger.info('BG_WAIT_TURN_BUDGET_EXCEEDED', { jobs: [...myBgJobs()] });
                             }
                             break;
                         }
@@ -546,10 +556,10 @@ class AgentLoop {
 
                         while (Date.now() - waitT0 < MAX_WAIT_MS) {
                             checkAbort();
-                            if (getActiveBgJobs().size === 0) break; // all done
+                            if (myBgJobs().size === 0) break; // all done
 
                             const elapsed = Math.round((Date.now() - waitT0) / 1000);
-                            postProgress('bg_wait', { elapsed_s: elapsed, jobs: [...getActiveBgJobs()] });
+                            postProgress('bg_wait', { elapsed_s: elapsed, jobs: [...myBgJobs()] });
 
                             const ev = await waitForNextBgJobEvent(signal, BG_POLL_MS);
                             if (ev) {
@@ -566,7 +576,7 @@ class AgentLoop {
                             // snapshot so the model (and user) can see progress.
                             if (Date.now() - lastSnapshotAt >= BG_SNAPSHOT_MS) {
                                 const snaps = [];
-                                for (const jobId of getActiveBgJobs()) {
+                                for (const jobId of myBgJobs()) {
                                     const t     = findTerminalByName(jobId);
                                     const execs = t ? getRecentExecutions(t, 1) : [];
                                     const last  = execs[execs.length - 1];
@@ -587,7 +597,7 @@ class AgentLoop {
                                         '</system-reminder>',
                                     ].join('\n'),
                                 });
-                                Logger.info('BG_SNAPSHOT_INJECTED', { jobs: [...getActiveBgJobs()], elapsed_s: elapsed });
+                                Logger.info('BG_SNAPSHOT_INJECTED', { jobs: [...myBgJobs()], elapsed_s: elapsed });
                                 break; // exit inner loop → outer continue → API call
                             }
                             // else: keep waiting silently (no API call this iteration)

@@ -117,7 +117,7 @@ async function toolRunShellBg(args, ctx = {}) {
     // onDidEndTerminalShellExecution never fires and the job would never be
     // removed, causing agent-loop to spin indefinitely.
     if (usedSI) {
-        addActiveBgJob(jobId);
+        addActiveBgJob(jobId, ctx.sessionId || null);
     }
 
     // ── Early-failure capture: many commands fail within ~1–2 s (missing
