@@ -380,9 +380,7 @@ body.narrow #ia{padding-left:8px;padding-right:8px}
 #foot .ft-right{display:flex;align-items:center;gap:6px}
 #foot .ft-btn{background:none;border:none;cursor:pointer;font-size:12px;padding:0 3px;opacity:.75;line-height:1;color:inherit}
 #foot .ft-btn:hover{opacity:1}
-#foot .dot{width:6px;height:6px;border-radius:50%;background:#7ec99a;display:inline-block}
-#foot .dot.warn{background:#e8b86d}
-#foot .dot.err{background:var(--vscode-errorForeground)}
+/* dot indicator removed */
 #foot .pill{padding:1px 6px;border-radius:8px;background:rgba(255,255,255,.05)}
 #foot .pill#ft-cache.good{color:#7ec99a}
 #foot .pill#ft-balance{cursor:pointer}
@@ -655,3 +653,37 @@ body.vscode-light .settings-test-result.ok{color:#267f26}
 .sys-notice{align-self:stretch;margin:10px 6px;padding:8px 12px;border-left:3px solid var(--vscode-editorWarning-foreground,#d97706);background:var(--vscode-editorWidget-background,rgba(127,127,127,.08));color:var(--vscode-foreground);border-radius:3px;font-size:12px;line-height:1.45}
 .sys-notice-title{font-weight:600;margin-bottom:4px;color:var(--vscode-editorWarning-foreground,#d97706)}
 .sys-notice-body{opacity:.85}
+
+
+/* Issue #142 P3-3 — context usage ring (footer) */
+.ft-ctx {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: transparent; border: 1px solid var(--vscode-widget-border, #3a3a3a);
+    border-radius: 10px; padding: 1px 7px 1px 4px;
+    color: var(--vscode-descriptionForeground, #b5b5b5);
+    font: inherit; font-size: 11px; line-height: 16px;
+    cursor: pointer; user-select: none;
+    transition: background .15s ease, border-color .15s ease;
+}
+.ft-ctx:hover { background: var(--vscode-toolbar-hoverBackground, #2a2d2e); border-color: var(--vscode-focusBorder, #5a5a5a); }
+.ft-ctx .ft-ctx-svg { display: block; flex: 0 0 14px; }
+.ft-ctx #ft-ctx-ring { transition: stroke-dashoffset .25s ease, stroke .25s ease; }
+.ft-ctx #ft-ctx-pct { font-variant-numeric: tabular-nums; }
+
+.ft-ctx-pop {
+    position: fixed; z-index: 9999;
+    min-width: 240px; max-width: 320px;
+    padding: 10px 12px;
+    background: var(--vscode-editorWidget-background, #252526);
+    color: var(--vscode-foreground, #ddd);
+    border: 1px solid var(--vscode-widget-border, #3a3a3a);
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.35);
+    font-size: 12px; line-height: 1.5;
+}
+.ft-ctx-pop-h { font-weight: 600; margin-bottom: 6px; opacity: .9; }
+.ft-ctx-pop-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+.ft-ctx-pop-row span { opacity: .7; }
+.ft-ctx-pop-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ft-ctx-pop-tip { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--vscode-widget-border, #3a3a3a); font-size: 11px; opacity: .85; }
+.ft-ctx-pop-tip code { background: var(--vscode-textCodeBlock-background, #1e1e1e); padding: 0 4px; border-radius: 3px; }

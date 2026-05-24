@@ -146,9 +146,21 @@ async function streamChat({ apiKey, baseUrl, messages, model, noTools, tools, ma
         max_tokens: maxOutputTokens || 16000,
         messages:   anthropicMessages,
     };
-    if (system) reqPayload.system = system;
+    // Issue #142 P2-1: Anthropic prompt caching.
+    // Convert `system` (string) into a content-block array with cache_control
+    // on the last block so Anthropic caches the (large, stable) system prompt
+    // across turns.  Caches expire after 5 min of idle — typically ≥90% hit
+    // rate for active conversations, with ~10x cheaper cache-read pricing.
+    if (system) {
+        reqPayload.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
+    }
     if (!noTools && Array.isArray(tools) && tools.length) {
-        reqPayload.tools       = convertTools(tools);
+        const converted = convertTools(tools);
+        // Cache tool definitions too (they rarely change within a session).
+        if (converted.length > 0) {
+            converted[converted.length - 1] = { ...converted[converted.length - 1], cache_control: { type: 'ephemeral' } };
+        }
+        reqPayload.tools       = converted;
         reqPayload.tool_choice = { type: 'auto' };
     }
 

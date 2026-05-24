@@ -2,7 +2,7 @@
   "name": "deep-copilot",
   "displayName": "Deep Copilot",
   "description": "Deep Copilot — AI coding agent embedded in VS Code. Powered by DeepSeek V4, with file editing, terminal, search, and plan/todos. Standalone, no backend required.",
-  "version": "0.40.6",
+  "version": "0.41.0",
   "publisher": "ZhouChaunge",
   "icon": "imgs/logo.png",
   "repository": {
@@ -226,6 +226,11 @@
           },
           "default": [],
           "description": "Tool names to always deny (overrides approvalMode), e.g. [\"run_shell\"]"
+        },
+        "deepseekAgent.includeMcpTools": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include MCP tools in every request. Disable to save prompt tokens when MCP tools are not needed for the current session."
         },
         "deepseekAgent.shellExecutionMode": {
           "type": "string",

@@ -60,7 +60,8 @@ async function streamChat({ apiKey, baseUrl, messages, model, noTools, toolChoic
     return err;
   }
 
-  // Acquire the stream — auto-retry without tools if the provider rejects tool use.
+  // Acquire the stream — auto-retry without tools if the provider rejects tool use,
+  // or on transient "terminated" connection resets (undici keep-alive socket recycled by server).
   let stream;
   try {
     stream = await client.chat.completions.create(reqPayload, { signal: abortSignal });
@@ -68,11 +69,20 @@ async function streamChat({ apiKey, baseUrl, messages, model, noTools, toolChoic
     // Some providers (e.g. OpenRouter models without tool support) return 404 with
     // a message about tools being unsupported. Retry without tools.
     const isToolErr = err.status === 404 && /tool/i.test(err.message + JSON.stringify(err.error || ''));
+    // "terminated" = undici TLS socket closed by remote before response; safe to retry once.
+    const isTerminated = !err.status && /^terminated$/i.test((err.message || '').trim());
     if (isToolErr && reqPayload.tools) {
       Logger.info('TOOL_USE_UNSUPPORTED', { status: err.status, retrying: true });
       delete reqPayload.tools;
       delete reqPayload.tool_choice;
       delete reqPayload.parallel_tool_calls;
+      try {
+        stream = await client.chat.completions.create(reqPayload, { signal: abortSignal });
+      } catch (retryErr) {
+        throw normalizeError(retryErr);
+      }
+    } else if (isTerminated) {
+      Logger.info('TERMINATED_RETRY', { retrying: true });
       try {
         stream = await client.chat.completions.create(reqPayload, { signal: abortSignal });
       } catch (retryErr) {

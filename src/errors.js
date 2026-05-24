@@ -27,7 +27,7 @@ function friendlyError(e) {
         tip = isZh()
             ? `服务端返回 ${code}。这通常是临时故障，几秒后重试即可。`
             : `Server returned ${code}. This is usually a temporary issue — retry in a few seconds.`;
-    } else if (/ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network|fetch failed/i.test(raw)) {
+    } else if (/ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|network|fetch failed|terminated/i.test(raw)) {
         title = t('errNetwork');
         tip = t('errTipNetwork');
     } else if (/aborted/i.test(raw)) {

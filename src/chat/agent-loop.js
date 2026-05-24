@@ -18,7 +18,7 @@ const { getToolDefs }      = require('../tools/schema');
 const { mcpManager }       = require('../mcp');
 const { isZh }             = require('../utils/i18n');
 const {
-    estimateMessagesTokens, autoCompactIfNeeded, ToolArgsStreamer,
+    estimateMessagesTokens, autoCompactIfNeeded, nuclearCompact, ToolArgsStreamer,
 } = require('./compact');
 const {
     onBgJobEnded, offBgJobEnded,
@@ -54,7 +54,7 @@ function injectSyntheticSkillRead(messages, skillName, body, skillPath) {
         || path.join(DEEPCOPILOT_SKILLS_DIR, safeName, 'SKILL.md');
     const callId = `synthetic_skill_read_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     messages.push({
-        role: 'assistant',
+        hrole: 'assistant',
         content: null,
         tool_calls: [{
             id:       callId,
@@ -213,7 +213,7 @@ class AgentLoop {
         // 0 (or unset) means "run until task is complete" — stagnation detection
         // (repeat-tool hints + ABAB cycle guard) is the real runaway guard.
         const MAX_ITERS = (_itersRaw > 0) ? Math.min(200, _itersRaw) : 9999;
-        const COMPACT_BUDGET = Math.max(8000, Number(cfg.get('compactBudgetTokens')) || Math.floor(modelCfg.contextWindow * 0.6));
+        const COMPACT_BUDGET = Math.max(8000, Number(cfg.get('compactBudgetTokens')) || Math.floor(modelCfg.contextWindow * 0.5));
         const MODEL_CTX_HARD_LIMIT = Math.floor(modelCfg.contextWindow * 0.9);
         const askMode = interactionMode === 'ask';
         Logger.info('INTERACTION_MODE', { mode: interactionMode });
@@ -315,13 +315,34 @@ class AgentLoop {
                     }
                 }
                 const compactApiConfig = { apiKey, baseUrl, model, provider };
-                const compactRes = await autoCompactIfNeeded(run.messages, COMPACT_BUDGET, 12, compactApiConfig);
+                // Issue #142 P1-2: rolling proactive compaction.  Every 12
+                // iterations we tighten the budget to 80% of normal so the
+                // model performs an incremental summary instead of waiting
+                // until we are already over budget.
+                const proactiveBudget = (iter > 0 && iter % 12 === 0)
+                    ? Math.floor(COMPACT_BUDGET * 0.8)
+                    : COMPACT_BUDGET;
+                const compactRes = await autoCompactIfNeeded(run.messages, proactiveBudget, 12, compactApiConfig);
                 if (compactRes.compacted) {
                     run.messages = compactRes.messages;
-                    Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped, truncated: compactRes.truncated });
+                    Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped, truncated: compactRes.truncated, proactive: proactiveBudget !== COMPACT_BUDGET });
                     this._postToRun(run, { type: 'status', text: isZh() ? '🗜 压缩历史…' : 'Compacting history…' });
                     postProgress('compacting');
                 }
+
+                // Issue #142 P3-3: broadcast context usage so the webview can
+                // render a real-time usage bar.  Cheap to compute since the
+                // estimator was just run inside autoCompactIfNeeded above.
+                try {
+                    const ctxTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
+                    const ctxWindow = modelCfg.contextWindow || 65536;
+                    this._postToRun(run, {
+                        type: 'ctxUsage',
+                        tokens: ctxTokens,
+                        window: ctxWindow,
+                        pct: Math.min(100, Math.round(ctxTokens / ctxWindow * 100)),
+                    });
+                } catch { /* never block the loop on a UI broadcast */ }
                 checkAbort();
 
                 // Plan nudge
@@ -368,51 +389,47 @@ class AgentLoop {
                 // Pre-flight hard token cap — prevents HTTP 400 context-too-long errors.
                 // MODEL_CTX_HARD_LIMIT is derived from the active model's contextWindow
                 // (90% of capacity, computed above the while loop).
+                //
+                // Issue #142 P0-2: extended emergency compaction ladder + nuclear
+                // fallback.  We NEVER bail out with a CTX_LIMIT error — if nothing
+                // else fits, nuclearCompact() reduces history to {firstUser +
+                // summary + lastUser} and we continue the turn.
                 let preflightTokens = estimateMessagesTokens(msgs);
-                let ctxLimitHit = false;
                 if (preflightTokens > MODEL_CTX_HARD_LIMIT) {
-                    // Track totals across (possibly two) emergency passes so we only
-                    // surface a single persistent system-notice card to the user.
-                    let emergencyTotalDropped = 0;
-                    let emergencyTotalTruncated = 0;
-                    let emergencyFinalKeepTail = 0;
-                    for (const emergencyKeepTail of [6, 3]) {
+                    // Aggressive ladder — try increasingly small tails before going nuclear.
+                    const ladder = [8, 6, 4, 2, 1];
+                    for (const emergencyKeepTail of ladder) {
                         // No LLM summarisation during emergency compaction — speed is critical.
-                        const agg = await autoCompactIfNeeded(run.messages, Math.floor(MODEL_CTX_HARD_LIMIT * 0.7), emergencyKeepTail, null);
+                        const agg = await autoCompactIfNeeded(run.messages, Math.floor(MODEL_CTX_HARD_LIMIT * 0.6), emergencyKeepTail, null);
                         if (agg.compacted) {
                             run.messages = agg.messages;
                             Logger.info('PREFLIGHT_COMPACT', { sid, iter, before: preflightTokens, keepTail: emergencyKeepTail, dropped: agg.dropped, truncated: agg.truncated });
                             this._postToRun(run, { type: 'status', text: isZh() ? '⚠️ 上下文接近上限，已紧急压缩历史…' : 'Context near limit — emergency compaction applied…' });
-                            emergencyTotalDropped   += (agg.dropped   || 0);
-                            emergencyTotalTruncated += (agg.truncated || 0);
-                            emergencyFinalKeepTail = emergencyKeepTail;
                         }
                         const newTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
-                        if (newTokens <= MODEL_CTX_HARD_LIMIT) break;
+                        if (newTokens <= MODEL_CTX_HARD_LIMIT) { preflightTokens = newTokens; break; }
                         preflightTokens = newTokens;
                     }
-                    // Single aggregated persistent notice (Issue #82) — avoids
-                    // showing two near-identical cards when both keepTail passes run.
 
-
-                    // Last resort: if still over the limit, refuse to call the API and tell the user
-                    const finalTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
-                    if (finalTokens > MODEL_CTX_HARD_LIMIT) {
-                        Logger.info('CTX_HARD_LIMIT_EXCEEDED', { sid, iter, tokens: finalTokens });
+                    // Issue #142 P0-2: nuclear fallback — ALWAYS continue, never break.
+                    // If the ladder did not bring us under the hard limit, drop to
+                    // {firstUser truncated + summary + lastUser}.  The session is
+                    // preserved; the current turn loses interim tool history (rare
+                    // edge case where the model is mid tool-call when nuking).
+                    if (preflightTokens > MODEL_CTX_HARD_LIMIT) {
+                        const before = preflightTokens;
+                        run.messages = nuclearCompact(run.messages);
+                        const after = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
+                        Logger.info('NUCLEAR_COMPACT', { sid, iter, before, after });
                         this._postToRun(run, {
-                            type: 'error',
-                            title: isZh() ? '上下文已达上限' : 'Context limit reached',
+                            type: 'status',
                             text: isZh()
-                                ? `当前会话内容约 ${Math.round(finalTokens / 1000)}K tokens，超出模型上下文窗口。请按 Ctrl+K 清空会话后重新提问。`
-                                : `Session is ~${Math.round(finalTokens / 1000)}K tokens — exceeds the model context window. Press Ctrl+K to clear the session and try again.`,
-                            code: 'CTX_LIMIT',
-                            retryable: false,
+                                ? `🔥 上下文越限，已执行核弹级压缩（${Math.round(before / 1000)}K→${Math.round(after / 1000)}K tokens）…`
+                                : `🔥 Nuclear compaction applied (${Math.round(before / 1000)}K→${Math.round(after / 1000)}K tokens)…`,
                         });
-                        iter = MAX_ITERS + 1; // skip the force-final-summary path too
-                        ctxLimitHit = true;
+                        preflightTokens = after;
                     }
                 }
-                if (ctxLimitHit) break; // break while loop — do not call the API
                 checkAbort();
 
                 // Rebuild msgs in case pre-flight compaction modified run.messages
@@ -426,7 +443,14 @@ class AgentLoop {
                 const argStreamers = new Map();
                 if (!run._earlyStartedTools) run._earlyStartedTools = new Set();
                 const STREAMABLE_TOOLS = new Set(['write_file', 'str_replace_in_file', 'apply_patch']);
-                const allTools = getToolDefs(mcpManager.getToolDefs());
+                // Issue #142 P2-3: allow users to disable MCP tool injection
+                // for sessions that don't need them — saves the prompt-side
+                // tokens spent declaring them.
+                const includeMcpTools = vscode.workspace
+                    .getConfiguration('deepseekAgent')
+                    .get('includeMcpTools', true);
+                const mcpDefs  = includeMcpTools ? mcpManager.getToolDefs() : [];
+                const allTools = getToolDefs(mcpDefs);
 
                 postProgress('waiting_first_token');
 
