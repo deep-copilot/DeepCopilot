@@ -9,6 +9,40 @@ const vscode = require('vscode');
 const { randomBytes } = require('crypto');
 const { t } = require('../utils/i18n');
 
+// ─── Tail-sanitizer ────────────────────────────────────────────────────────
+// Removes an incomplete assistant{tool_calls} group from the END of a message
+// array.  Mirrors the head-sanitizer in loadApiMessages (issue #70) but targets
+// the tail: if the last assistant message has tool_calls whose tool_call_ids are
+// not all covered by the tool messages that follow it, the whole group is stripped.
+//
+// This prevents a broken sequence from being persisted or loaded, which would
+// otherwise cause every subsequent API call to fail with HTTP 400.
+function _trimOrphanTailToolCalls(msgs) {
+    if (!Array.isArray(msgs) || msgs.length === 0) return msgs;
+    // Walk backwards past any trailing tool messages, collecting their ids.
+    const tailToolIds = new Set();
+    let j = msgs.length - 1;
+    while (j >= 0 && msgs[j].role === 'tool') {
+        if (msgs[j].tool_call_id) tailToolIds.add(msgs[j].tool_call_id);
+        j--;
+    }
+    // If the message just before the trailing tool block is an assistant with
+    // tool_calls, verify every declared call_id has a matching tool response.
+    if (j >= 0 && msgs[j].role === 'assistant' &&
+        Array.isArray(msgs[j].tool_calls) && msgs[j].tool_calls.length > 0) {
+        const expectedIds = msgs[j].tool_calls.map(tc => tc.id);
+        const allPresent  = expectedIds.every(id => tailToolIds.has(id));
+        if (!allPresent) {
+            // Incomplete group — strip from the assistant message onward.
+            return msgs.slice(0, j);
+        }
+    } else if (j < 0) {
+        // All messages were tool messages with no preceding assistant — broken.
+        return [];
+    }
+    return msgs;
+}
+
 class SessionStore {
     /**
      * @param {vscode.Memento}  globalState
@@ -85,7 +119,11 @@ class SessionStore {
         // start (they would otherwise trigger HTTP 400 — see issue #70).
         let i = 0;
         while (i < s.apiMessages.length && s.apiMessages[i].role === 'tool') i++;
-        return i > 0 ? s.apiMessages.slice(i) : s.apiMessages;
+        const headFixed = i > 0 ? s.apiMessages.slice(i) : s.apiMessages;
+        // Self-heal: also strip an incomplete assistant{tool_calls} group at the
+        // tail — if a turn was interrupted before all tool results were pushed,
+        // the persisted sequence would cause HTTP 400 on the very next API call.
+        return _trimOrphanTailToolCalls(headFixed);
     }
 
     /**
@@ -131,15 +169,17 @@ class SessionStore {
             // Truncate to the last MAX_API messages, but never start with an
             // orphan `tool` message — DeepSeek requires every tool message to
             // follow its assistant{tool_calls}. See issue #70.
+            let sanitized = stripped;
             if (stripped.length > MAX_API) {
                 let startIdx = stripped.length - MAX_API;
                 while (startIdx < stripped.length && stripped[startIdx].role === 'tool') {
                     startIdx++;
                 }
-                s.apiMessages = stripped.slice(startIdx);
-            } else {
-                s.apiMessages = stripped;
+                sanitized = stripped.slice(startIdx);
             }
+            // Also strip any incomplete assistant{tool_calls} group at the tail
+            // so a mid-turn interruption never persists a broken sequence.
+            s.apiMessages = _trimOrphanTailToolCalls(sanitized);
         }
 
         const last = s.messages[s.messages.length - 1];

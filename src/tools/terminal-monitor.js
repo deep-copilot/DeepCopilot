@@ -75,8 +75,12 @@ function _gcSyncReturnedJobs() {
  *
  * @param {AbortSignal|null} signal  - AbortController signal to cancel the wait
  * @param {number} timeoutMs         - max wait in ms (default 15 s)
+ * @param {string|null} sessionId    - when provided, only resolve for events from
+ *                                     this session; events from other sessions are
+ *                                     ignored so concurrent sessions don't
+ *                                     contaminate each other's bg-wait loops.
  */
-function waitForNextBgJobEvent(signal, timeoutMs = 15_000) {
+function waitForNextBgJobEvent(signal, timeoutMs = 15_000, sessionId = null) {
     return new Promise(resolve => {
         let settled = false;
         const done = (value) => {
@@ -87,7 +91,11 @@ function waitForNextBgJobEvent(signal, timeoutMs = 15_000) {
             if (signal) try { signal.removeEventListener('abort', onAbort); } catch {}
             resolve(value);
         };
-        const onEvent = (payload) => done(payload);
+        const onEvent = (payload) => {
+            // Cross-session guard: ignore events that belong to a different session.
+            if (sessionId && payload && payload.sessionId !== sessionId) return;
+            done(payload);
+        };
         onBgJobEnded(onEvent);
         const timer = setTimeout(() => done(null), timeoutMs);
         const onAbort = () => done(null);

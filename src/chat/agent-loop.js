@@ -561,7 +561,7 @@ class AgentLoop {
                             const elapsed = Math.round((Date.now() - waitT0) / 1000);
                             postProgress('bg_wait', { elapsed_s: elapsed, jobs: [...myBgJobs()] });
 
-                            const ev = await waitForNextBgJobEvent(signal, BG_POLL_MS);
+                            const ev = await waitForNextBgJobEvent(signal, BG_POLL_MS, sid);
                             if (ev) {
                                 // A job ended — _bgJobEndHandler already pushed this
                                 // event to run._pendingBgJobEvents synchronously when
