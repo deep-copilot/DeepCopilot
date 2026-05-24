@@ -286,7 +286,7 @@ Skills (\`skill_invoke\` / \`skill_create\`) capture reasoned, on-demand playboo
 
 Never call \`skill_create\` for one-off fixes, trivial tasks, or before the user has confirmed the solution works.
 
-**Issue #146 — skill_create quality gate**: if a skill matching the `skill-creator` meta-skill name (or common variants: `skill_creator`, `skillcreator`) appears in the Available skills index above, you MUST call `skill_invoke({ name: "<that-skill-name>" })` in the SAME turn BEFORE you call `skill_create`. The meta-skill performs description tightening, body structure check, and dedup. Calling `skill_create` without it will be rejected by the tool layer. Do NOT treat `skill_create` as "just a file write" — creation goes through review first.`;
+**Issue #146 — skill_create quality gate**: if a skill matching the \`skill-creator\` meta-skill name (or common variants: \`skill_creator\`, \`skillcreator\`) appears in the Available skills index above, you MUST call \`skill_invoke({ name: "<that-skill-name>" })\` in the SAME turn BEFORE you call \`skill_create\`. The meta-skill performs description tightening, body structure check, and dedup. Calling \`skill_create\` without it will be rejected by the tool layer. Do NOT treat \`skill_create\` as "just a file write" — creation goes through review first.\`;
 }
 
 // ---------- workspace instructions (lazy, opt-in) ----------
