@@ -47,19 +47,29 @@ function _dropOrphanToolCallGroups(msgs) {
         const m = msgs[i];
         if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
             const expectedIds = m.tool_calls.map(tc => tc && tc.id).filter(Boolean);
-            // Walk forward through the contiguous tool block.
+            const expectedSet = new Set(expectedIds);
+            // Walk forward through the contiguous tool block.  We accept ONLY
+            // tool messages whose tool_call_id belongs to expectedIds; extras
+            // (unknown id, duplicate id, missing id) are dropped even when the
+            // group is otherwise complete — leaving them would re-introduce
+            // the exact HTTP 400 this sanitizer is meant to prevent.
             let j = i + 1;
             const seenIds = new Set();
-            const toolBlock = [];
+            const acceptedToolBlock = [];
             while (j < msgs.length && msgs[j].role === 'tool') {
-                if (msgs[j].tool_call_id) seenIds.add(msgs[j].tool_call_id);
-                toolBlock.push(msgs[j]);
+                const tid = msgs[j].tool_call_id;
+                if (tid && expectedSet.has(tid) && !seenIds.has(tid)) {
+                    seenIds.add(tid);
+                    acceptedToolBlock.push(msgs[j]);
+                }
+                // tool messages with missing / unknown / duplicate ids are
+                // silently dropped from the block.
                 j++;
             }
             const complete = expectedIds.length > 0 && expectedIds.every(id => seenIds.has(id));
             if (complete) {
                 out.push(m);
-                for (const t of toolBlock) out.push(t);
+                for (const t of acceptedToolBlock) out.push(t);
             }
             // If incomplete, drop both the assistant and its partial tool block.
             i = j;

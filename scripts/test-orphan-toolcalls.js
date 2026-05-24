@@ -115,4 +115,26 @@ test('T9 sanitizer does not mutate its input', () => {
     assert.strictEqual(JSON.stringify(input), snap);
 });
 
+// ── T10 extra/unknown tool messages in a complete group are dropped ───────
+// Regression for PR #147 review: even when expectedIds are all covered, an
+// unexpected tool_call_id sneaking into the contiguous tool block must not
+// be preserved (it would re-trigger the same HTTP 400).
+test('T10 strips unexpected tool_call_id from an otherwise complete group', () => {
+    const input  = [u('q'), ac('c1'), t('c1'), t('rogue'), a('done')];
+    const output = _dropOrphanToolCallGroups(input);
+    assert.deepStrictEqual(ids(output),
+        ['user', 'asst{c1}', 'tool(c1)', 'assistant']);
+});
+
+// ── T11 missing-id and duplicate-id tool messages dropped ─────────────────
+test('T11 strips tool messages with missing or duplicate tool_call_id', () => {
+    const noId = { role: 'tool', content: 'huh' }; // no tool_call_id
+    const input  = [u('q'), ac('c1', 'c2'), t('c1'), noId, t('c2'), t('c1'), a('end')];
+    const output = _dropOrphanToolCallGroups(input);
+    // The two real tools (c1, c2) must remain in order; the no-id and the
+    // duplicate-c1 entries must be dropped; the group is still complete.
+    assert.deepStrictEqual(ids(output),
+        ['user', 'asst{c1,c2}', 'tool(c1)', 'tool(c2)', 'assistant']);
+});
+
 console.log(`\nAll ${passed} orphan-tool-call sanitizer tests passed.`);
