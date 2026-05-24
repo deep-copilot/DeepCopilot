@@ -216,11 +216,19 @@ function skillCreate(args, run, tcId) {
     const creatorInstalled  = installedCreators.size > 0;
     const creatorInvoked    = _skillCreatorInvokedThisTurn(run, tcId || null, installedCreators);
     if (creatorInstalled && !creatorInvoked) {
-        return 'Error: skill_create is gated by the `skill-creator` meta-skill. '
+        // Name the actually-installed variant in the error so the model
+        // (and the user) is not told to invoke a spelling that doesn't exist
+        // locally. Prefer the canonical hyphen form when available; otherwise
+        // pick a deterministic spelling from whatever is installed.
+        const installedList = [...installedCreators];
+        const preferred = installedList.includes('skill-creator')
+            ? 'skill-creator'
+            : installedList.sort()[0];
+        return 'Error: skill_create is gated by the `' + preferred + '` meta-skill. '
             + 'Before persisting a new skill you MUST first call '
-            + '`skill_invoke({ name: "skill-creator" })` in this turn so the SOP '
+            + '`skill_invoke({ name: "' + preferred + '" })` in this turn so the SOP '
             + 'goes through review/optimization (description tightening, structure '
-            + 'check, body deduplication, etc.). Invoke skill-creator first, '
+            + 'check, body deduplication, etc.). Invoke `' + preferred + '` first, '
             + 'follow its guidance, then retry skill_create.';
     }
 

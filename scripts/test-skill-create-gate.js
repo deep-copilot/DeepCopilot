@@ -218,6 +218,11 @@ test('T10 invoking a variant name that is not actually installed is rejected', (
     ] };
     const out = skillCreate(validArgs, run);
     assert.match(out, /^Error: skill_create is gated/, `bypass via uninstalled variant must be rejected; got: ${out}`);
+    // The error message must point users at the spelling that's ACTUALLY installed
+    // (`skill_creator`), not at the unrelated hyphen spelling, otherwise the model
+    // will keep retrying skill_invoke({name:"skill-creator"}) and get stuck.
+    assert.ok(out.includes('skill_creator'), `error should name the installed variant; got: ${out}`);
+    assert.ok(!/skill-creator/.test(out), `error must not reference the uninstalled hyphen spelling; got: ${out}`);
     assert.deepStrictEqual(_writes, []);
 });
 
