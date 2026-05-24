@@ -3,7 +3,7 @@
 // Provides two functions used by the agent loop:
 //   - skillInvoke(args, run) — load a SKILL.md body and inject a synthetic
 //     read_file pair so the model can act on the SOP.
-//   - skillCreate(args)      — write a new SKILL.md under
+//   - skillCreate(args, run, tcId) — write a new SKILL.md under
 //     ~/.deepcopilot/skills/<name>/SKILL.md with strict validation.
 //
 // Both return a string the agent loop forwards as the tool result.
@@ -72,36 +72,73 @@ const SKILL_CREATOR_NAMES = new Set(['skill-creator', 'skill_creator', 'skillcre
 
 /**
  * Issue #146 — Check whether `skill_invoke({name: 'skill-creator'})` was
- * called earlier in the *current* turn (i.e. after the most recent non-
- * synthetic user message). Returns true if the gate is satisfied.
+ * called earlier in the *current* turn (i.e. after the most recent real user
+ * message). Returns true if the gate is satisfied.
  *
  * "Current turn" boundary is the last user message in run.messages that is
- * not a tool-result synthetic carrier (role==='user' with a real content
- * string). Anything before that boundary belongs to a prior turn.
+ * NOT a synthetic <system-reminder> carrier injected by the agent loop.
+ * Both string content and array content (multimodal) messages are supported.
+ *
+ * When currentTcId is provided and the current tool call shares an assistant
+ * message with a skill_invoke call, skill_invoke must appear BEFORE the
+ * current call in the tool_calls array — prevents the model from listing
+ * skill_create first and skill_invoke second in one batch response.
  *
  * @param {{messages?: any[]}|null|undefined} run
+ * @param {string|null|undefined} [currentTcId] - ID of the current tool call
  * @returns {boolean}
  */
-function _skillCreatorInvokedThisTurn(run) {
+function _skillCreatorInvokedThisTurn(run, currentTcId) {
     const msgs = run && Array.isArray(run.messages) ? run.messages : null;
     if (!msgs || !msgs.length) return false;
+
+    // Returns true if a user message is a synthetic <system-reminder> injected
+    // by the agent loop (background job snapshots, context reminders, etc.).
+    // These must NOT count as turn boundaries.
+    function _isSyntheticReminder(m) {
+        if (!m || m.role !== 'user') return false;
+        const c = m.content;
+        if (typeof c === 'string') return c.trimStart().startsWith('<system-reminder>');
+        if (Array.isArray(c)) {
+            const first = c.find(p => p && p.type === 'text');
+            return first ? String(first.text || '').trimStart().startsWith('<system-reminder>') : false;
+        }
+        return false;
+    }
+
+    // Returns true if a message is a real (non-synthetic) user turn boundary.
+    // Handles both plain string content and array content (multimodal / vision).
+    function _isRealUserMessage(m) {
+        if (!m || m.role !== 'user') return false;
+        if (_isSyntheticReminder(m)) return false;
+        const c = m.content;
+        if (typeof c === 'string') return c.trim().length > 0;
+        if (Array.isArray(c)) return c.length > 0;
+        return false;
+    }
 
     // Walk backwards to find the boundary (last real user message).
     let start = 0;
     for (let i = msgs.length - 1; i >= 0; i--) {
-        const m = msgs[i];
-        if (m && m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
-            start = i;
-            break;
-        }
+        if (_isRealUserMessage(msgs[i])) { start = i; break; }
     }
 
     // Scan forward from the turn boundary for an assistant tool_calls entry
-    // invoking skill_invoke with name=skill-creator.
+    // invoking skill_invoke with name=skill-creator (or a known variant).
     for (let i = start; i < msgs.length; i++) {
         const m = msgs[i];
         if (!m || m.role !== 'assistant' || !Array.isArray(m.tool_calls)) continue;
-        for (const tc of m.tool_calls) {
+
+        // When currentTcId is in this message, only consider tool_calls that
+        // appear BEFORE our current call (position-aware ordering guard).
+        let tcLimit = m.tool_calls.length;
+        if (currentTcId) {
+            const pos = m.tool_calls.findIndex(tc => tc && tc.id === currentTcId);
+            if (pos !== -1) tcLimit = pos;
+        }
+
+        for (let j = 0; j < tcLimit; j++) {
+            const tc = m.tool_calls[j];
             const fn = tc && tc.function;
             if (!fn || fn.name !== 'skill_invoke') continue;
             let parsed = null;
@@ -148,7 +185,7 @@ function _skillCreatorInstalled() {
  * to perform. If skill-creator is not installed locally, the gate degrades
  * to a soft warning prepended to the success result.
  */
-function skillCreate(args, run) {
+function skillCreate(args, run, tcId) {
     const a = args || {};
     const name        = String(a.name || '').trim();
     const description = String(a.description || '').trim();
@@ -163,7 +200,7 @@ function skillCreate(args, run) {
     // Issue #146 — Skill-creator quality gate. Run BEFORE field validation so
     // the model gets the most actionable error first; the check is cheap.
     const creatorInstalled = _skillCreatorInstalled();
-    const creatorInvoked   = _skillCreatorInvokedThisTurn(run);
+    const creatorInvoked   = _skillCreatorInvokedThisTurn(run, tcId || null);
     if (creatorInstalled && !creatorInvoked) {
         return 'Error: skill_create is gated by the `skill-creator` meta-skill. '
             + 'Before persisting a new skill you MUST first call '

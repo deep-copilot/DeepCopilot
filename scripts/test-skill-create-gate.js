@@ -18,6 +18,9 @@ Module._resolveFilename = function (request, parent, ...rest) {
     if (request === 'vscode') return require.resolve('./_vscode-stub.js');
     return origResolve.call(this, request, parent, ...rest);
 };
+// Restore the global patch when the process exits so the module stays clean
+// if this script is ever required from another runner or test harness.
+process.on('exit', () => { Module._resolveFilename = origResolve; });
 
 const path = require('path');
 const fs   = require('fs');
@@ -152,3 +155,49 @@ test('T7 gate fires before field validation', () => {
 });
 
 console.log(`\nAll ${passed} tests passed.`);
+
+// ── T8: <system-reminder> user message is NOT a turn boundary ─────────────
+// The agent loop injects synthetic user messages wrapping <system-reminder>
+// (e.g. background job snapshots). These must not be treated as a new turn;
+// the gate should look past them to find the real preceding user message.
+test('T8 <system-reminder> user message is not a turn boundary', () => {
+    stubDiscover([skillCreatorStub]);
+    const run = { messages: [
+        userMsg('please create a skill that does X'),
+        invokeCall('skill-creator'),
+        // Synthetic reminder injected mid-turn by agent-loop (NOT a new turn)
+        { role: 'user', content: '<system-reminder>\nBackground job snapshot.\n</system-reminder>' },
+    ] };
+    const out = skillCreate(validArgs, run);
+    assert.match(out, /^Created skill/, `gate should pass; got: ${out}`);
+    assert.strictEqual(_writes.length, 1);
+});
+
+// ── T9: skill_invoke AFTER skill_create in same tool_calls is rejected ────
+// If the model batches skill_create (first) and skill_invoke (second) in a
+// single assistant message, the tool layer must reject skill_create because
+// skill_invoke has not actually been executed yet at that point.
+test('T9 skill_invoke appearing after skill_create in same message is rejected', () => {
+    stubDiscover([skillCreatorStub]);
+    const tcIdCreate = 'call_sc';
+    const tcIdInvoke = 'call_si';
+    const run = { messages: [
+        userMsg('make a skill'),
+        {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+                // skill_create comes first — wrong order
+                { id: tcIdCreate, type: 'function', function: { name: 'skill_create', arguments: JSON.stringify(validArgs) } },
+                // skill_invoke comes second — not yet executed
+                { id: tcIdInvoke, type: 'function', function: { name: 'skill_invoke', arguments: JSON.stringify({ name: 'skill-creator' }) } },
+            ],
+        },
+    ] };
+    // Gate receives the tcId of the skill_create call so it knows its position.
+    const out = skillCreate(validArgs, run, tcIdCreate);
+    assert.match(out, /^Error: skill_create is gated/, `gate should reject out-of-order batch; got: ${out}`);
+    assert.deepStrictEqual(_writes, []);
+});
+
+console.log(`\n  (including T8 and T9 edge-case tests)`);
