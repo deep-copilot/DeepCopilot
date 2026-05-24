@@ -93,7 +93,12 @@ const SKILL_CREATOR_NAMES = new Set(['skill-creator', 'skill_creator', 'skillcre
  * @returns {boolean}
  */
 function _skillCreatorInvokedThisTurn(run, currentTcId, allowedNames) {
-    const accepted = (allowedNames && allowedNames.size) ? allowedNames : SKILL_CREATOR_NAMES;
+    // Match case-insensitively for robustness, but the allowed set is keyed
+    // off the on-disk spellings (so the gate degrades to false if nothing
+    // matching is installed).
+    const accepted = new Set();
+    const src = (allowedNames && allowedNames.size) ? allowedNames : SKILL_CREATOR_NAMES;
+    for (const n of src) accepted.add(String(n).toLowerCase());
     const msgs = run && Array.isArray(run.messages) ? run.messages : null;
     if (!msgs || !msgs.length) return false;
 
@@ -156,9 +161,10 @@ function _skillCreatorInvokedThisTurn(run, currentTcId, allowedNames) {
 }
 
 /**
- * Issue #146 — Returns the lower-cased set of meta-skill names that are
- * actually installed locally (intersection of SKILL_CREATOR_NAMES with the
- * discovered skills). Empty set ⇒ no creator installed (soft-warn path).
+ * Issue #146 — Returns the meta-skill names that are actually installed,
+ * preserving their on-disk spelling (case included). Skill-invoke matches
+ * names case-sensitively, so the error path needs the EXACT spelling to
+ * give the model an actionable next step. Empty set ⇒ no creator installed.
  */
 function _installedSkillCreatorNames() {
     const installed = new Set();
@@ -166,8 +172,8 @@ function _installedSkillCreatorNames() {
         const { discoverSkills: live } = require('../skills');
         const all = live(wsRoot());
         for (const s of all) {
-            const n = String(s && s.name || '').toLowerCase();
-            if (SKILL_CREATOR_NAMES.has(n)) installed.add(n);
+            const raw = String(s && s.name || '');
+            if (SKILL_CREATOR_NAMES.has(raw.toLowerCase())) installed.add(raw);
         }
     } catch { /* fall through to empty set */ }
     return installed;
@@ -218,12 +224,12 @@ function skillCreate(args, run, tcId) {
     if (creatorInstalled && !creatorInvoked) {
         // Name the actually-installed variant in the error so the model
         // (and the user) is not told to invoke a spelling that doesn't exist
-        // locally. Prefer the canonical hyphen form when available; otherwise
-        // pick a deterministic spelling from whatever is installed.
+        // locally. Spellings are preserved with original casing because
+        // skill_invoke matches names case-sensitively. Prefer the canonical
+        // hyphen form when available; otherwise pick a deterministic spelling.
         const installedList = [...installedCreators];
-        const preferred = installedList.includes('skill-creator')
-            ? 'skill-creator'
-            : installedList.sort()[0];
+        const preferred = installedList.find(n => n.toLowerCase() === 'skill-creator')
+            || installedList.slice().sort()[0];
         return 'Error: skill_create is gated by the `' + preferred + '` meta-skill. '
             + 'Before persisting a new skill you MUST first call '
             + '`skill_invoke({ name: "' + preferred + '" })` in this turn so the SOP '

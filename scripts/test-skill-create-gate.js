@@ -183,7 +183,6 @@ test('T8 <system-reminder> user message is not a turn boundary', () => {
 test('T9 skill_invoke appearing after skill_create in same message is rejected', () => {
     stubDiscover([skillCreatorStub]);
     const tcIdCreate = 'call_sc';
-    const tcIdInvoke = 'call_si';
     const run = { messages: [
         userMsg('make a skill'),
         {
@@ -192,8 +191,8 @@ test('T9 skill_invoke appearing after skill_create in same message is rejected',
             tool_calls: [
                 // skill_create comes first — wrong order
                 { id: tcIdCreate, type: 'function', function: { name: 'skill_create', arguments: JSON.stringify(validArgs) } },
-                // skill_invoke comes second — not yet executed
-                { id: tcIdInvoke, type: 'function', function: { name: 'skill_invoke', arguments: JSON.stringify({ name: 'skill-creator' }) } },
+                // skill_invoke comes second — not yet executed (id is irrelevant to the test)
+                { id: 'call_si', type: 'function', function: { name: 'skill_invoke', arguments: JSON.stringify({ name: 'skill-creator' }) } },
             ],
         },
     ] };
@@ -226,5 +225,29 @@ test('T10 invoking a variant name that is not actually installed is rejected', (
     assert.deepStrictEqual(_writes, []);
 });
 
+// ── T11: mixed-case installed name — invocation accepted, error preserves casing ──
+// skill_invoke matches names case-sensitively, so if the installed skill is
+// "Skill-Creator" the rejection message must reference that exact spelling,
+// not a lower-cased canonical form. Conversely, an invocation that differs
+// only in casing should still satisfy the gate (case-insensitive compare).
+test('T11 mixed-case installed name preserves casing in error and accepts any casing in invocation', () => {
+    // a) Not invoked → rejected, message must name the on-disk spelling exactly.
+    stubDiscover([{ ...skillCreatorStub, name: 'Skill-Creator' }]);
+    let run = { messages: [userMsg('make a skill')] };
+    let out = skillCreate(validArgs, run);
+    assert.match(out, /^Error: skill_create is gated/);
+    assert.ok(out.includes('Skill-Creator'), `error should name the exact installed spelling; got: ${out}`);
+
+    // b) Invocation with different casing still satisfies the gate.
+    stubDiscover([{ ...skillCreatorStub, name: 'Skill-Creator' }]);
+    run = { messages: [
+        userMsg('make a skill'),
+        invokeCall('SKILL-CREATOR'),
+    ] };
+    out = skillCreate(validArgs, run);
+    assert.match(out, /^Created skill/, `case-insensitive invocation should pass the gate; got: ${out}`);
+    assert.strictEqual(_writes.length, 1);
+});
+
 // Final summary — printed once, after ALL tests have actually run.
-console.log(`\nAll ${passed} tests passed (including T8/T9/T10 edge-case tests).`);
+console.log(`\nAll ${passed} tests passed (including T8/T9/T10/T11 edge-case tests).`);
