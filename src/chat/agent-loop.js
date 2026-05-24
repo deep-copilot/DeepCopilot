@@ -257,11 +257,11 @@ class AgentLoop {
         const myBgJobs = () => getActiveBgJobsForSession(sid);
         run._pendingBgJobEvents = [];
         // Only accept job-end events for jobs that belong to THIS session.
-        // Events from other sessions (cross-session _activeBgJobs contamination)
-        // are silently dropped to prevent irrelevant system-reminders and
-        // spurious bg-wait iterations.
+        // Require an exact sessionId match so events without a sessionId (orphaned
+        // terminals not registered via addActiveBgJob) are also dropped — this
+        // ensures complete isolation between concurrent sessions.
         const _bgJobEndHandler = (payload) => {
-            if (payload && payload.sessionId && payload.sessionId !== sid) return;
+            if (!payload || payload.sessionId !== sid) return;
             run._pendingBgJobEvents.push(payload);
         };
         onBgJobEnded(_bgJobEndHandler);

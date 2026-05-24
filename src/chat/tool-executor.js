@@ -521,7 +521,7 @@ class ToolExecutor {
             // ctx.onStreamDelta(chunk) as data arrives; we forward each chunk to
             // the webview tagged with the tool-call id so the card can render
             // a live tail (GH-Copilot-style terminal card).
-            const ctx = { abortSignal, secrets: this._context.secrets, sessionId: run && run.sessionId || null };
+            const ctx = { abortSignal, secrets: this._context.secrets, sessionId: run?.sessionId ?? null };
             if (tcId) {
                 ctx.onStreamDelta = (delta) => {
                     if (!delta) return;

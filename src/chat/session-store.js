@@ -6,6 +6,7 @@
 'use strict';
 
 const vscode = require('vscode');
+const { randomBytes } = require('crypto');
 const { t } = require('../utils/i18n');
 
 class SessionStore {
@@ -61,7 +62,7 @@ class SessionStore {
     /** Ensure a session exists and return its id. Creates one if needed. */
     async ensure(initialUserText) {
         if (this.sessionId) return this.sessionId;
-        const id = 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+        const id = 's_' + Date.now().toString(36) + '_' + randomBytes(2).toString('hex');
         const list = this.all();
         list.unshift({
             id,

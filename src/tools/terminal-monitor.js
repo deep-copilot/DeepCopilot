@@ -245,7 +245,11 @@ function start(context) {
                 rec.exitCode = typeof e.exitCode === 'number' ? e.exitCode : null;
                 if (e.execution) try { _execToRec.delete(e.execution); } catch {}
                 // Notify bg-job subscribers when a deepseek-job-* terminal completes.
-                if (e.terminal.name && e.terminal.name.startsWith('deepseek-job-')) {
+                // Guard with .has() so only jobs we actually registered (with a known
+                // sessionId) produce payloads — prevents orphan terminals from emitting
+                // events with sessionId === undefined and leaking into other sessions.
+                if (e.terminal.name && e.terminal.name.startsWith('deepseek-job-') &&
+                    _activeBgJobs.has(e.terminal.name)) {
                     const sessionId = _activeBgJobs.get(e.terminal.name);
                     _activeBgJobs.delete(e.terminal.name);
                     const payload = {
