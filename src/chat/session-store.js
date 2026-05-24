@@ -274,7 +274,7 @@ class SessionStore {
         const src = list.find(x => x.id === id);
         if (!src) return null;
         const clone = JSON.parse(JSON.stringify(src));
-        // Use crypto.randomUUID for session id rather than Math.random to satisfy
+        // Use crypto.randomBytes for fork id rather than Math.random to satisfy
         // CodeQL js/insecure-randomness, though session ids are not security-critical.
         let _rand4 = '0000';
         try {

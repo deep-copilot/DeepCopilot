@@ -54,7 +54,7 @@ function injectSyntheticSkillRead(messages, skillName, body, skillPath) {
         || path.join(DEEPCOPILOT_SKILLS_DIR, safeName, 'SKILL.md');
     const callId = `synthetic_skill_read_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     messages.push({
-        hrole: 'assistant',
+        role: 'assistant',
         content: null,
         tool_calls: [{
             id:       callId,
