@@ -536,9 +536,10 @@ class ToolExecutor {
         if (name === 'revert_last_turn') return this._handleRevertLastTurn(args, run);
 
         // Skill subsystem (Issue #61) — skill_invoke needs run.messages to inject
-        // a synthetic read_file pair; skill_create is a pure file write.
+        // a synthetic read_file pair; skill_create is a pure file write but
+        // also needs `run` for the Issue #146 skill-creator quality gate.
         if (name === 'skill_invoke')     return skillInvoke(args, run);
-        if (name === 'skill_create')     return skillCreate(args);
+        if (name === 'skill_create')     return skillCreate(args, run);
 
         // Sub-agent dispatch
         if (name === 'spawn_agent')      return this._handleSpawnAgent(args, run, abortSignal);
