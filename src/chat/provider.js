@@ -431,6 +431,23 @@ class ChatViewProvider {
             }
             case 'openFile':        openFile(msg.path, msg.line); break;
             case 'send': {
+                // Issue #142 P3-1/P3-4/P3-5: slash commands handled locally
+                // (never sent to the LLM).
+                const rawText = String(msg.text || '').trim();
+                if (/^\/compact(\s|$)/.test(rawText)) {
+                    const focus = rawText.replace(/^\/compact\s*/, '').trim();
+                    await this._handleCompactCommand(focus);
+                    break;
+                }
+                if (/^\/context(\s|$)/.test(rawText)) {
+                    await this._handleContextCommand();
+                    break;
+                }
+                if (/^\/fork(\s|$)/.test(rawText)) {
+                    const title = rawText.replace(/^\/fork\s*/, '').trim();
+                    await this._handleForkCommand(title);
+                    break;
+                }
                 let skillContent = null;
                 // msg.skillName is set when a skill chip was staged in the input box.
                 // Always resolve skill content from disk (via discoverSkills) — the webview
@@ -615,7 +632,184 @@ class ChatViewProvider {
         // run will be null for finished sessions and truthy for in-flight ones.
         const run = this._runs.get(id);
         await this._store.load(id, { busy: !!(run && run.busy) });
-        if (run) for (const ev of run.events) this._post(ev);
+        if (!run || !run.events.length) return;
+        // Issue #143: defer event replay to the next macrotask so the webview
+        // has time to paint the rebuilt session history BEFORE the buffered
+        // events flood in. We also wrap the burst in replayStart/replayEnd
+        // envelopes so the webview can suppress per-event scroll-to-bottom
+        // (each ascroll() schedules a RAF, causing visible scrollbar jitter).
+        //
+        // Post replayStart IMMEDIATELY (not inside setTimeout): if the agent
+        // is still streaming when the user switches to this session, live
+        // streamDelta events posted during the 0-ms delay would otherwise
+        // arrive before replayStart and reintroduce per-event scroll jitter
+        // (Copilot review feedback on PR #144).
+        const evs = run.events.slice();
+        this._post({ type: 'replayStart', count: evs.length });
+        setTimeout(() => {
+            // Guard: the active session may have changed again during the
+            // 0-ms delay (rapid clicking). In that case the events are still
+            // buffered on `run.events`, so the next _loadSession(id) for this
+            // session will replay them; close the envelope here so the webview
+            // does not stay in replay-suppress mode forever.
+            if (run.sessionId !== this._store.sessionId) {
+                this._post({ type: 'replayEnd' });
+                return;
+            }
+            for (const ev of evs) this._post(ev);
+            this._post({ type: 'replayEnd' });
+        }, 0);
+    }
+
+    // Issue #142 P3-1: user-initiated `/compact [focus]` command.
+    // Force-compacts the active session's run.messages, optionally biasing the
+    // LLM summary toward `focus`.  Persists the compacted state immediately so
+    // the next turn (and future reloads) start from the reduced history.
+    async _handleCompactCommand(focus) {
+        const sid = this._store.sessionId;
+        if (!sid) {
+            this._post({ type: 'status', text: '没有活动会话可压缩 / No active session to compact' });
+            return;
+        }
+        const run = this._activeRun();
+        if (!run || !Array.isArray(run.messages) || run.messages.length === 0) {
+            this._post({ type: 'status', text: '当前会话尚无可压缩内容 / Nothing to compact yet' });
+            return;
+        }
+        if (run.busy) {
+            this._post({ type: 'status', text: '请等待当前回复结束再压缩 / Wait for the current reply to finish' });
+            return;
+        }
+
+        const { autoCompactIfNeeded, estimateMessagesTokens } = require('./compact');
+        const cfg      = vscode.workspace.getConfiguration('deepseekAgent');
+        const provider = cfg.get('provider') || 'deepseek';
+        const model    = cfg.get('defaultModel') || 'deepseek-v4-pro';
+        const baseUrl  = (cfg.get('apiBaseUrl') || '').trim();
+        const apiKey   = await this._context.secrets.get('deepseekAgent.apiKey');
+
+        // Issue #142 P3-2: project-level compact instructions.  If the user
+        // has a `.deepcopilot/compact.md` (or CLAUDE.md fallback) in the
+        // workspace root, its contents are merged into the focus hint.
+        let effectiveFocus = focus || '';
+        try {
+            const ws = this._currentWs();
+            if (ws) {
+                const fs   = require('fs');
+                const path = require('path');
+                const candidates = [
+                    path.join(ws, '.deepcopilot', 'compact.md'),
+                    path.join(ws, '.deepcopilot', 'COMPACT.md'),
+                    path.join(ws, 'CLAUDE.md'),
+                ];
+                for (const p of candidates) {
+                    if (fs.existsSync(p)) {
+                        const txt = fs.readFileSync(p, 'utf8').slice(0, 4000);
+                        effectiveFocus = effectiveFocus ? `${effectiveFocus}\n\n${txt}` : txt;
+                        break;
+                    }
+                }
+            }
+        } catch { /* best effort */ }
+        const apiConfig = { apiKey, baseUrl, model, provider, focus: effectiveFocus };
+
+        const before = estimateMessagesTokens(run.messages);
+        // Force compaction by setting a budget well below the current size.
+        const budget = Math.max(2000, Math.floor(before * (focus ? 0.3 : 0.4)));
+
+        this._post({ type: 'status', text: '🗜 正在压缩历史… / Compacting…' });
+        try {
+            const res = await autoCompactIfNeeded(run.messages, budget, 6, apiConfig);
+            if (res && res.compacted) {
+                run.messages = res.messages;
+                const after = estimateMessagesTokens(run.messages);
+                // Persist the compacted state — no userText / asstText so
+                // append() only updates apiMessages.
+                try {
+                    await this._store.append(sid, '', '', '', null, run.messages);
+                } catch (_e) { /* persistence best-effort */ }
+                this._post({
+                    type: 'status',
+                    text: `✅ 已压缩 ${Math.round(before / 1000)}K → ${Math.round(after / 1000)}K tokens`,
+                });
+            } else {
+                this._post({ type: 'status', text: '历史已足够紧凑 / History already compact' });
+            }
+        } catch (e) {
+            this._post({ type: 'error', text: `Compact failed: ${e.message}` });
+        }
+    }
+
+    // Issue #142 P3-4: `/context` status report.  Reports a coarse breakdown
+    // (system prompt + message history) so the user can decide whether to
+    // /compact or /fork.  Note: tool definitions, file/hint payloads sent
+    // alongside the request are NOT included here — the on-wire request can
+    // be a few K larger than the number shown.  Aligning this with the real
+    // wire size is tracked separately (Copilot review feedback).
+    async _handleContextCommand() {
+        try {
+            const { estimateMessagesTokens, estimateTokens } = require('./compact');
+            const run = this._activeRun();
+            const cfg = vscode.workspace.getConfiguration('deepseekAgent');
+            const provider = cfg.get('provider') || 'deepseek';
+            const model    = cfg.get('defaultModel') || 'deepseek-v4-pro';
+            const { resolveProvider } = require('../providers');
+            let modelCfg = { contextWindow: 65536 };
+            try {
+                const p = resolveProvider(provider);
+                modelCfg = p?.models?.find(m => m.id === model) || modelCfg;
+            } catch { /* fallback */ }
+            const window = modelCfg.contextWindow || 65536;
+
+            const msgs = run?.messages || [];
+            const historyTok = estimateMessagesTokens(msgs);
+            // Rough estimate for system prompt — uses the default builder.
+            let sysTok = 0;
+            try {
+                const { buildSystemPrompt } = require('../prompts/system');
+                const sys = buildSystemPrompt({ provider, model });
+                sysTok = estimateTokens(sys);
+            } catch { /* skip */ }
+
+            const total = historyTok + sysTok;
+            const pct = Math.min(100, Math.round(total / window * 100));
+            const bar = (() => {
+                const w = 20;
+                const filled = Math.round(pct / 100 * w);
+                return '█'.repeat(filled) + '░'.repeat(w - filled);
+            })();
+            const lines = [
+                `📊 Context usage — ${pct}%`,
+                `[${bar}] ${Math.round(total/1000)}K / ${Math.round(window/1000)}K tokens`,
+                ``,
+                `• System prompt : ${Math.round(sysTok/1000)}K`,
+                `• History       : ${Math.round(historyTok/1000)}K (${msgs.length} msgs)`,
+                `• Model         : ${provider} / ${model}`,
+                ``,
+                `Tip: /compact [focus] to summarise · /fork [title] to branch off`,
+            ];
+            this._post({ type: 'status', text: lines.join('\n') });
+        } catch (e) {
+            this._post({ type: 'error', text: `/context failed: ${e.message}` });
+        }
+    }
+
+    // Issue #142 P3-5: `/fork [title]` clones the current session under a new
+    // id so the user can experiment without polluting the original thread.
+    async _handleForkCommand(title) {
+        const sid = this._store.sessionId;
+        if (!sid) {
+            this._post({ type: 'status', text: '没有可分叉的会话 / Nothing to fork' });
+            return;
+        }
+        try {
+            const newId = await this._store.fork(sid, title);
+            if (newId) {
+                this._post({ type: 'status', text: `🌿 已分叉到新会话 / Forked to new session` });
+            }
+        } catch (e) {
+            this._post({ type: 'error', text: `/fork failed: ${e.message}` });
+        }
     }
 
     async _handleRegenerate() {

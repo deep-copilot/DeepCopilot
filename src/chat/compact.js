@@ -38,21 +38,219 @@ function estimateMessagesTokens(messages) {
 // ─── Tool-result truncation ────────────────────────────────────────────────
 // Truncate oversized tool results to preserve semantic content while reducing
 // token count.  Non-destructive: returns new message objects; originals untouched.
+//
+// Strategy (Issue #142 P0-4 / P1-1): keep HEAD + TAIL with omitted-middle marker.
+// Head preserves prelude (file header, command echo, first error); tail preserves
+// the conclusive part (exit code, last error, summary line).
 
-const TOOL_RESULT_LONG = 2000; // chars — threshold for truncation
-const TOOL_RESULT_KEEP = 500;  // chars — keep this many from the front
+const TOOL_RESULT_LONG      = 2000; // chars — threshold for truncation
+const TOOL_RESULT_KEEP_HEAD = 1200; // chars — keep from the front
+const TOOL_RESULT_KEEP_TAIL = 400;  // chars — keep from the end
+// nuclearCompact uses inline 800/200 head/tail values; the earlier constants
+// were never read — removed to satisfy CodeQL js/useless-assignment-to-local.
 
-function truncateLongToolResults(messages) {
+function _truncateBody(body, headKeep, tailKeep) {
+    const total = body.length;
+    if (total <= headKeep + tailKeep + 80) return body;
+    const head = body.slice(0, headKeep);
+    const tail = body.slice(total - tailKeep);
+    const omitted = total - headKeep - tailKeep;
+    return `${head}\n…[truncated — ${omitted} chars omitted, original ${total} chars]…\n${tail}`;
+}
+
+// ─── Structure-aware truncation (Issue #142 P1-1) ──────────────────────────
+// Inspect the tool name and apply the strategy best suited to its output:
+//   - grep_search    : dedup duplicate file:line entries, cap to N hits
+//   - list_dir       : keep first/last entries with omitted-middle hint
+//   - find_files     : same as list_dir
+//   - read_file      : preserve numbered head + tail (line-aware)
+//   - run_shell      : preserve error-bearing lines + tail (exit code lives there)
+//   - default        : generic head + tail body truncation
+//
+// Returns a (possibly identical) body string.
+function _smartTruncateByTool(body, toolName, headKeep, tailKeep) {
+    if (body.length <= headKeep + tailKeep + 80) return body;
+    const lines = body.split('\n');
+    const totalLines = lines.length;
+
+    if (toolName === 'grep_search') {
+        // Dedup by (file:line) prefix, keep first occurrence.
+        // Greedy match on the path so Windows drive letters (e.g.
+        // `C:\foo\bar.js:12:hit`) still parse correctly — the previous
+        // `^([^:]+:\d+):` regex would only match up to the first colon and
+        // drop drive-letter paths from the dedup (Copilot review feedback).
+        const seen = new Set();
+        const deduped = [];
+        for (const ln of lines) {
+            const key = ln.match(/^(.+):(\d+):/);
+            const k = key ? `${key[1]}:${key[2]}` : ln;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            deduped.push(ln);
+            if (deduped.length >= 80) break; // hard cap
+        }
+        const out = deduped.join('\n');
+        if (deduped.length < totalLines) {
+            return `${out}\n…[${totalLines - deduped.length} duplicate/extra matches dropped — original ${totalLines} lines]`;
+        }
+        return _truncateBody(out, headKeep, tailKeep);
+    }
+
+    if (toolName === 'list_dir' || toolName === 'find_files') {
+        // Keep first 40 + last 20 entries.
+        if (totalLines <= 80) return _truncateBody(body, headKeep, tailKeep);
+        const headLines = lines.slice(0, 40);
+        const tailLines = lines.slice(-20);
+        return [
+            ...headLines,
+            `… [${totalLines - 60} entries omitted from middle, original ${totalLines}]`,
+            ...tailLines,
+        ].join('\n');
+    }
+
+    if (toolName === 'read_file') {
+        // Numbered-line aware: bias head heavier (often holds imports / class signatures).
+        return _truncateBody(body, Math.floor(headKeep * 1.4), tailKeep);
+    }
+
+    if (toolName === 'run_shell' || toolName === 'run_shell_bg' || toolName === 'read_terminal') {
+        // Error-aware: extract lines containing error markers; combine with tail.
+        const errLines = [];
+        for (const ln of lines) {
+            if (/error|fail|exception|traceback|panic|fatal/i.test(ln)) {
+                errLines.push(ln);
+                if (errLines.length >= 30) break;
+            }
+        }
+        const tail = lines.slice(-30).join('\n');
+        const errBlock = errLines.length ? `[error lines]\n${errLines.join('\n')}\n\n` : '';
+        const combined = `${errBlock}…[${totalLines} total lines — only errors + tail shown]…\n[tail]\n${tail}`;
+        // If still larger than budget, fall back to generic truncation.
+        return combined.length <= headKeep + tailKeep + 200
+            ? combined
+            : _truncateBody(combined, headKeep, tailKeep);
+    }
+
+    return _truncateBody(body, headKeep, tailKeep);
+}
+
+// Build a Map<tool_call_id, tool_name> by walking assistant{tool_calls}
+// messages.  Used so tool result messages can be truncated using the
+// appropriate per-tool strategy.
+function _buildToolIdNameMap(messages) {
+    const map = new Map();
+    for (const m of messages) {
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+            for (const tc of m.tool_calls) {
+                if (tc && tc.id && tc.function && tc.function.name) {
+                    map.set(tc.id, tc.function.name);
+                }
+            }
+        }
+    }
+    return map;
+}
+
+function truncateLongToolResults(messages, opts = {}) {
+    const headKeep = opts.headKeep || TOOL_RESULT_KEEP_HEAD;
+    const tailKeep = opts.tailKeep || TOOL_RESULT_KEEP_TAIL;
+    const threshold = opts.threshold || TOOL_RESULT_LONG;
+    const idToName = _buildToolIdNameMap(messages);
     let truncCount = 0;
     const result = messages.map(m => {
         if (m.role !== 'tool') return m;
         const body = typeof m.content === 'string' ? m.content
             : (Array.isArray(m.content) ? m.content.map(p => (p && p.text) || '').join('') : '');
-        if (body.length <= TOOL_RESULT_LONG) return m;
+        if (body.length <= threshold) return m;
         truncCount++;
-        return { ...m, content: body.slice(0, TOOL_RESULT_KEEP) + `\n…[truncated — original ${body.length} chars]` };
+        const toolName = m.tool_call_id ? idToName.get(m.tool_call_id) : null;
+        const newBody = _smartTruncateByTool(body, toolName, headKeep, tailKeep);
+        return { ...m, content: newBody };
     });
     return { messages: result, truncCount };
+}
+
+// Truncate ANY oversized message body (user / assistant / tool).  Used by the
+// nuclear path and by autoCompactIfNeeded's last-resort branch when even the
+// firstUser anchor or tail messages are individually too large to fit.
+function _truncateAnyLongMessage(m, headKeep, tailKeep, threshold) {
+    if (typeof m.content === 'string') {
+        if (m.content.length <= threshold) return m;
+        return { ...m, content: _truncateBody(m.content, headKeep, tailKeep) };
+    }
+    if (Array.isArray(m.content)) {
+        const newContent = m.content.map(p => {
+            if (p && typeof p.text === 'string' && p.text.length > threshold) {
+                return { ...p, text: _truncateBody(p.text, headKeep, tailKeep) };
+            }
+            return p;
+        });
+        return { ...m, content: newContent };
+    }
+    return m;
+}
+
+// ─── File-read deduplication (Issue #142 P1-3) ─────────────────────────────
+// When the same file path is read multiple times in a session, all but the
+// LAST occurrence are replaced with a tiny placeholder.  The latest read is
+// always the most up-to-date snapshot, so older copies waste tokens.
+//
+// Detection: walks assistant{tool_calls} entries where function.name is
+// `read_file` (or list_dir / web_fetch) with a `path` (or `url`) argument.
+// The matching tool result message (by tool_call_id) gets its content
+// replaced.  Returns { messages, replaced }.
+function dedupRepeatedReads(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return { messages, replaced: 0 };
+    }
+    // Build (tool_call_id → {key, name}) for repeatable read tools.
+    const idMeta = new Map();
+    for (const m of messages) {
+        if (m.role !== 'assistant' || !Array.isArray(m.tool_calls)) continue;
+        for (const tc of m.tool_calls) {
+            const name = tc?.function?.name;
+            if (!name || !tc.id) continue;
+            if (name !== 'read_file' && name !== 'web_fetch' && name !== 'list_dir') continue;
+            let args = {};
+            try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+            const target = args.path || args.url || args.file || args.file_path;
+            if (!target) continue;
+            // Range-aware key for read_file: same path + range is the "same read".
+            const range = (args.start_line || args.end_line)
+                ? `:${args.start_line || ''}-${args.end_line || ''}`
+                : '';
+            idMeta.set(tc.id, { key: `${name}::${target}${range}`, name });
+        }
+    }
+    // Find the LAST tool_call_id for each key.
+    const lastIdForKey = new Map();
+    for (const m of messages) {
+        if (m.role !== 'tool' || !m.tool_call_id) continue;
+        const meta = idMeta.get(m.tool_call_id);
+        if (!meta) continue;
+        lastIdForKey.set(meta.key, m.tool_call_id);
+    }
+    // Replace any non-last tool message body with a placeholder.
+    let replaced = 0;
+    const out = messages.map(m => {
+        if (m.role !== 'tool' || !m.tool_call_id) return m;
+        const meta = idMeta.get(m.tool_call_id);
+        if (!meta) return m;
+        const lastId = lastIdForKey.get(meta.key);
+        if (!lastId || lastId === m.tool_call_id) return m;
+        const body = typeof m.content === 'string' ? m.content : '';
+        if (body.length < 400) return m; // not worth replacing small ones
+        replaced++;
+        // Use a structured placeholder tag so the LLM (and any downstream
+        // post-processing) can reliably detect collapsed reads — matches the
+        // shape documented in the PR description (Copilot review feedback).
+        const path = meta.key.split('::')[1] || '';
+        return {
+            ...m,
+            content: `<${meta.name} path="${path}" read-collapsed="true" reason="re-read later in conversation; see the later tool result for current contents"/>`,
+        };
+    });
+    return { messages: out, replaced };
 }
 
 // ─── Head-facts extractor ──────────────────────────────────────────────────
@@ -90,7 +288,7 @@ function extractHeadFacts(messages) {
 // so the caller can fall back to the structured fact-extraction path.
 
 async function summariseHead(headMessages, apiConfig) {
-    const { apiKey, baseUrl: rawBaseUrl, model, provider = 'deepseek' } = apiConfig || {};
+    const { apiKey, baseUrl: rawBaseUrl, model, provider = 'deepseek', focus } = apiConfig || {};
     if (!model) return null;
 
     // Resolve effective base URL from the provider registry (single source of truth).
@@ -136,7 +334,9 @@ async function summariseHead(headMessages, apiConfig) {
                         content:
                             'Summarize the following conversation history in ≤300 words. ' +
                             'Focus on: what files were read or modified, what problems were found, ' +
-                            'what decisions were made, what code was written.\n\n' + historyText,
+                            'what decisions were made, what code was written.' +
+                            (focus ? `\n\nIMPORTANT — bias the summary toward: ${focus}` : '') +
+                            '\n\n' + historyText,
                     },
                 ],
                 max_tokens: 400,
@@ -183,6 +383,16 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     let working = messages;
     let truncCount = 0;
 
+    // Step 0 (Issue #142 P1-3): dedup repeated file reads — cheap, lossless
+    // (latest copy preserved), runs before token measurement.
+    if (estimateMessagesTokens(working) > budgetTokens * 0.8) {
+        const ded = dedupRepeatedReads(working);
+        if (ded.replaced > 0) {
+            working = ded.messages;
+            truncCount += ded.replaced;
+        }
+    }
+
     // Step 1: truncate long tool results to recover tokens without dropping messages.
     if (estimateMessagesTokens(working) > budgetTokens) {
         const res = truncateLongToolResults(working);
@@ -199,7 +409,15 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     }
 
     // Step 2: head-drop.
+    // (Issue #142 P0-1) When the message array is too short to head-drop but we
+    // are still over budget, fall through to a body-truncation pass below so a
+    // single oversized message (e.g. a 100KB read_file or huge first user prompt)
+    // can still be brought back under budget.
     if (working.length <= keepTail + 2) {
+        const fitted = _bodyTruncateUntilFits(working, budgetTokens);
+        if (fitted.changed) {
+            return { messages: fitted.messages, compacted: true, dropped: 0, truncated: truncCount + fitted.count };
+        }
         return { messages: working, compacted: truncCount > 0, dropped: 0, truncated: truncCount };
     }
 
@@ -271,12 +489,129 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
             `Refer to the user's most recent messages for current intent.\n</system-reminder>`,
     };
 
-    const out = [];
+    let out = [];
     if (firstUser) out.push(firstUser);
     if (lastAttachUser) out.push(lastAttachUser);
     out.push(summary);
     out.push(...tail);
+
+    // Issue #142 P0-1: if STILL over budget after head-drop (typical when
+    // firstUser or the tail contains a huge attachment / read_file payload),
+    // perform body-truncation on the kept messages so we never return with
+    // tokens > budget when there is content we could shrink.
+    if (estimateMessagesTokens(out) > budgetTokens) {
+        const fitted = _bodyTruncateUntilFits(out, budgetTokens);
+        if (fitted.changed) {
+            out = fitted.messages;
+            truncCount += fitted.count;
+        }
+    }
     return { messages: out, compacted: true, dropped, truncated: truncCount };
+}
+
+// ─── Body-truncate fallback ────────────────────────────────────────────────
+// Walk messages from longest to shortest, progressively tightening head/tail
+// keep limits until total tokens fit under `budgetTokens` or we hit the
+// minimum floor.  Used by autoCompactIfNeeded when head-dropping cannot
+// reduce the working set further (single oversized message, or first-user
+// anchor that exceeds budget on its own).
+function _bodyTruncateUntilFits(messages, budgetTokens) {
+    const tiers = [
+        { head: 1200, tail: 400, threshold: 2000 },
+        { head: 600,  tail: 200, threshold: 1200 },
+        { head: 300,  tail: 120, threshold: 600  },
+        { head: 200,  tail: 80,  threshold: 400  },
+        { head: 100,  tail: 40,  threshold: 200  },
+    ];
+    let cur = messages;
+    let changed = false;
+    let count = 0;
+    for (const tier of tiers) {
+        if (estimateMessagesTokens(cur) <= budgetTokens) break;
+        const next = cur.map(m => {
+            // Apply to ANY role — tool / user / assistant — when content is large.
+            // The firstUser anchor is intentionally NOT exempt at this stage:
+            // an oversized first message would otherwise lock us out forever.
+            const truncated = _truncateAnyLongMessage(m, tier.head, tier.tail, tier.threshold);
+            if (truncated !== m) count++;
+            return truncated;
+        });
+        if (next.some((m, i) => m !== cur[i])) {
+            cur = next;
+            changed = true;
+        }
+    }
+    return { messages: cur, changed, count };
+}
+
+// ─── Nuclear compaction ────────────────────────────────────────────────────
+// Last-resort path used when the emergency keepTail ladder still leaves us
+// over the model's hard context limit.  Drops EVERYTHING except:
+//   - The first user message (heavily truncated to 800 chars)
+//   - An aggregated <compact-summary> stub
+//   - The most recent user message (the current intent)
+// Any in-flight assistant{tool_calls} / tool result groups are discarded —
+// the cost of nuclear is losing the current turn's tool history, but the
+// session is preserved and the user can continue talking.
+//
+// Returns the rebuilt messages array (sync, no API call).
+function nuclearCompact(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return messages;
+
+    // Find first non-summary user message — task anchor.
+    let firstUser = null;
+    for (const m of messages) {
+        if (m.role === 'user' && !_isCompactSummary(m)) { firstUser = m; break; }
+    }
+
+    // Find most recent non-summary user message — current intent.
+    let lastUser = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.role === 'user' && !_isCompactSummary(m)) { lastUser = m; break; }
+    }
+
+    // Aggregate any existing compact-summary text so prior compactions are not
+    // silently erased.
+    const priorSummaryParts = [];
+    for (const m of messages) {
+        if (!_isCompactSummary(m)) continue;
+        const raw = typeof m.content === 'string' ? m.content : '';
+        const inner = raw.replace(
+            /[\s\S]*?<compact-summary>([\s\S]*?)<\/compact-summary>[\s\S]*/,
+            '$1',
+        ).trim();
+        if (inner && inner !== raw) priorSummaryParts.push(inner);
+    }
+
+    // Truncate firstUser content aggressively (head 800 / tail 200) so that
+    // even a 100KB first attachment cannot lock the session.
+    let truncatedFirstUser = firstUser;
+    if (firstUser) {
+        truncatedFirstUser = _truncateAnyLongMessage(firstUser, 800, 200, 1200);
+    }
+
+    const summaryBody = (priorSummaryParts.length > 0
+        ? `Prior compactions:\n${priorSummaryParts.join('\n---\n')}\n\n`
+        : '')
+        + `Emergency nuclear compaction applied — interim history discarded to fit the context window. `
+        + `Only the original task and the user's most recent message are retained.`;
+
+    const summary = {
+        role: 'user',
+        content:
+            `<system-reminder>\n<compact-summary>\n${summaryBody}\n</compact-summary>\n` +
+            `Refer to the user's most recent message for current intent.\n</system-reminder>`,
+    };
+
+    const out = [];
+    if (truncatedFirstUser) out.push(truncatedFirstUser);
+    out.push(summary);
+    if (lastUser && lastUser !== firstUser) {
+        // Also truncate lastUser body if it is itself huge.
+        out.push(_truncateAnyLongMessage(lastUser, 1200, 400, 2000));
+    }
+    return out;
 }
 
 // ─── ToolArgsStreamer ───────────────────────────────────────────────────────
@@ -367,4 +702,8 @@ class ToolArgsStreamer {
     }
 }
 
-module.exports = { estimateTokens, estimateMessagesTokens, autoCompactIfNeeded, summariseHead, ToolArgsStreamer };
+module.exports = {
+    estimateTokens, estimateMessagesTokens,
+    autoCompactIfNeeded, summariseHead, nuclearCompact, dedupRepeatedReads,
+    ToolArgsStreamer,
+};

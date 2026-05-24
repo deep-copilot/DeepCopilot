@@ -186,6 +186,15 @@ async function toolReadFile(args) {
             const e = args.end_line || lines.length;
             return truncate(lines.slice(s, e).map((l, i) => `${s + i + 1}: ${l}`).join('\n'));
         }
+        // Issue #142 P2-4: nudge the model toward sub-agents / ranged reads
+        // for medium-large files that would otherwise burn a lot of context.
+        if (fileSize > 50 * 1024) {
+            const kb = Math.round(fileSize / 1024);
+            const hint = `\n\n[hint] this file is ${kb} KB — consider \`spawn_agent\` (agent_type=explore) for analysis, or \`read_file\` with start_line/end_line to read a focused range, to save context.`;
+            // Reserve hint length in the truncate budget so the combined output
+            // still fits in MAX_OUTPUT_CHARS (Copilot review feedback).
+            return truncate(text, MAX_OUTPUT_CHARS - hint.length) + hint;
+        }
         return truncate(text);
     } catch (e) { return `Error: ${e.message}`; }
 }

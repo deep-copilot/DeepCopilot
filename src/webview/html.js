@@ -136,8 +136,15 @@ function buildWebviewHtml(webview, extensionUri) {
 </div>
 <div id="foot">
   <div class="ft-left">
-    <span class="dot" id="dot"></span>
-    <span id="ft-mode">agent · deepseek-v4-pro</span>
+    <button id="ft-ctx" class="ft-ctx" title="Context usage — click for details" aria-label="Context usage">
+      <svg class="ft-ctx-svg" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+        <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" stroke-width="2.5" opacity="0.25"></circle>
+        <circle id="ft-ctx-ring" cx="10" cy="10" r="8" fill="none" stroke="#66bb6a" stroke-width="2.5"
+                stroke-dasharray="50.27" stroke-dashoffset="50.27" stroke-linecap="round"
+                transform="rotate(-90 10 10)"></circle>
+      </svg>
+      <span id="ft-ctx-pct">--</span>
+    </button>
   </div>
   <div class="ft-right">
     <button class="ft-btn" id="apibt" title="${ui.apiTitle}">🔑</button>

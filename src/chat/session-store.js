@@ -136,7 +136,11 @@ class SessionStore {
      * @param {object[]} apiMessages  — full API-format history to persist
      */
     async append(sid, userText, asstText, thoughts, usage, apiMessages) {
-        if (!sid || (!userText && !asstText)) return;
+        if (!sid) return;
+        // Issue #142 P3-1: allow apiMessages-only updates (used by the
+        // /compact command which persists a compacted history without
+        // adding a new user/assistant turn).
+        if (!userText && !asstText && apiMessages === undefined) return;
         const list = this.all();
         let s = list.find(x => x.id === sid);
         if (!s) {
@@ -179,7 +183,30 @@ class SessionStore {
             }
             // Also strip any incomplete assistant{tool_calls} group at the tail
             // so a mid-turn interruption never persists a broken sequence.
-            s.apiMessages = _trimOrphanTailToolCalls(sanitized);
+            sanitized = _trimOrphanTailToolCalls(sanitized);
+
+            // Issue #142 P0-3: token-aware pre-compaction before persistence.
+            // Without this, a "full" session is reloaded as-is on next open and
+            // immediately bumps into the context limit again.  We aim for ~40%
+            // of the model's window so the next turn has plenty of headroom.
+            try {
+                const { getModel, resolveModel } = require('../providers');
+                const { autoCompactIfNeeded, estimateMessagesTokens } = require('./compact');
+                const provider = cfg.get('provider') || 'deepseek';
+                const modelName = cfg.get('defaultModel') || 'deepseek-v4-pro';
+                const modelCfg  = getModel(provider, resolveModel(provider, modelName)) || { contextWindow: 65536 };
+                const persistBudget = Math.floor(modelCfg.contextWindow * 0.4);
+                if (estimateMessagesTokens(sanitized) > persistBudget) {
+                    const res = await autoCompactIfNeeded(sanitized, persistBudget, 12, null);
+                    if (res && res.compacted) {
+                        sanitized = _trimOrphanTailToolCalls(res.messages);
+                    }
+                }
+            } catch (_e) {
+                // Silent failure — never block persistence on compaction error.
+            }
+
+            s.apiMessages = sanitized;
         }
 
         const last = s.messages[s.messages.length - 1];
@@ -237,6 +264,37 @@ class SessionStore {
         s.updatedAt = Date.now();
         await this.set(list);
         this.postList();
+    }
+
+    // Issue #142 P3-5: deep-clone an existing session under a new id.  The
+    // resulting session has its own message history; subsequent edits do not
+    // affect the original.  Caller may pass a custom title.
+    async fork(id, title) {
+        const list = this.all();
+        const src = list.find(x => x.id === id);
+        if (!src) return null;
+        const clone = JSON.parse(JSON.stringify(src));
+        // Use crypto.randomBytes for fork id rather than Math.random to satisfy
+        // CodeQL js/insecure-randomness, though session ids are not security-critical.
+        let _rand4 = '0000';
+        try {
+            const _crypto = require('crypto');
+            _rand4 = _crypto.randomBytes(2).toString('hex');
+        } catch { /* fallback only if node:crypto unavailable */ }
+        // Keep id shape consistent with ensure(): `s_<ts>_<rand>` (Copilot
+        // review feedback on PR #144).
+        clone.id = `s_${Date.now().toString(36)}_${_rand4}`;
+        clone.title = String(title || `${src.title || 'Fork'} (fork)`).slice(0, 80);
+        clone.createdAt = Date.now();
+        clone.updatedAt = Date.now();
+        clone.pinned = false;
+        delete clone.busy;
+        list.unshift(clone);
+        await this.set(list);
+        this.sessionId = clone.id;
+        this._post({ type: 'sessionLoaded', id: clone.id, messages: clone.messages || [] });
+        this.postList();
+        return clone.id;
     }
 
     async pin(id) {

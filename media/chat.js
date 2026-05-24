@@ -196,8 +196,61 @@
     _modeOpen = false;
   }
   var sb   = document.getElementById("sb");
-  var dot  = document.getElementById("dot");
-  var ftMode = document.getElementById("ft-mode");
+  var dot  = null; // dot indicator removed
+  // Issue #142 P3-3: footer model-text removed; replaced by #ft-ctx ring.
+  var ftCtxBtn  = document.getElementById("ft-ctx");
+  var ftCtxRing = document.getElementById("ft-ctx-ring");
+  var ftCtxPct  = document.getElementById("ft-ctx-pct");
+  var _lastCtx  = { tokens: 0, window: 0, pct: 0 };
+  var _ctxPop   = null;
+  function updateCtxRing(pct, tokens, win){
+    _lastCtx = { tokens: tokens||0, window: win||0, pct: pct||0 };
+    if (!ftCtxRing || !ftCtxPct) return;
+    var p = Math.max(0, Math.min(100, Number(pct)||0));
+    // circumference ≈ 2πr = 2*π*8 ≈ 50.265
+    var C = 50.265;
+    ftCtxRing.setAttribute('stroke-dashoffset', String(C * (1 - p/100)));
+    ftCtxRing.setAttribute('stroke', p > 85 ? '#e57373' : (p > 65 ? '#ffb74d' : '#66bb6a'));
+    ftCtxPct.textContent = (p|0) + '%';
+    if (ftCtxBtn) ftCtxBtn.title = 'Context ' + (p|0) + '%  ' + Math.round((tokens||0)/1000) + 'K / ' + Math.round((win||0)/1000) + 'K — click for details';
+  }
+  function closeCtxPop(){ if (_ctxPop) { _ctxPop.remove(); _ctxPop = null; document.removeEventListener('mousedown', _ctxPopOutside, true); } }
+  function _ctxPopOutside(e){ if (_ctxPop && !_ctxPop.contains(e.target) && e.target !== ftCtxBtn && !ftCtxBtn.contains(e.target)) closeCtxPop(); }
+  function openCtxPop(){
+    if (_ctxPop) { closeCtxPop(); return; }
+    /* Escape any value that flows into innerHTML to satisfy CodeQL
+       js/xss-through-dom — even though modelTxt / _curIMode originate from
+       extension-side messages, treat them as untrusted. */
+    function _esc(s){
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    var pop = document.createElement('div');
+    pop.className = 'ft-ctx-pop';
+    var pct = _lastCtx.pct|0;
+    var tk = Math.round((_lastCtx.tokens||0)/1000);
+    var wn = Math.round((_lastCtx.window||0)/1000);
+    var modelTxt = (modelPicker && modelPicker.dataset.model) || 'unknown';
+    pop.innerHTML =
+      '<div class="ft-ctx-pop-h">Context usage</div>' +
+      '<div class="ft-ctx-pop-row"><span>Used</span><b>' + tk + 'K / ' + wn + 'K (' + pct + '%)</b></div>' +
+      '<div class="ft-ctx-pop-row"><span>Model</span><b>' + _esc(modelTxt) + '</b></div>' +
+      '<div class="ft-ctx-pop-row"><span>Mode</span><b>' + _esc(_curIMode||'agent') + '</b></div>' +
+      '<div class="ft-ctx-pop-tip">' +
+        '<div><code>/context</code> — detailed token breakdown</div>' +
+        '<div><code>/compact [focus]</code> — summarise history</div>' +
+        '<div><code>/fork [title]</code> — branch this session</div>' +
+      '</div>';
+    document.body.appendChild(pop);
+    _ctxPop = pop;
+    // position above the button
+    var r = ftCtxBtn.getBoundingClientRect();
+    pop.style.left = Math.max(8, r.left) + 'px';
+    pop.style.bottom = (window.innerHeight - r.top + 6) + 'px';
+    setTimeout(function(){ document.addEventListener('mousedown', _ctxPopOutside, true); }, 0);
+  }
+  if (ftCtxBtn) ftCtxBtn.addEventListener('click', function(e){ e.stopPropagation(); openCtxPop(); });
   var ftTokens = document.getElementById("ft-tokens");
   var ftCost = document.getElementById("ft-cost");
   var ftCache = document.getElementById("ft-cache");
@@ -229,7 +282,17 @@
   }, { passive: true });
   /* Disable autoscroll on user wheel/touch scroll up. */
   msgs.addEventListener("wheel", function(e){ if (e.deltaY < 0) stick = false; }, { passive: true });
-  function ascroll(){ if (stick) requestAnimationFrame(function(){ msgs.scrollTop = msgs.scrollHeight; }); else jumpBtn.classList.add("show"); }
+  /* Issue #143: while replaying buffered events on session switch-back,
+     suppress per-event RAF scroll-to-bottom; the replayEnd handler scrolls
+     exactly once at the end. Without this flag every replyDelta /
+     toolArgsDelta in the burst queues its own RAF, causing scrollbar
+     jitter and visible flashing. */
+  var _replaying = false;
+  function ascroll(){
+    if (_replaying) return;
+    if (stick) requestAnimationFrame(function(){ msgs.scrollTop = msgs.scrollHeight; });
+    else jumpBtn.classList.add("show");
+  }
 
   /* Auto narrow mode based on width (use webview container width, not full VS Code window) */
   function checkNarrow(){
@@ -1954,7 +2017,7 @@
     sbtn.textContent = busy ? "\u23F9" : "\u2191";
     sbtn.title = _stopping ? "\u6B63\u5728\u505C\u6B62\u2026" : (busy ? "\u505C\u6B62\u751F\u6210 (Esc)" : "\u53D1\u9001");
     sbtn.disabled = _stopping;
-    dot.className = "dot" + (busy ? " warn" : "");
+    if (dot) dot.className = "dot" + (busy ? " warn" : "");
     var pb = document.getElementById("prog");
     if (pb) pb.classList.toggle("on", busy);
     _renderStatus();
@@ -2749,6 +2812,9 @@
       renderPendingEdits(m.items || []);
     } else if (m.type === "usage"){
       bumpUsage(m.usage || {});
+    } else if (m.type === "ctxUsage"){
+      // Issue #142 P3-3: footer ring (replaces old top bar).
+      try { updateCtxRing(m.pct, m.tokens, m.window); } catch (_e) {}
     } else if (m.type === "progress"){
       if (m.phase) _curPhase = m.phase;
       _curTool = m.activeTool || "";
@@ -2804,20 +2870,16 @@
     } else if (m.type === "serverStatus"){
       sb.style.display = m.running ? "none" : "block";
       if (!m.running) sb.textContent = "⚠ 后端服务器未启动 — 发送时将自动启动";
-      dot.className = "dot" + (m.running ? "" : " err");
+      if (dot) dot.className = "dot" + (m.running ? "" : " err");
     } else if (m.type === "providersInfo"){
       applyProvidersInfo(m.providers);
     } else if (m.type === "modelInfo"){
       if (m.provider){ switchToProvider(m.provider); }
       if (m.model){
         setModelUI(m.model);
-        ftMode.textContent = _curIMode + " · " + m.model;
       }
       if (m.interactionMode){
         setIModeUI(m.interactionMode);
-        // refresh footer with updated interaction mode
-        var _curModel = (modelPicker && modelPicker.dataset.model) || "deepseek-v4-pro";
-        ftMode.textContent = m.interactionMode + " · " + _curModel;
       }
       if (m.approvalMode){ setModeUI(m.approvalMode); }
     } else if (m.type === "balanceUpdate"){
@@ -2850,6 +2912,16 @@
       sessions = m.items || []; activeSessionId = m.activeId || null;
       if (typeof m.currentWs === "string") currentWs = m.currentWs;
       renderSessions();
+    } else if (m.type === "replayStart"){
+      /* Issue #143: extension is about to flood us with buffered events
+         from a background session. Suppress per-event ascroll() so we
+         don't queue N RAF callbacks (visible scrollbar jitter / flash). */
+      _replaying = true;
+    } else if (m.type === "replayEnd"){
+      _replaying = false;
+      /* Scroll once, after the browser has applied all the DOM updates
+         from the burst. Use RAF so we run after layout. */
+      if (stick) requestAnimationFrame(function(){ msgs.scrollTop = msgs.scrollHeight; });
     } else if (m.type === "sessionLoaded"){
       activeSessionId = m.id || null;
       /* Only restore spinner timer if the extension confirms the run is still
