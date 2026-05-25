@@ -374,6 +374,10 @@ function _hasAttachment(m) {
 
 async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiConfig = null) {
     let working = messages;
+    // PR #155 review: track dedup and truncation separately so the returned
+    // `truncated` field keeps its original semantic ("tool results actually
+    // shortened") and dedup numbers don't pollute it.
+    let dedupCount = 0;
     let truncCount = 0;
     // Provider/model context for the modular token counter — issue #149.
     // apiConfig carries either { provider, model, apiKey, baseUrl } for the
@@ -403,7 +407,7 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
         const ded = dedupRepeatedReads(working);
         if (ded.replaced > 0) {
             working = ded.messages;
-            truncCount += ded.replaced;
+            dedupCount += ded.replaced;
         }
     }
 
@@ -412,16 +416,15 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
         const res = truncateLongToolResults(working);
         if (res.truncCount > 0) {
             working = res.messages;
-            // Issue #149 / PR #155 review: accumulate so the dedup count from
-            // Step 0 isn't lost when both steps run in the same compaction.
             truncCount += res.truncCount;
         }
     }
 
     if (measure(working) <= budgetTokens) {
-        return truncCount > 0
-            ? { messages: working, compacted: true,  dropped: 0, truncated: truncCount }
-            : { messages: working, compacted: false, dropped: 0, truncated: 0 };
+        const anyChange = (dedupCount + truncCount) > 0;
+        return anyChange
+            ? { messages: working, compacted: true,  dropped: 0, truncated: truncCount, deduped: dedupCount }
+            : { messages: working, compacted: false, dropped: 0, truncated: 0,          deduped: 0 };
     }
 
     // Step 2: head-drop.
@@ -432,9 +435,9 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     if (working.length <= keepTail + 2) {
         const fitted = _bodyTruncateUntilFits(working, budgetTokens, tokCtx);
         if (fitted.changed) {
-            return { messages: fitted.messages, compacted: true, dropped: 0, truncated: truncCount + fitted.count };
+            return { messages: fitted.messages, compacted: true, dropped: 0, truncated: truncCount + fitted.count, deduped: dedupCount };
         }
-        return { messages: working, compacted: truncCount > 0, dropped: 0, truncated: truncCount };
+        return { messages: working, compacted: (dedupCount + truncCount) > 0, dropped: 0, truncated: truncCount, deduped: dedupCount };
     }
 
     // Walk the split point backwards past any leading tool messages so the tail
@@ -444,7 +447,7 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     let splitIdx = working.length - keepTail;
     while (splitIdx > 0 && working[splitIdx].role === 'tool') splitIdx--;
     if (splitIdx <= 0) {
-        return { messages: working, compacted: truncCount > 0, dropped: 0, truncated: truncCount };
+        return { messages: working, compacted: (dedupCount + truncCount) > 0, dropped: 0, truncated: truncCount, deduped: dedupCount };
     }
 
     const tail = working.slice(splitIdx);
@@ -489,6 +492,7 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     if (!summaryBody) {
         const factLines = extractHeadFacts(toDropMsgs);
         summaryBody = `${dropped} messages dropped`;
+        if (dedupCount > 0) summaryBody += `, ${dedupCount} repeated reads collapsed`;
         if (truncCount > 0) summaryBody += `, ${truncCount} tool results truncated`;
         if (factLines.length > 0) summaryBody += `.\nKey events:\n${factLines.join('\n')}`;
     }
@@ -522,7 +526,7 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
             truncCount += fitted.count;
         }
     }
-    return { messages: out, compacted: true, dropped, truncated: truncCount };
+    return { messages: out, compacted: true, dropped, truncated: truncCount, deduped: dedupCount };
 }
 
 // ─── Body-truncate fallback ────────────────────────────────────────────────

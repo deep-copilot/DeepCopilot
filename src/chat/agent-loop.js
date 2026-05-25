@@ -333,7 +333,7 @@ class AgentLoop {
                     if (run.messages.length !== _before) {
                         Logger.info('ORPHAN_TOOLCALL_DROPPED', { sid, iter, before: _before, after: run.messages.length, site: 'autocompact' });
                     }
-                    Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped, truncated: compactRes.truncated, proactive: proactiveBudget !== COMPACT_BUDGET });
+                    Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped, truncated: compactRes.truncated, deduped: compactRes.deduped, proactive: proactiveBudget !== COMPACT_BUDGET });
                     this._postToRun(run, { type: 'status', text: isZh() ? '🗜 压缩历史…' : 'Compacting history…' });
                     postProgress('compacting');
                 }
