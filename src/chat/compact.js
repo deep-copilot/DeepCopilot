@@ -7,9 +7,12 @@
 'use strict';
 
 // ─── Token estimator ───────────────────────────────────────────────────────
-// Token counting is now delegated to `src/api/token-counter`, which dispatches
-// to a provider-aware tokenizer (tiktoken for OpenAI-compatible vendors,
-// official Anthropic SDK for Claude, char-based heuristic as universal fallback).
+// Token counting is delegated to `src/api/token-counter`, which dispatches to
+// a provider-aware tokenizer:
+//   - tiktoken for OpenAI-compatible vendors (DeepSeek / OpenAI / Groq / …)
+//   - char-based heuristic as the universal fallback (and the SYNC path for
+//     Anthropic — exact Anthropic counts are network-only and live on
+//     `countMessagesAsync`, which this estimator does NOT call).
 // See issue #149.
 //
 // The legacy `estimateTokens(text)` / `estimateMessagesTokens(messages)`
@@ -372,6 +375,23 @@ function _hasAttachment(m) {
 //
 // Returns { messages, compacted, dropped, truncated }
 
+/**
+ * Auto-compact a message history when it approaches the budget.
+ *
+ * Pipeline (each step is conditional on the previous one still being over budget):
+ *   0. dedup repeated file reads (lossless — collapses earlier copies)
+ *   1. truncate long tool-result bodies
+ *   2. head-drop with summary (optional LLM-backed via apiConfig)
+ *   3. body-truncate fallback for single oversized messages
+ *
+ * @returns {{
+ *   messages: Array,
+ *   compacted: boolean,
+ *   dropped: number,    // # of head messages dropped in step 2
+ *   truncated: number,  // # of tool results whose bodies were shortened
+ *   deduped: number,    // # of earlier duplicate read tool results collapsed
+ * }}
+ */
 async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiConfig = null) {
     let working = messages;
     // PR #155 review: track dedup and truncation separately so the returned
