@@ -44,8 +44,10 @@ async function countMessagesAsync(messages, ctx = {}) {
         // produce a subtly different endpoint than the streaming client.
         const normalizedBaseUrl = baseUrl ? String(baseUrl).replace(/\/$/, '') : undefined;
         const client = new Anthropic({ apiKey, baseURL: normalizedBaseUrl });
-        // Convert OpenAI-style messages → Anthropic format using the existing helper.
-        const { convertMessages } = require('../anthropic-client');
+        // Convert OpenAI-style messages → Anthropic format using the
+        // pure converter (no `vscode` / logger side effects), so this
+        // async path stays usable outside the extension host.
+        const { convertMessages } = require('../anthropic-convert');
         const { system, messages: anthMsgs } = convertMessages(messages);
         const res = await client.beta.messages.countTokens({
             model,
