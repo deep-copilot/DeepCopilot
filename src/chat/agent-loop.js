@@ -338,18 +338,23 @@ class AgentLoop {
                     postProgress('compacting');
                 }
 
-                // Issue #142 P3-3: broadcast context usage so the webview can
-                // render a real-time usage bar.  Cheap to compute since the
-                // estimator was just run inside autoCompactIfNeeded above.
+                // Issue #142 P3-3 / #149: broadcast context usage so the webview can
+                // render a real-time usage bar. With provider-aware tokenization
+                // (tiktoken) this is no longer free, so we compute the count once
+                // per iteration here and reuse it below for ITER_START logging and
+                // the preflight cap when no plan/verify-nudge messages get appended
+                // in between.
+                const tokCtx = { provider, model };
+                let ctxUsageMsgs = [{ role: 'system', content: sysPrompt }, ...run.messages];
+                let ctxUsageTokens = 0;
                 try {
-                    const tokCtx = { provider, model };
-                    const ctxTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages], tokCtx);
+                    ctxUsageTokens = estimateMessagesTokens(ctxUsageMsgs, tokCtx);
                     const ctxWindow = modelCfg.contextWindow || 65536;
                     this._postToRun(run, {
                         type: 'ctxUsage',
-                        tokens: ctxTokens,
+                        tokens: ctxUsageTokens,
                         window: ctxWindow,
-                        pct: Math.min(100, Math.round(ctxTokens / ctxWindow * 100)),
+                        pct: Math.min(100, Math.round(ctxUsageTokens / ctxWindow * 100)),
                     });
                 } catch { /* never block the loop on a UI broadcast */ }
                 checkAbort();
@@ -393,8 +398,17 @@ class AgentLoop {
                 const msgs = [{ role: 'system', content: effectiveSysPrompt }, ...run.messages];
                 let assistantText = '';
                 let reasoningText = '';
-                const tokCtx = { provider, model };
-                Logger.info('ITER_START', { sid, iter, msg_count: msgs.length, est_tokens: estimateMessagesTokens(msgs, tokCtx) });
+                // Issue #149: avoid tokenizing the same array twice. If no
+                // plan / verify-nudge appended messages since ctxUsageMsgs was
+                // built (and the system prompt is identical), reuse the count;
+                // otherwise recompute.
+                let msgsTokens;
+                if (run.messages.length === ctxUsageMsgs.length - 1 && effectiveSysPrompt === sysPrompt) {
+                    msgsTokens = ctxUsageTokens;
+                } else {
+                    msgsTokens = estimateMessagesTokens(msgs, tokCtx);
+                }
+                Logger.info('ITER_START', { sid, iter, msg_count: msgs.length, est_tokens: msgsTokens });
 
                 // Pre-flight hard token cap — prevents HTTP 400 context-too-long errors.
                 // MODEL_CTX_HARD_LIMIT is derived from the active model's contextWindow
@@ -404,7 +418,7 @@ class AgentLoop {
                 // fallback.  We NEVER bail out with a CTX_LIMIT error — if nothing
                 // else fits, nuclearCompact() reduces history to {firstUser +
                 // summary + lastUser} and we continue the turn.
-                let preflightTokens = estimateMessagesTokens(msgs, tokCtx);
+                let preflightTokens = msgsTokens;
                 if (preflightTokens > MODEL_CTX_HARD_LIMIT) {
                     // Aggressive ladder — try increasingly small tails before going nuclear.
                     const ladder = [8, 6, 4, 2, 1];

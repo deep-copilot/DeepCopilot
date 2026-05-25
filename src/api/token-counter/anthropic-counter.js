@@ -25,7 +25,11 @@ async function countMessagesAsync(messages, ctx = {}) {
     try {
         // Lazy require — keeps cold-start cost out of the sync path.
         const Anthropic = require('@anthropic-ai/sdk');
-        const client = new Anthropic({ apiKey, baseURL: baseUrl || undefined });
+        // Normalize baseURL the same way `src/api/anthropic-client.js` does
+        // (strip trailing slash) so a stray `/` in user configuration cannot
+        // produce a subtly different endpoint than the streaming client.
+        const normalizedBaseUrl = baseUrl ? String(baseUrl).replace(/\/$/, '') : undefined;
+        const client = new Anthropic({ apiKey, baseURL: normalizedBaseUrl });
         // Convert OpenAI-style messages → Anthropic format using the existing helper.
         const { convertMessages } = require('../anthropic-client');
         const { system, messages: anthMsgs } = convertMessages(messages);

@@ -9,9 +9,16 @@
 // and optionally `countMessagesAsync` (when an exact count requires a
 // network call, e.g. Anthropic's beta endpoint).
 //
+// IMPORTANT: synchronous counters NEVER make network calls. Concretely:
+//   - OpenAI-compatible providers run a local `js-tiktoken` BPE pass.
+//   - Anthropic's sync path uses the char heuristic; only `countMessagesAsync`
+//     hits `client.beta.messages.countTokens()` for an exact count.
+// Callers that absolutely need accuracy for Claude should `await
+// countMessagesAsync(...)` instead of relying on the sync API.
+//
 // Dispatcher contract:
-//   countText(text, { provider, model })           → number
-//   countMessages(messages, { provider, model })   → number      (sync, never throws)
+//   countText(text, { provider, model })           → number       (sync, never throws)
+//   countMessages(messages, { provider, model })   → number       (sync, never throws)
 //   countMessagesAsync(messages, { provider, model, apiKey, baseUrl }) → Promise<number>
 //
 // Adding a new provider:

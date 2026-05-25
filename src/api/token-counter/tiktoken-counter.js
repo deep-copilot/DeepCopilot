@@ -89,8 +89,11 @@ function countMessages(messages, ctx = {}) {
         }
         if (m.name)         n += _encodeLen(enc, m.name);
         if (m.tool_call_id) n += _encodeLen(enc, m.tool_call_id);
-        // Per-message structural overhead — approximation of OpenAI's
-        // <|im_start|>role…<|im_end|> framing (~3-4 tokens per message).
+        // Per-message structural overhead — OpenAI's <|im_start|>role…<|im_end|>
+        // framing is ~3-4 tokens, but tool messages can be heavier; we use a
+        // single conservative constant from `heuristic.PER_MESSAGE_OVERHEAD`
+        // (currently 8) for consistency with the heuristic fallback and to
+        // bias slightly toward early compaction over context-overflow errors.
         n += heuristic.PER_MESSAGE_OVERHEAD;
     }
     return n;

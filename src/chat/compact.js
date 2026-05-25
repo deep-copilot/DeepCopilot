@@ -383,7 +383,17 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     const tokCtx = apiConfig
         ? { provider: apiConfig.provider, model: apiConfig.model }
         : undefined;
-    const measure = (msgs) => estimateMessagesTokens(msgs, tokCtx);
+    // Token counting can be expensive with tiktoken on large histories, so
+    // memoise per `working` reference: every mutation re-assigns `working`,
+    // which invalidates the cache automatically.
+    let _measureRef = null;
+    let _measureVal = 0;
+    const measure = (msgs) => {
+        if (msgs === _measureRef) return _measureVal;
+        _measureVal = estimateMessagesTokens(msgs, tokCtx);
+        _measureRef = msgs;
+        return _measureVal;
+    };
 
     // Step 0 (Issue #142 P1-3): dedup repeated file reads — cheap, lossless
     // (latest copy preserved), runs before token measurement.
