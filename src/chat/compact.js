@@ -396,7 +396,9 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     };
 
     // Step 0 (Issue #142 P1-3): dedup repeated file reads — cheap, lossless
-    // (latest copy preserved), runs before token measurement.
+    // (latest copy preserved).  Only runs when the current token estimate is
+    // already above 80% of budget, so the dedup pass itself is paid for by
+    // the savings it produces.
     if (measure(working) > budgetTokens * 0.8) {
         const ded = dedupRepeatedReads(working);
         if (ded.replaced > 0) {
