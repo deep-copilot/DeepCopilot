@@ -342,7 +342,8 @@ class AgentLoop {
                 // render a real-time usage bar.  Cheap to compute since the
                 // estimator was just run inside autoCompactIfNeeded above.
                 try {
-                    const ctxTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
+                    const tokCtx = { provider, model };
+                    const ctxTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages], tokCtx);
                     const ctxWindow = modelCfg.contextWindow || 65536;
                     this._postToRun(run, {
                         type: 'ctxUsage',
@@ -392,7 +393,8 @@ class AgentLoop {
                 const msgs = [{ role: 'system', content: effectiveSysPrompt }, ...run.messages];
                 let assistantText = '';
                 let reasoningText = '';
-                Logger.info('ITER_START', { sid, iter, msg_count: msgs.length, est_tokens: estimateMessagesTokens(msgs) });
+                const tokCtx = { provider, model };
+                Logger.info('ITER_START', { sid, iter, msg_count: msgs.length, est_tokens: estimateMessagesTokens(msgs, tokCtx) });
 
                 // Pre-flight hard token cap — prevents HTTP 400 context-too-long errors.
                 // MODEL_CTX_HARD_LIMIT is derived from the active model's contextWindow
@@ -402,13 +404,15 @@ class AgentLoop {
                 // fallback.  We NEVER bail out with a CTX_LIMIT error — if nothing
                 // else fits, nuclearCompact() reduces history to {firstUser +
                 // summary + lastUser} and we continue the turn.
-                let preflightTokens = estimateMessagesTokens(msgs);
+                let preflightTokens = estimateMessagesTokens(msgs, tokCtx);
                 if (preflightTokens > MODEL_CTX_HARD_LIMIT) {
                     // Aggressive ladder — try increasingly small tails before going nuclear.
                     const ladder = [8, 6, 4, 2, 1];
                     for (const emergencyKeepTail of ladder) {
                         // No LLM summarisation during emergency compaction — speed is critical.
-                        const agg = await autoCompactIfNeeded(run.messages, Math.floor(MODEL_CTX_HARD_LIMIT * 0.6), emergencyKeepTail, null);
+                        // Pass provider/model so the modular token counter still picks the
+                        // right tokenizer (issue #149).
+                        const agg = await autoCompactIfNeeded(run.messages, Math.floor(MODEL_CTX_HARD_LIMIT * 0.6), emergencyKeepTail, { provider, model, noSummary: true });
                         if (agg.compacted) {
                             // Issue #145: never let a compaction-induced orphan
                             // group leak into the next API call.
@@ -420,7 +424,7 @@ class AgentLoop {
                             Logger.info('PREFLIGHT_COMPACT', { sid, iter, before: preflightTokens, keepTail: emergencyKeepTail, dropped: agg.dropped, truncated: agg.truncated });
                             this._postToRun(run, { type: 'status', text: isZh() ? '⚠️ 上下文接近上限，已紧急压缩历史…' : 'Context near limit — emergency compaction applied…' });
                         }
-                        const newTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
+                        const newTokens = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages], tokCtx);
                         if (newTokens <= MODEL_CTX_HARD_LIMIT) { preflightTokens = newTokens; break; }
                         preflightTokens = newTokens;
                     }
@@ -440,7 +444,7 @@ class AgentLoop {
                         if (run.messages.length !== _nuked.length) {
                             Logger.info('ORPHAN_TOOLCALL_DROPPED', { sid, iter, before: _nuked.length, after: run.messages.length, site: 'nuclear' });
                         }
-                        const after = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages]);
+                        const after = estimateMessagesTokens([{ role: 'system', content: sysPrompt }, ...run.messages], tokCtx);
                         Logger.info('NUCLEAR_COMPACT', { sid, iter, before, after });
                         this._postToRun(run, {
                             type: 'status',

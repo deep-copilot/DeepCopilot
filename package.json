@@ -367,6 +367,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
+    "js-tiktoken": "^1.0.21",
     "openai": "^6.38.0"
   },
   "devDependencies": {

@@ -288,4 +288,4 @@ async function testConnection({ apiKey, baseUrl, model }) {
     }
 }
 
-module.exports = { streamChat, testConnection };
+module.exports = { streamChat, testConnection, convertMessages, convertTools };
