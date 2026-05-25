@@ -7,32 +7,28 @@
 'use strict';
 
 // ─── Token estimator ───────────────────────────────────────────────────────
-// CJK characters (Chinese / Japanese / Korean) tokenize at ~1.5 chars/token;
-// Latin text and code at ~3.6 chars/token.
+// Token counting is delegated to `src/api/token-counter`, which dispatches to
+// a provider-aware tokenizer:
+//   - tiktoken for OpenAI-compatible vendors (DeepSeek / OpenAI / Groq / …)
+//   - char-based heuristic as the universal fallback (and the SYNC path for
+//     Anthropic — exact Anthropic counts are network-only and live on
+//     `countMessagesAsync`, which this estimator does NOT call).
+// See issue #149.
+//
+// The legacy `estimateTokens(text)` / `estimateMessagesTokens(messages)`
+// signatures are preserved for backwards compatibility; pass an optional
+// `ctx = { provider, model }` to get a provider-specific estimate, otherwise
+// the heuristic is used.
 // Used only for autoCompact triggers, never for billing.
 
-function estimateTokens(text) {
-    if (!text) return 0;
-    const str = String(text);
-    // Unicode ranges: CJK Unified Ideographs, Hiragana/Katakana, Hangul, CJK Compatibility
-    const cjkCount = (str.match(/[\u3000-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]/g) || []).length;
-    const otherCount = str.length - cjkCount;
-    // CJK chars: ~1 char/token (conservative: 1.0 denominator = 1 token per char);
-    // Latin/code: ~3.6 chars/token.
-    return Math.ceil(cjkCount / 1.0 + otherCount / 3.6);
+const tokenCounter = require('../api/token-counter');
+
+function estimateTokens(text, ctx) {
+    return tokenCounter.countText(text, ctx);
 }
 
-function estimateMessagesTokens(messages) {
-    let n = 0;
-    for (const m of messages) {
-        if (typeof m.content === 'string') n += estimateTokens(m.content);
-        else if (Array.isArray(m.content)) {
-            for (const p of m.content) if (p && typeof p.text === 'string') n += estimateTokens(p.text);
-        }
-        if (m.tool_calls) for (const tc of m.tool_calls) n += estimateTokens(tc.function?.arguments || '');
-        n += 8; // role + structural overhead
-    }
-    return n;
+function estimateMessagesTokens(messages, ctx) {
+    return tokenCounter.countMessages(messages, ctx);
 }
 
 // ─── Tool-result truncation ────────────────────────────────────────────────
@@ -379,33 +375,76 @@ function _hasAttachment(m) {
 //
 // Returns { messages, compacted, dropped, truncated }
 
+/**
+ * Auto-compact a message history when it approaches the budget.
+ *
+ * Pipeline (each step is conditional on the previous one still being over budget):
+ *   0. dedup repeated file reads (lossless — collapses earlier copies)
+ *   1. truncate long tool-result bodies
+ *   2. head-drop with summary (optional LLM-backed via apiConfig)
+ *   3. body-truncate fallback for single oversized messages
+ *
+ * @returns {{
+ *   messages: Array,
+ *   compacted: boolean,
+ *   dropped: number,    // # of head messages dropped in step 2
+ *   truncated: number,  // # of tool results whose bodies were shortened
+ *   deduped: number,    // # of earlier duplicate read tool results collapsed
+ * }}
+ */
 async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiConfig = null) {
     let working = messages;
+    // PR #155 review: track dedup and truncation separately so the returned
+    // `truncated` field keeps its original semantic ("tool results actually
+    // shortened") and dedup numbers don't pollute it.
+    let dedupCount = 0;
     let truncCount = 0;
+    // Provider/model context for the modular token counter — issue #149.
+    // apiConfig carries either { provider, model, apiKey, baseUrl } for the
+    // full path (token counting + LLM summarisation), or { provider, model,
+    // noSummary: true } for emergency paths that want provider-aware token
+    // counting without firing a network summary request.
+    const tokCtx = apiConfig
+        ? { provider: apiConfig.provider, model: apiConfig.model }
+        : undefined;
+    // Token counting can be expensive with tiktoken on large histories, so
+    // memoise per `working` reference: every mutation re-assigns `working`,
+    // which invalidates the cache automatically.
+    let _measureRef = null;
+    let _measureVal = 0;
+    const measure = (msgs) => {
+        if (msgs === _measureRef) return _measureVal;
+        _measureVal = estimateMessagesTokens(msgs, tokCtx);
+        _measureRef = msgs;
+        return _measureVal;
+    };
 
     // Step 0 (Issue #142 P1-3): dedup repeated file reads — cheap, lossless
-    // (latest copy preserved), runs before token measurement.
-    if (estimateMessagesTokens(working) > budgetTokens * 0.8) {
+    // (latest copy preserved).  Only runs when the current token estimate is
+    // already above 80% of budget, so the dedup pass itself is paid for by
+    // the savings it produces.
+    if (measure(working) > budgetTokens * 0.8) {
         const ded = dedupRepeatedReads(working);
         if (ded.replaced > 0) {
             working = ded.messages;
-            truncCount += ded.replaced;
+            dedupCount += ded.replaced;
         }
     }
 
     // Step 1: truncate long tool results to recover tokens without dropping messages.
-    if (estimateMessagesTokens(working) > budgetTokens) {
+    if (measure(working) > budgetTokens) {
         const res = truncateLongToolResults(working);
         if (res.truncCount > 0) {
             working = res.messages;
-            truncCount = res.truncCount;
+            truncCount += res.truncCount;
         }
     }
 
-    if (estimateMessagesTokens(working) <= budgetTokens) {
-        return truncCount > 0
-            ? { messages: working, compacted: true,  dropped: 0, truncated: truncCount }
-            : { messages: working, compacted: false, dropped: 0, truncated: 0 };
+    if (measure(working) <= budgetTokens) {
+        const anyChange = (dedupCount + truncCount) > 0;
+        return anyChange
+            ? { messages: working, compacted: true,  dropped: 0, truncated: truncCount, deduped: dedupCount }
+            : { messages: working, compacted: false, dropped: 0, truncated: 0,          deduped: 0 };
     }
 
     // Step 2: head-drop.
@@ -414,11 +453,11 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     // single oversized message (e.g. a 100KB read_file or huge first user prompt)
     // can still be brought back under budget.
     if (working.length <= keepTail + 2) {
-        const fitted = _bodyTruncateUntilFits(working, budgetTokens);
+        const fitted = _bodyTruncateUntilFits(working, budgetTokens, tokCtx);
         if (fitted.changed) {
-            return { messages: fitted.messages, compacted: true, dropped: 0, truncated: truncCount + fitted.count };
+            return { messages: fitted.messages, compacted: true, dropped: 0, truncated: truncCount + fitted.count, deduped: dedupCount };
         }
-        return { messages: working, compacted: truncCount > 0, dropped: 0, truncated: truncCount };
+        return { messages: working, compacted: (dedupCount + truncCount) > 0, dropped: 0, truncated: truncCount, deduped: dedupCount };
     }
 
     // Walk the split point backwards past any leading tool messages so the tail
@@ -428,7 +467,7 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     let splitIdx = working.length - keepTail;
     while (splitIdx > 0 && working[splitIdx].role === 'tool') splitIdx--;
     if (splitIdx <= 0) {
-        return { messages: working, compacted: truncCount > 0, dropped: 0, truncated: truncCount };
+        return { messages: working, compacted: (dedupCount + truncCount) > 0, dropped: 0, truncated: truncCount, deduped: dedupCount };
     }
 
     const tail = working.slice(splitIdx);
@@ -466,13 +505,14 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
 
     // Step 3: produce summary content — LLM first, structured fallback.
     let summaryBody = '';
-    if (apiConfig && toDropMsgs.length > 0) {
+    if (apiConfig && !apiConfig.noSummary && toDropMsgs.length > 0) {
         const llmText = await summariseHead(toDropMsgs, apiConfig);
         if (llmText) summaryBody = llmText;
     }
     if (!summaryBody) {
         const factLines = extractHeadFacts(toDropMsgs);
         summaryBody = `${dropped} messages dropped`;
+        if (dedupCount > 0) summaryBody += `, ${dedupCount} repeated reads collapsed`;
         if (truncCount > 0) summaryBody += `, ${truncCount} tool results truncated`;
         if (factLines.length > 0) summaryBody += `.\nKey events:\n${factLines.join('\n')}`;
     }
@@ -499,14 +539,14 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
     // firstUser or the tail contains a huge attachment / read_file payload),
     // perform body-truncation on the kept messages so we never return with
     // tokens > budget when there is content we could shrink.
-    if (estimateMessagesTokens(out) > budgetTokens) {
-        const fitted = _bodyTruncateUntilFits(out, budgetTokens);
+    if (measure(out) > budgetTokens) {
+        const fitted = _bodyTruncateUntilFits(out, budgetTokens, tokCtx);
         if (fitted.changed) {
             out = fitted.messages;
             truncCount += fitted.count;
         }
     }
-    return { messages: out, compacted: true, dropped, truncated: truncCount };
+    return { messages: out, compacted: true, dropped, truncated: truncCount, deduped: dedupCount };
 }
 
 // ─── Body-truncate fallback ────────────────────────────────────────────────
@@ -515,7 +555,7 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
 // minimum floor.  Used by autoCompactIfNeeded when head-dropping cannot
 // reduce the working set further (single oversized message, or first-user
 // anchor that exceeds budget on its own).
-function _bodyTruncateUntilFits(messages, budgetTokens) {
+function _bodyTruncateUntilFits(messages, budgetTokens, ctx) {
     const tiers = [
         { head: 1200, tail: 400, threshold: 2000 },
         { head: 600,  tail: 200, threshold: 1200 },
@@ -527,7 +567,7 @@ function _bodyTruncateUntilFits(messages, budgetTokens) {
     let changed = false;
     let count = 0;
     for (const tier of tiers) {
-        if (estimateMessagesTokens(cur) <= budgetTokens) break;
+        if (estimateMessagesTokens(cur, ctx) <= budgetTokens) break;
         const next = cur.map(m => {
             // Apply to ANY role — tool / user / assistant — when content is large.
             // The firstUser anchor is intentionally NOT exempt at this stage:
