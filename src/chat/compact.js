@@ -410,7 +410,9 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
         const res = truncateLongToolResults(working);
         if (res.truncCount > 0) {
             working = res.messages;
-            truncCount = res.truncCount;
+            // Issue #149 / PR #155 review: accumulate so the dedup count from
+            // Step 0 isn't lost when both steps run in the same compaction.
+            truncCount += res.truncCount;
         }
     }
 
