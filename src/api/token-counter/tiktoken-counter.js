@@ -13,7 +13,24 @@
 'use strict';
 
 const heuristic = require('./heuristic');
-const { Logger } = require('../../logger');
+
+// Lazy, environment-agnostic logger.  `src/logger.js` requires `vscode` at
+// module load, so a static `require('../../logger')` here would force the
+// entire token-counter / compaction layer to depend on the VS Code extension
+// host (see PR #155 review feedback).  Instead we resolve Logger on first
+// use and silently no-op if `vscode` isn't available (plain Node, tests).
+let _loggerCache = null;
+let _loggerTried = false;
+function _log(event, payload) {
+    if (!_loggerTried) {
+        _loggerTried = true;
+        try { _loggerCache = require('../../logger').Logger; }
+        catch { _loggerCache = null; }
+    }
+    if (_loggerCache) {
+        try { _loggerCache.info(event, payload); } catch { /* ignore */ }
+    }
+}
 
 let _tiktoken = null;       // resolved js-tiktoken module (or null if missing)
 let _tiktokenLoaded = false;
@@ -24,9 +41,9 @@ function _loadTiktoken() {
     _tiktokenLoaded = true;
     try {
         _tiktoken = require('js-tiktoken');
-        Logger.info('TIKTOKEN_LOADED', { ok: true });
+        _log('TIKTOKEN_LOADED', { ok: true });
     } catch (e) {
-        Logger.info('TIKTOKEN_UNAVAILABLE', { reason: e.message });
+        _log('TIKTOKEN_UNAVAILABLE', { reason: e.message });
         _tiktoken = null;
     }
     return _tiktoken;
@@ -47,7 +64,7 @@ function _getEncoder(encodingName) {
         _encoderCache.set(encodingName, enc);
         return enc;
     } catch (e) {
-        Logger.info('TIKTOKEN_ENCODING_FAIL', { encodingName, error: e.message });
+        _log('TIKTOKEN_ENCODING_FAIL', { encodingName, error: e.message });
         return null;
     }
 }

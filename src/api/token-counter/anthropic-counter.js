@@ -7,7 +7,21 @@
 'use strict';
 
 const heuristic = require('./heuristic');
-const { Logger } = require('../../logger');
+
+// Lazy, environment-agnostic logger — see tiktoken-counter.js for the
+// rationale (avoids dragging `vscode` into the token-counter layer).
+let _loggerCache = null;
+let _loggerTried = false;
+function _log(event, payload) {
+    if (!_loggerTried) {
+        _loggerTried = true;
+        try { _loggerCache = require('../../logger').Logger; }
+        catch { _loggerCache = null; }
+    }
+    if (_loggerCache) {
+        try { _loggerCache.info(event, payload); } catch { /* ignore */ }
+    }
+}
 
 function countText(text) {
     return heuristic.countText(text);
@@ -40,7 +54,7 @@ async function countMessagesAsync(messages, ctx = {}) {
         });
         if (res && typeof res.input_tokens === 'number') return res.input_tokens;
     } catch (e) {
-        Logger.info('ANTHROPIC_COUNT_TOKENS_FAIL', { error: e.message });
+        _log('ANTHROPIC_COUNT_TOKENS_FAIL', { error: e.message });
     }
     return heuristic.countMessages(messages);
 }
