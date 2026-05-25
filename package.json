@@ -367,7 +367,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
-    "openai": "^6.38.0"
+    "openai": "^6.39.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
