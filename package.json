@@ -366,7 +366,7 @@
     "test": "node scripts/test-orphan-toolcalls.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.96.0",
+    "@anthropic-ai/sdk": "^0.98.0",
     "js-tiktoken": "^1.0.21",
     "openai": "^6.38.0"
   },
