@@ -204,21 +204,24 @@ class SessionStore {
 
         if (apiMessages !== undefined) {
             const MAX_API = 200;
-            const stripped = Array.isArray(apiMessages) ? apiMessages.map(m => {
-                if (!m.reasoning_content) return m;
-                const { reasoning_content, ...rest } = m; // eslint-disable-line no-unused-vars
-                return rest;
-            }) : [];
+            // reasoning_content is intentionally kept here.  Stripping it at
+            // persist time caused HTTP 400 ("reasoning_content must be passed
+            // back") when a session was reloaded after a VS Code restart —
+            // the in-memory run was gone, messages came back from storage
+            // without the field, and DeepSeek rejected the next turn.
+            // sanitizeMessages() in adapter.js already handles per-model
+            // stripping at API-call time, so we don't need to do it here.
+            const messagesToPersist = Array.isArray(apiMessages) ? [...apiMessages] : [];
             // Truncate to the last MAX_API messages, but never start with an
             // orphan `tool` message — DeepSeek requires every tool message to
             // follow its assistant{tool_calls}. See issue #70.
-            let sanitized = stripped;
-            if (stripped.length > MAX_API) {
-                let startIdx = stripped.length - MAX_API;
-                while (startIdx < stripped.length && stripped[startIdx].role === 'tool') {
+            let sanitized = messagesToPersist;
+            if (messagesToPersist.length > MAX_API) {
+                let startIdx = messagesToPersist.length - MAX_API;
+                while (startIdx < messagesToPersist.length && messagesToPersist[startIdx].role === 'tool') {
                     startIdx++;
                 }
-                sanitized = stripped.slice(startIdx);
+                sanitized = messagesToPersist.slice(startIdx);
             }
             // Drop ANY orphan assistant{tool_calls} group (head/middle/tail)
             // so a mid-turn interruption or a slice-induced split never

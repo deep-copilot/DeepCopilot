@@ -883,6 +883,18 @@ class AgentLoop {
                     }
                 } // end Phase 3 for-loop
 
+                // Phase 3b: flush any skill_invoke-deferred synthetic read_file pairs.
+                // skill_invoke no longer injects inline (doing so mid-block broke the
+                // contiguous tool-call sequence and caused _dropOrphanToolCallGroups to
+                // drop the real assistant message + its reasoning_content).  Instead it
+                // queues the injection here, after all real tool results are in place.
+                if (Array.isArray(run._pendingSkillInjections) && run._pendingSkillInjections.length) {
+                    for (const { name, body, skillPath } of run._pendingSkillInjections) {
+                        injectSyntheticSkillRead(run.messages, name, body, skillPath);
+                    }
+                    run._pendingSkillInjections = [];
+                }
+
                 // Append deferred hints after all tool messages — preserves the required
                 // API sequence: assistant{tool_calls} → N×tool → (optional) user hints.
                 for (const hint of pendingHints) run.messages.push(hint);

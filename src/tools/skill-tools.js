@@ -14,11 +14,6 @@ const path = require('path');
 
 const { discoverSkills, DEEPCOPILOT_SKILLS_DIR } = require('../skills');
 const { wsRoot } = require('../utils/paths');
-// Lazy-require to avoid module-load cycles via tool-executor.js.
-function _injectSkill(messages, name, body, skillPath) {
-    const { injectSyntheticSkillRead } = require('../chat/agent-loop');
-    return injectSyntheticSkillRead(messages, name, body, skillPath);
-}
 
 // ─── skill_invoke ────────────────────────────────────────────────────────────
 
@@ -54,7 +49,17 @@ function skillInvoke(args, run) {
     // Pass the real on-disk path so the synthetic read_file call reflects the
     // actual source location (may be ~/.claude/skills/ or ~/.copilot/skills/).
     const realSkillPath = path.join(s.dir, s.name, 'SKILL.md');
-    _injectSkill(run.messages, s.name, body, realSkillPath);
+
+    // Defer the synthetic read_file pair injection to AFTER all real tool
+    // results for the current assistant turn have been pushed.  Injecting
+    // inline here (during Phase 2 execution) would insert the synthetic
+    // assistant{read_file}+tool pair between the real assistant message and
+    // its pending tool results, breaking the contiguous block requirement and
+    // causing _dropOrphanToolCallGroups to discard the original assistant
+    // message — along with any reasoning_content it carried.
+    if (!Array.isArray(run._pendingSkillInjections)) run._pendingSkillInjections = [];
+    run._pendingSkillInjections.push({ name: s.name, body, skillPath: realSkillPath });
+
     return `Loaded skill "${s.name}" (${s.source}/${s.trust}). The SOP is now in your context as a synthetic read_file result — follow it to complete the user's task.`;
 }
 
