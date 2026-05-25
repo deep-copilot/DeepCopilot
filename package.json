@@ -378,7 +378,7 @@
     "dompurify": "^3.4.2",
     "esbuild": "^0.28.0",
     "eslint": "^8.57.0",
-    "katex": "^0.16.45"
+    "katex": "^0.17.0"
   },
   "overrides": {
     "qs": "^6.15.2"
