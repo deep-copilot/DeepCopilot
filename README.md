@@ -99,6 +99,8 @@ You only need the following keys to get started — at minimum just the first on
 | **Inline FIM completions** — DeepSeek ghost-text suggestions as you type; `Tab` to accept; off by default (`deepCopilot.inlineCompletion.enable`) | **行内 FIM 补全**：基于 DeepSeek 的编辑器幽灵文字建议，`Tab` 接受；默认关闭，开关：`deepCopilot.inlineCompletion.enable` |
 | **Plan mode** — read-only investigation mode; agent can read/search but never write or run shell commands | **Plan 只读模式**：仅允许读文件/搜索，拒绝任何写操作，适合调查代码结构时使用 |
 | **Ecosystem AI-rule discovery** — auto-injects `DEEPCOPILOT.md`, `.github/copilot-instructions.md`, `AGENTS.md`, `.cursor/rules/*.mdc`, `CLAUDE.md` | **项目规则自动发现**：自动注入工作区下的主流 AI 规则文件（GitHub Copilot / Cursor / Claude 等），让模型了解项目约定 |
+| **Context window management** *(new in 0.41.0)* — structure-aware truncation, per-file dedup, rolling summary; `/compact [focus]` force-compacts, `/context` opens a token breakdown, `/fork [name]` branches a new session from any message | **上下文窗口管理** *(0.41.0 新增)*：结构感知截断、同文件去重、滚动摘要；`/compact [focus]` 立即压缩，`/context` 查看 token 占用细分，`/fork [name]` 从任一消息派生新会话 |
+| **Footer context ring** *(new in 0.41.0)* — ring indicator next to the footer ramps green → yellow → orange → red across 60 / 85 / 100% thresholds; click to open the same breakdown as `/context` | **底部 Context Ring** *(0.41.0 新增)*：底栏环形进度指示，按 60% / 85% / 100% 阈值由绿渐变到红；点击展开与 `/context` 一致的占用细分 |
 
 ---
 
