@@ -30,6 +30,16 @@ function skillInvoke(args, run) {
     const all = discoverSkills(wsRoot());
     const s = all.find(x => x.name === name);
     if (!s) {
+        // Issue #146 follow-up: when the model fabricates a call to a
+        // skill-creator meta-skill that isn't actually installed, return a
+        // soft notice instead of an error so the agent can simply proceed
+        // with `skill_create` (the executor-side gate is a no-op when no
+        // meta-skill is installed). This prevents the confusing
+        // "skill 'skill-creator' not found" failure users frequently see.
+        const variants = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
+        if (variants.has(name.toLowerCase())) {
+            return 'Notice: no skill-creator meta-skill is installed in this environment. The skill_create quality gate is inactive here — you may proceed to call `skill_create` directly when appropriate.';
+        }
         const known = all.map(x => x.name).join(', ') || '(none installed)';
         return `Error: skill "${name}" not found. Available: ${known}`;
     }

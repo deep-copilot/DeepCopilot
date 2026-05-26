@@ -269,6 +269,21 @@ function readSkillIndex() {
 // Issue #61 — Step 6 + Step 7.
 
 function getProblemSolvingParadigm() {
+    // Issue #146 — only mention the skill-creator hard gate when a meta-skill
+    // is actually installed. Otherwise the model fabricates a skill_invoke
+    // call to a non-existent "skill-creator", producing a confusing error.
+    let skillCreatorInstalled = false;
+    try {
+        const { discoverSkills } = require('../skills');
+        const all = discoverSkills(wsRoot());
+        const variants = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
+        skillCreatorInstalled = all.some(s => variants.has(String(s && s.name || '').toLowerCase()));
+    } catch { /* ignore — treat as not installed */ }
+
+    const gateParagraph = skillCreatorInstalled
+        ? `\n\n**Issue #146 — skill_create quality gate**: A meta-skill matching \`skill-creator\` (or variant) is installed locally. You MUST call \`skill_invoke({ name: "<exact-installed-spelling>" })\` in the SAME turn BEFORE you call \`skill_create\`. The meta-skill performs description tightening, body structure check, and dedup. Calling \`skill_create\` without it will be rejected by the tool layer.`
+        : '';
+
     return `# Problem-solving paradigm
 
 For any non-trivial task, follow this loop:
@@ -284,9 +299,7 @@ For any non-trivial task, follow this loop:
 
 Skills (\`skill_invoke\` / \`skill_create\`) capture reasoned, on-demand playbooks. Hooks (\`hooks.json\`) capture deterministic reflexes. Do not conflate them.
 
-Never call \`skill_create\` for one-off fixes, trivial tasks, or before the user has confirmed the solution works.
-
-**Issue #146 — skill_create quality gate**: if a skill matching the \`skill-creator\` meta-skill name (or common variants: \`skill_creator\`, \`skillcreator\`) appears in the Available skills index above, you MUST call \`skill_invoke({ name: "<that-skill-name>" })\` in the SAME turn BEFORE you call \`skill_create\`. The meta-skill performs description tightening, body structure check, and dedup. Calling \`skill_create\` without it will be rejected by the tool layer. Do NOT treat \`skill_create\` as "just a file write" — creation goes through review first.`;
+Never call \`skill_create\` for one-off fixes, trivial tasks, or before the user has confirmed the solution works.${gateParagraph}`;
 }
 
 // ---------- workspace instructions (lazy, opt-in) ----------
