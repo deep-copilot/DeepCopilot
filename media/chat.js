@@ -2590,7 +2590,27 @@
           addToolCard(m.id, m.name, m.args);
         }
       } else {
-        addToolLine(m.id, m.name, m.args);
+        /* Issue #162 Phase 0: reuse the existing placeholder created by an
+           early toolArgsDelta (when the LLM streams `content` before `path`).
+           Without this, toolStart would insert a SECOND .tl-wrap and overwrite
+           toolMap[id] — orphaning the first row's _streamPre (stuck "streaming…"
+           forever) and producing a fileless "Edited" ghost line. */
+        var _existLine = toolMap.get(m.id);
+        if (_existLine && _existLine.isLine && _existLine.root) {
+          _existLine.name = m.name;
+          _existLine.args = m.args;
+          var _meta162 = toolMeta(m.name, m.args);
+          var _cls162 = (_existLine.root.className || "").split(/\s+/)
+            .filter(function(c){ return c && !/^k-/.test(c); });
+          _cls162.push("k-" + _meta162.kind);
+          _existLine.root.className = _cls162.join(" ");
+          var _ico162 = _existLine.root.querySelector(".ico");
+          if (_ico162) _ico162.className = "ico codicon " + _meta162.icon;
+          var _prose162 = _existLine.root.querySelector(".tl-prose");
+          if (_prose162) _prose162.innerHTML = toolProseHtml(m.name, m.args, _meta162);
+        } else {
+          addToolLine(m.id, m.name, m.args);
+        }
       }
     } else if (m.type === "approvalRequest"){
       addToolCard(m.id, m.name, m.args, { approval:true });
@@ -2747,8 +2767,8 @@
             tc.body.innerHTML = ""; tc.body.appendChild(outPre);
             tc.root.classList.add("has-detail");
             if (!tc._userToggled){
-              if (m.ok) { tc.root.classList.remove("open"); tc.body.style.display = "none"; }
-              else      { tc.root.classList.add("open");    tc.body.style.display = "block"; }
+              /* Always collapse on completion (success or failure). */
+              tc.root.classList.remove("open"); tc.body.style.display = "none";
             }
           } else if (tc.name === "spawn_agent" || m.name === "spawn_agent") {
             tc.body.innerHTML = renderMd(out);
@@ -2758,8 +2778,8 @@
             tc.body.textContent = out;
             tc.root.classList.add("has-detail");
             if (!tc._userToggled){
-              if (m.ok) { tc.root.classList.remove("open"); tc.body.style.display = "none"; }
-              else      { tc.root.classList.add("open");    tc.body.style.display = "block"; }
+              /* Always collapse on completion (success or failure). */
+              tc.root.classList.remove("open"); tc.body.style.display = "none";
             }
           }
         } else if (tc.name === "spawn_agent" || m.name === "spawn_agent") {
@@ -2780,15 +2800,15 @@
           outPre.textContent = stripAnsi(runShellBody);
           tc.body.appendChild(outPre);
           if (!tc._userToggled){
-            if (m.ok) tc.root.classList.remove("open");
-            else      tc.root.classList.add("open");
+            /* Always collapse on completion (success or failure). */
+            tc.root.classList.remove("open");
           }
         } else if (tc.name === "read_terminal" || m.name === "read_terminal") {
           /* Terminal poll: strip ANSI/progress-bar noise, keep collapsed on success */
           tc.body.textContent = stripAnsi(out);
           if (!tc._userToggled){
-            if (m.ok) tc.root.classList.remove("open");
-            else      tc.root.classList.add("open");
+            /* Always collapse on completion (success or failure). */
+            tc.root.classList.remove("open");
           }
           /* Refresh dedup map so the next poll can find this card */
           if (tc._rtKey) _readTermCardMap.set(tc._rtKey, tc);
@@ -2796,12 +2816,28 @@
           /* web_search: same rule as shell — collapse on success, expand on failure */
           tc.body.textContent = out;
           if (!tc._userToggled){
-            if (m.ok) tc.root.classList.remove("open");
-            else      tc.root.classList.add("open");
+            /* Always collapse on completion (success or failure). */
+            tc.root.classList.remove("open");
           }
         } else {
           tc.body.textContent = out;
           if (!tc._userToggled) tc.root.classList.remove("open");
+        }
+      }
+      /* Issue #162 Phase 2: relocate the live stream preview (`.tl-stream`) into
+         the detail pane on completion. Without this the preview stays inline
+         under the row forever, and visually nothing distinguishes a finished
+         write_file from an in-flight one. After the move the row collapses to a
+         single tidy line (matching read_file UX) and the user can click to
+         re-expand the patched content. */
+      if (tc.isLine && tc._streamPre && tc.body) {
+        if (tc._streamPre.parentNode !== tc.body) {
+          tc.body.appendChild(tc._streamPre);
+        }
+        tc.root.classList.add("has-detail");
+        if (!tc._userToggled) {
+          tc.root.classList.remove("open");
+          tc.body.style.display = "none";
         }
       }
       liveGroupCompleted();

@@ -200,6 +200,11 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .tl-list .tl .tl-prose code{background:var(--vscode-badge-background,rgba(90,93,94,.3));color:var(--vscode-badge-foreground,inherit);border-radius:3px;padding:0 4px;opacity:1}
 .tl .tl-res{flex-shrink:0;font-size:10px;opacity:.55;margin-left:4px}
 .tl.run .tl-res::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#e8b86d;margin-right:4px;vertical-align:middle;animation:thpulse 1.4s ease-out infinite}
+/* Issue #162: completion indicator lives on the row itself, not just on .tl-stream,
+   so completed tool rows show the green dot even when the live preview path never ran
+   (non-streaming providers, session replay, content-before-path field order, etc.). */
+.tl.ok  .tl-res::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#7bc47f;margin-right:4px;vertical-align:middle}
+.tl.err .tl-res::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--vscode-errorForeground);margin-right:4px;vertical-align:middle}
 .tl.err .tl-res{color:var(--vscode-errorForeground);opacity:.9}
 .tl .tl-exp{flex-shrink:0;font-size:10px;font-family:"codicon";opacity:0;transition:opacity .12s,transform .15s;width:12px;color:var(--vscode-descriptionForeground);margin-left:2px;pointer-events:none}
 .tl.has-detail{cursor:pointer}
@@ -687,3 +692,38 @@ body.vscode-light .settings-test-result.ok{color:#267f26}
 .ft-ctx-pop-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .ft-ctx-pop-tip { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--vscode-widget-border, #3a3a3a); font-size: 11px; opacity: .85; }
 .ft-ctx-pop-tip code { background: var(--vscode-textCodeBlock-background, #1e1e1e); padding: 0 4px; border-radius: 3px; }
+
+/* ── Suppress red "failed" styling on tool cards / prose tool rows ──
+   User-requested: tool failures (e.g. skill_create failed, mkdir errors)
+   should not surface as alarming red blocks. We neutralise the icon /
+   status / border colours and the "failed" badge so failures blend with
+   normal tool output. The error text itself is still readable in the
+   expanded body. Top-level extension errors (`.err` standalone card,
+   chip-err in attachment list, settings test results) are intentionally
+   left untouched — those convey actionable problems the user must see. */
+.tool.err .h .ico { color: var(--vscode-descriptionForeground) !important; opacity: .7 !important; }
+.tl.err { background: transparent !important; border-left: none !important; border-radius: 2px !important; padding: 1px 2px !important; }
+.tl.err   .ico    { color: var(--vscode-descriptionForeground) !important; opacity: .7 !important; }
+.tl.err   .tl-res { color: var(--vscode-descriptionForeground) !important; opacity: .55 !important; }
+.tl-stream.done.err            { border-left-color: var(--vscode-panel-border) !important; }
+.tl-stream.done.err::before    { content: "done" !important; color: var(--vscode-descriptionForeground) !important; opacity: .55 !important; }
+
+/* ── Status dot: orange-pulsing while running → static green on success ──
+   The orange running dot is defined inline on `.tool.run .h .nm::after`
+   and `.tl.run .tl-res::before`. After completion the row swaps `.run`
+   for `.ok` (success) or `.err` (failure). Here we add a static green
+   dot on `.ok` so the user gets a clean "done" affordance. Failures
+   intentionally do NOT get a coloured dot — they remain neutral. */
+.tool.ok .h .nm::after {
+    content: ""; display: inline-block;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #7bc47f; margin-left: 5px;
+    vertical-align: middle; opacity: .85;
+}
+.tl.ok .tl-res::before {
+    content: ""; display: inline-block;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: #7bc47f; margin-right: 4px;
+    vertical-align: middle; opacity: .85;
+}
+
