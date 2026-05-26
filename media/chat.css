@@ -713,17 +713,14 @@ body.vscode-light .settings-test-result.ok{color:#267f26}
    and `.tl.run .tl-res::before`. After completion the row swaps `.run`
    for `.ok` (success) or `.err` (failure). Here we add a static green
    dot on `.ok` so the user gets a clean "done" affordance. Failures
-   intentionally do NOT get a coloured dot — they remain neutral. */
+   intentionally do NOT get a coloured dot — they remain neutral.
+   Note: the prose-row variant `.tl.ok .tl-res::before` is already defined
+   above near the running/error dots (Issue #162 Phase 1); only the card
+   variant `.tool.ok .h .nm::after` lives here. */
 .tool.ok .h .nm::after {
     content: ""; display: inline-block;
     width: 5px; height: 5px; border-radius: 50%;
     background: #7bc47f; margin-left: 5px;
-    vertical-align: middle; opacity: .85;
-}
-.tl.ok .tl-res::before {
-    content: ""; display: inline-block;
-    width: 5px; height: 5px; border-radius: 50%;
-    background: #7bc47f; margin-right: 4px;
     vertical-align: middle; opacity: .85;
 }
 
