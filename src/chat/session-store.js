@@ -369,7 +369,7 @@ class SessionStore {
      * actually *archived* anywhere they could see, find, or grep.
      *
      * New behaviour: render the session to Markdown and write it under
-     *   <workspace>/.deepcopilot/archives/yyyyMMdd-HHmmss-<title>.md
+     *   <workspace>/.deep-copilot/archives/yyyyMMdd-HHmmss-<title>.md
      * Then perform the original soft-hide so the session leaves the sidebar.
      *
      * The "un-archive" gesture (clicking again on an already-archived item)
@@ -423,7 +423,7 @@ class SessionStore {
     /**
      * Show the bottom-right toast with "Open" / "Reveal in Explorer" buttons.
      * Path display is workspace-relative when possible so users see
-     *   ".deepcopilot/archives/20260526-….md"
+     *   ".deep-copilot/archives/20260526-….md"
      * instead of a long absolute path. Delegates the relativisation to
      * `findContainingFolder` so multi-root + nested-root cases stay correct.
      */

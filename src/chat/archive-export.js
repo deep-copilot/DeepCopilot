@@ -4,7 +4,7 @@
 // (toggle `archived` flag). Users expected real archiving — a Markdown
 // snapshot they can grep, commit, or share. This module renders the
 // session record to Markdown and writes it under
-// `<workspace>/.deepcopilot/archives/yyyyMMdd-HHmmss-<title>.md`.
+// `<workspace>/.deep-copilot/archives/yyyyMMdd-HHmmss-<title>.md`.
 //
 // Edge cases handled:
 //   - No workspace open      → fall back to vscode.window.showSaveDialog.
@@ -20,7 +20,11 @@ const path = require('path');
 const fs = require('fs/promises');
 const { t } = require('../utils/i18n');
 
-const ARCHIVE_SUBDIR = '.deepcopilot/archives';
+// PR #168 review: align with the rest of the codebase's workspace-artifact
+// convention (`.deep-copilot/plans`, `.deep-copilot/memory.md`,
+// `.deep-copilot/logs`). Previously this lived under `.deepcopilot/archives`,
+// which produced an inconsistent second hidden directory in user workspaces.
+const ARCHIVE_SUBDIR = '.deep-copilot/archives';
 
 /**
  * Strip filesystem-hostile characters and trim length.

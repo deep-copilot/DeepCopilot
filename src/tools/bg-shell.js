@@ -117,11 +117,36 @@ async function toolRunShellBg(args, ctx = {}) {
     // onDidEndTerminalShellExecution never fires and the job would never be
     // removed, causing agent-loop to spin indefinitely.
     if (usedSI) {
+        // Issue #167 follow-up (PR #168 review): register the jobId in the
+        // run-scoped set BEFORE publishing to the cross-session active-job
+        // registry. If the order were reversed, an extremely short-lived
+        // command could fire its `bg-job-end` event between addActiveBgJob()
+        // and registerBgJob(); the end handler would then call
+        // `_sessionStartedBgJobs.delete(jobId)` on a set that doesn't contain
+        // it yet, and the subsequent registration would leave a stale
+        // jobId hanging in the set forever (defeating the cleanup contract).
+        // Doing the local registration first guarantees: either the jobId is
+        // in the set when the end event fires (and gets cleaned up), or the
+        // end event is observed after both registrations completed.
+        if (typeof ctx.registerBgJob === 'function') {
+            try {
+                ctx.registerBgJob(jobId);
+            } catch (e) {
+                // Do not swallow silently — if this ever fails, the agent-loop
+                // loses the "started in this run" signal and the original
+                // orphan-job bug from #167 can resurface. Log so regressions
+                // surface in debug-logs even when no exception bubbles up.
+                // Logger only exposes `.info` today (see src/logger.js); the
+                // tag itself carries the severity for grep-ability.
+                try {
+                    Logger.info('BG_JOB_REGISTER_FAILED', {
+                        jobId,
+                        err: (e && e.message) || String(e),
+                    });
+                } catch {}
+            }
+        }
         addActiveBgJob(jobId, ctx.sessionId || null);
-        // Issue #167: tell agent-loop this jobId was started in THIS run, so
-        // its BG_WAIT_SKIPPED_MODEL_DONE early-exit guard refuses to end the
-        // turn while the freshly spawned job is still alive.
-        try { ctx.registerBgJob && ctx.registerBgJob(jobId); } catch {}
     }
 
     // ── Early-failure capture: many commands fail within ~1–2 s (missing
