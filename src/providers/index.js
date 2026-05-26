@@ -143,8 +143,12 @@ function listModels(providerId) {
 
 /**
  * Apply provider-declared `stripInputFields` to a messages array.
- * Returns a NEW array; never mutates the input. The strip rule lives in the
- * provider JSON so a vendor's protocol quirks stay encapsulated.
+ * Never mutates the input. Returns either a NEW array (when at least one
+ * message was rewritten by stripping or backfill) or the ORIGINAL `messages`
+ * reference unchanged (fast path: no quirks apply, e.g. an OpenAI/Anthropic
+ * call with an empty `stripInputFields`). Callers must treat the result as
+ * read-only — do not mutate elements of the returned array. The strip rule
+ * lives in the provider JSON so a vendor's protocol quirks stay encapsulated.
  *
  * Two behaviours, switched on whether the call is in DeepSeek's thinking-mode
  * round-trip protocol (provider declares `reasoning_content` in stripInputFields
