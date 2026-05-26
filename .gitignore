@@ -30,3 +30,6 @@ Thumbs.db
 # Build output
 out/
 
+
+# scratch files used by AI review triage
+.tmp-*.json
