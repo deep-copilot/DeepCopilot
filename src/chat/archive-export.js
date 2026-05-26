@@ -24,7 +24,7 @@ const ARCHIVE_SUBDIR = '.deepcopilot/archives';
 
 /**
  * Strip filesystem-hostile characters and trim length.
- * Removed character classes (per #166 review):
+ * Removed character classes:
  *   - `\ / : * ? " < > |` are reserved on Windows.
  *   - `\u0000-\u001f` covers C0 control codes (NUL, newlines, tabs, ESC, …),
  *     which corrupt filenames and can be abused for terminal injection when
@@ -128,8 +128,8 @@ function renderSessionMarkdown(session) {
 
     // Compose the document. We intentionally do NOT run a global
     // `\n{3,}` collapse here — that would mutate verbatim user/assistant
-    // text and break formatting inside fenced code blocks (PR #166 review).
-    // Instead, each section pushes its own controlled trailing blank line.
+    // text and break formatting inside fenced code blocks. Instead, each
+    // section pushes its own controlled trailing blank line.
     return parts.join('\n').trimEnd() + '\n';
 }
 
@@ -156,29 +156,45 @@ async function _pickWorkspaceRoot(sessionWs) {
 }
 
 /**
- * Reserve a non-colliding path atomically by `open(..., 'wx')` (exclusive
- * create). This closes the TOCTOU window that an `fs.access` pre-check
- * would leave open: two concurrent archive clicks in the same second
- * could otherwise pick the same name and one would overwrite the other.
- * The caller is responsible for writing content into the returned path;
- * the empty placeholder file we create is overwritten by `fs.writeFile`.
+ * Reserve a non-colliding path AND write content atomically through an
+ * exclusive handle. `fs.open(..., 'wx')` closes the TOCTOU window that an
+ * `fs.access` pre-check would leave open (two concurrent archive clicks in
+ * the same second could otherwise pick the same name).
+ *
+ * Writing through the exclusive handle — rather than reserving an empty
+ * placeholder and then re-opening with `fs.writeFile` — prevents zero-byte
+ * residue when the write itself fails (disk full / permission revoked
+ * mid-write). On error we close the handle and `unlink` the placeholder so
+ * subsequent archives don't skip the now-orphaned name.
  */
-async function _uniquePath(dir, baseName) {
+async function _writeUnique(dir, baseName, content) {
     const ext = '.md';
     const stem = baseName.replace(/\.md$/i, '');
     for (let i = 0; i < 1000; i++) {
         const candidate = path.join(dir, i === 0 ? stem + ext : `${stem}-${i}${ext}`);
+        let handle;
         try {
-            const handle = await fs.open(candidate, 'wx');
-            await handle.close();
-            return candidate;
+            handle = await fs.open(candidate, 'wx');
         } catch (err) {
             if (err && err.code === 'EEXIST') continue;
             throw err;
         }
+        try {
+            await handle.writeFile(content, 'utf8');
+            await handle.close();
+            return candidate;
+        } catch (writeErr) {
+            // Close best-effort, then remove the empty/partial placeholder.
+            try { await handle.close(); } catch { /* ignore */ }
+            try { await fs.unlink(candidate); } catch { /* ignore */ }
+            throw writeErr;
+        }
     }
-    // Extremely unlikely; bail out with a timestamped name.
-    return path.join(dir, `${stem}-${Date.now()}${ext}`);
+    // Extremely unlikely (1000 same-second collisions); bail out with a
+    // timestamped name and a regular write — still safer than overwriting.
+    const fallback = path.join(dir, `${stem}-${Date.now()}${ext}`);
+    await fs.writeFile(fallback, content, { encoding: 'utf8', flag: 'wx' });
+    return fallback;
 }
 
 /**
@@ -192,7 +208,6 @@ async function exportSessionToMarkdown(session) {
     const fileName = `${_timestamp()}-${_safeTitle(session.title)}.md`;
 
     const root = await _pickWorkspaceRoot(session.ws);
-    let target;
     if (root) {
         const archiveDir = path.join(root, ARCHIVE_SUBDIR);
         // Defence in depth: even though fileName is sanitised, verify the
@@ -200,28 +215,26 @@ async function exportSessionToMarkdown(session) {
         const resolved = path.resolve(archiveDir, fileName);
         const rel = path.relative(root, resolved);
         if (rel.startsWith('..') || path.isAbsolute(rel)) {
-            throw new Error('Resolved archive path escapes the workspace root.');
+            // i18n'd, user-facing — see archiveErrEscape in src/utils/i18n.js.
+            throw new Error(t('archiveErrEscape'));
         }
         await fs.mkdir(archiveDir, { recursive: true });
-        target = await _uniquePath(archiveDir, fileName);
-    } else {
-        // No workspace open — ask the user where to put it.
-        // `Uri.file()` requires an absolute path (PR #166 review): passing a
-        // bare filename resolves to a confusing location (drive root on
-        // Windows, `/` on POSIX). Anchor the default at the user's home so
-        // the dialog opens somewhere predictable.
-        const os = require('os');
-        const uri = await vscode.window.showSaveDialog({
-            saveLabel: t('archiveSaveLabel'),
-            filters: { Markdown: ['md'] },
-            defaultUri: vscode.Uri.file(path.join(os.homedir(), fileName)),
-        });
-        if (!uri) return null;
-        target = uri.fsPath;
+        return await _writeUnique(archiveDir, fileName, md);
     }
 
-    await fs.writeFile(target, md, 'utf8');
-    return target;
+    // No workspace open — ask the user where to put it. `Uri.file()` requires
+    // an absolute path: passing a bare filename resolves to a confusing
+    // location (drive root on Windows, `/` on POSIX). Anchor the default at
+    // the user's home so the dialog opens somewhere predictable.
+    const os = require('os');
+    const uri = await vscode.window.showSaveDialog({
+        saveLabel: t('archiveSaveLabel'),
+        filters: { Markdown: ['md'] },
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), fileName)),
+    });
+    if (!uri) return null;
+    await fs.writeFile(uri.fsPath, md, 'utf8');
+    return uri.fsPath;
 }
 
 module.exports = { exportSessionToMarkdown, renderSessionMarkdown };

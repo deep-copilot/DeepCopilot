@@ -390,10 +390,10 @@ class SessionStore {
         }
 
         // Archive: render to Markdown FIRST. Only hide the session from the
-        // sidebar if we actually produced a file on disk. PR #166 review:
-        // setting `archived = true` on export failure (or on a user-cancelled
-        // save dialog) would leave the session inconsistent — invisible in
-        // the list while nothing was actually archived. The new contract is:
+        // sidebar if we actually produced a file on disk — otherwise setting
+        // `archived = true` on export failure (or on a user-cancelled save
+        // dialog) would leave the session invisible in the list while nothing
+        // was actually archived. Contract:
         //   - savedPath is a string  → write succeeded, hide the session.
         //   - savedPath is null      → user cancelled the save dialog; keep
         //                              session visible, do nothing more.
@@ -424,20 +424,13 @@ class SessionStore {
      * Show the bottom-right toast with "Open" / "Reveal in Explorer" buttons.
      * Path display is workspace-relative when possible so users see
      *   ".deepcopilot/archives/20260526-….md"
-     * instead of a long absolute path.
+     * instead of a long absolute path. Delegates the relativisation to
+     * `findContainingFolder` so multi-root + nested-root cases stay correct.
      */
     _notifyArchived(absPath) {
-        const path = require('path');
-        const folders = vscode.workspace.workspaceFolders || [];
-        let display = absPath;
-        for (const f of folders) {
-            const root = f.uri.fsPath;
-            const rel = path.relative(root, absPath);
-            if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
-                display = rel.replace(/\\/g, '/');
-                break;
-            }
-        }
+        const { findContainingFolder } = require('../utils/paths');
+        const hit = findContainingFolder(absPath);
+        const display = hit ? hit.rel : absPath;
 
         const openLabel   = t('archiveOpenFile');
         const revealLabel = t('archiveRevealInOS');
