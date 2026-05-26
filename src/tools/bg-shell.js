@@ -117,7 +117,7 @@ async function toolRunShellBg(args, ctx = {}) {
     // onDidEndTerminalShellExecution never fires and the job would never be
     // removed, causing agent-loop to spin indefinitely.
     if (usedSI) {
-        // Issue #167 follow-up (PR #168 review): register the jobId in the
+        // Issue #167 follow-up (post-merge review): register the jobId in the
         // run-scoped set BEFORE publishing to the cross-session active-job
         // registry. If the order were reversed, an extremely short-lived
         // command could fire its `bg-job-end` event between addActiveBgJob()

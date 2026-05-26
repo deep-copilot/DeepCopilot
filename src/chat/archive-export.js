@@ -20,7 +20,7 @@ const path = require('path');
 const fs = require('fs/promises');
 const { t } = require('../utils/i18n');
 
-// PR #168 review: align with the rest of the codebase's workspace-artifact
+// Post-merge review: align with the rest of the codebase's workspace-artifact
 // convention (`.deep-copilot/plans`, `.deep-copilot/memory.md`,
 // `.deep-copilot/logs`). Previously this lived under `.deepcopilot/archives`,
 // which produced an inconsistent second hidden directory in user workspaces.
