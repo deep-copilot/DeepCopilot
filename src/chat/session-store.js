@@ -434,15 +434,12 @@ class SessionStore {
 
         const openLabel   = t('archiveOpenFile');
         const revealLabel = t('archiveRevealInOS');
-        // Wrap both the toast .then() and the VS Code calls inside it so that
-        // a missing/deleted file or permission error after the user clicks
-        // does not surface as an unhandled promise rejection. We swallow the
-        // error after surfacing it as a non-fatal toast — failure to *open*
-        // the archive is not the archive itself failing.
-        Promise.resolve(
-            vscode.window.showInformationMessage(
-                tf('archiveSaved', { path: display }), openLabel, revealLabel,
-            ),
+        // `showInformationMessage` already returns a thenable, so we can
+        // chain `.then()` directly. We still attach `.catch()` defensively
+        // because the action handler itself is async and may reject if a
+        // command call throws synchronously before reaching our try/catch.
+        vscode.window.showInformationMessage(
+            tf('archiveSaved', { path: display }), openLabel, revealLabel,
         ).then(async (choice) => {
             if (!choice) return;
             const uri = vscode.Uri.file(absPath);
@@ -456,7 +453,7 @@ class SessionStore {
                 const msg = (err && err.message) || String(err);
                 vscode.window.showWarningMessage(tf('archiveOpenFailed', { msg }));
             }
-        }).catch(() => { /* showInformationMessage itself never rejects, but be defensive */ });
+        }, () => { /* swallow toast-promise rejection, if any */ });
     }
 
     // ─── Auto-naming ────────────────────────────────────────────────────────

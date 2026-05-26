@@ -39,8 +39,14 @@ function _safeTitle(raw) {
         .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
         .replace(/^\.+/, '_')
         .replace(/\s+/g, ' ')
-        .trim();
-    return (cleaned || 'untitled').slice(0, 60);
+        .trim()
+        // Windows: Win32 APIs strip/normalise trailing spaces and dots from
+        // path components, which turns "foo ." / "foo " into "foo" silently
+        // — or rejects the write outright. Strip them ourselves so the
+        // on-disk name matches what we report back to the user and the
+        // collision counter in _writeUnique can’t be defeated.
+        .replace(/[. ]+$/, '');
+    return (cleaned || 'untitled').slice(0, 60).replace(/[. ]+$/, '') || 'untitled';
 }
 
 /** "20260526-143012" — local time, fixed-width, sortable. */
@@ -62,10 +68,17 @@ function _frontmatter(meta) {
     const lines = ['---'];
     for (const [k, v] of Object.entries(meta)) {
         if (v == null || v === '') continue;
-        // YAML-safe: quote strings containing colons or leading whitespace.
-        const s = String(v);
-        const needsQuote = /[:#\n]/.test(s) || /^\s/.test(s);
-        lines.push(`${k}: ${needsQuote ? JSON.stringify(s) : s}`);
+        // Always quote string values: bare YAML scalars like `true`,
+        // `2026-05-26`, `null`, `123` would be coerced to bool/date/null/
+        // number by any YAML parser, silently corrupting the exported
+        // metadata if a session title or model name happens to match one
+        // of those forms. Numbers stay bare because their identity is
+        // preserved either way and bare numerics read more naturally.
+        if (typeof v === 'number' && Number.isFinite(v)) {
+            lines.push(`${k}: ${v}`);
+        } else {
+            lines.push(`${k}: ${JSON.stringify(String(v))}`);
+        }
     }
     lines.push('---', '');
     return lines.join('\n');
