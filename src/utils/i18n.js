@@ -115,6 +115,17 @@ const EN = {
     // locales and only localize the trailing human-readable explanation.
     shellNoOutput:      '[Note: no output for last {sec}s]',
     shellSilentTimeout: '[Note: process was silent for last {sec}s before timeout — likely hung (e.g. port in use, waiting for input, blocked on external resource). Do NOT retry blindly; report the situation to the user.]',
+
+    // Session archive → Markdown export (issue #165)
+    archiveSaved:         'Session archived to {path}',
+    archiveFailed:        'Deep Copilot: failed to archive session — {msg}',
+    archiveOpenFile:      'Open File',
+    archiveRevealInOS:    'Reveal in Explorer',
+    archiveSaveLabel:     'Save Archive',
+    archivePickWorkspace: 'Pick a workspace folder to save the archive into',
+    archiveRoleUser:      'User',
+    archiveRoleAssistant: 'Assistant',
+    archiveThoughtsLabel: 'Reasoning',
 };
 
 const ZH = {
@@ -219,6 +230,17 @@ const ZH = {
     // 仅本地化后面的中文说明部分。
     shellNoOutput:      '[Note: no output for last {sec}s]（进程仍在运行，已 {sec} 秒未输出）',
     shellSilentTimeout: '[Note: process was silent for last {sec}s before timeout — likely hung]（超时前 {sec} 秒静默，疑似挂起：端口被占用 / 等待输入 / 外部资源阻塞。不要盲目重试，请向用户报告。）',
+
+    // 会话归档 → Markdown 导出（issue #165）
+    archiveSaved:         '会话已存档到 {path}',
+    archiveFailed:        'Deep Copilot：会话存档失败 — {msg}',
+    archiveOpenFile:      '打开文件',
+    archiveRevealInOS:    '在资源管理器中显示',
+    archiveSaveLabel:     '保存存档',
+    archivePickWorkspace: '选择要保存存档的工作区文件夹',
+    archiveRoleUser:      '用户',
+    archiveRoleAssistant: '助手',
+    archiveThoughtsLabel: '思维链',
 };
 
 function t(key) {

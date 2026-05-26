@@ -7,7 +7,7 @@
 
 const vscode = require('vscode');
 const { randomBytes } = require('crypto');
-const { t } = require('../utils/i18n');
+const { t, tf } = require('../utils/i18n');
 
 // ─── Orphan tool_calls sanitizer ───────────────────────────────────────────
 // Removes ANY incomplete assistant{tool_calls} group from a message array,
@@ -360,17 +360,94 @@ class SessionStore {
         this.postList();
     }
 
+    /**
+     * "Archive" a session — issue #165.
+     *
+     * Original behaviour (pre-#165) was a soft-hide toggle: flip `archived`,
+     * disappear from the sidebar list, data stays in globalState. Users
+     * reported that this didn't match the menu label's promise: nothing was
+     * actually *archived* anywhere they could see, find, or grep.
+     *
+     * New behaviour: render the session to Markdown and write it under
+     *   <workspace>/.deepcopilot/archives/yyyyMMdd-HHmmss-<title>.md
+     * Then perform the original soft-hide so the session leaves the sidebar.
+     *
+     * The "un-archive" gesture (clicking again on an already-archived item)
+     * is still supported via the boolean toggle — it simply un-hides the
+     * record without touching the Markdown file on disk.
+     */
     async archive(id) {
         const list = this.all();
         const s = list.find(x => x.id === id);
         if (!s) return;
-        s.archived = !s.archived;
-        if (this.sessionId === id && s.archived) {
+
+        // Un-archive: just flip back to visible. No file I/O needed.
+        if (s.archived) {
+            s.archived = false;
+            await this.set(list);
+            this.postList();
+            return;
+        }
+
+        // Archive: try to export to Markdown first. If that fails (user
+        // cancelled save dialog, disk error, etc.) we still perform the
+        // soft-hide so the menu action does *something* visible — the user
+        // can re-trigger the export later via the un-archive → archive
+        // round-trip if they fix the underlying problem. Errors are surfaced
+        // through showErrorMessage but never thrown — the UI gesture must
+        // not leave the sidebar in an inconsistent state.
+        let savedPath = null;
+        try {
+            const { exportSessionToMarkdown } = require('./archive-export');
+            savedPath = await exportSessionToMarkdown(s);
+        } catch (err) {
+            const msg = (err && err.message) || String(err);
+            vscode.window.showErrorMessage(tf('archiveFailed', { msg }));
+        }
+
+        s.archived = true;
+        if (this.sessionId === id) {
             this.sessionId = null;
             this._post({ type: 'sessionLoaded', id: null, messages: [] });
         }
         await this.set(list);
         this.postList();
+
+        if (savedPath) this._notifyArchived(savedPath);
+    }
+
+    /**
+     * Show the bottom-right toast with "Open" / "Reveal in Explorer" buttons.
+     * Path display is workspace-relative when possible so users see
+     *   ".deepcopilot/archives/20260526-….md"
+     * instead of a long absolute path.
+     */
+    _notifyArchived(absPath) {
+        const path = require('path');
+        const folders = vscode.workspace.workspaceFolders || [];
+        let display = absPath;
+        for (const f of folders) {
+            const root = f.uri.fsPath;
+            const rel = path.relative(root, absPath);
+            if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+                display = rel.replace(/\\/g, '/');
+                break;
+            }
+        }
+
+        const openLabel   = t('archiveOpenFile');
+        const revealLabel = t('archiveRevealInOS');
+        vscode.window
+            .showInformationMessage(tf('archiveSaved', { path: display }), openLabel, revealLabel)
+            .then((choice) => {
+                if (!choice) return;
+                const uri = vscode.Uri.file(absPath);
+                if (choice === openLabel) {
+                    vscode.window.showTextDocument(uri);
+                } else if (choice === revealLabel) {
+                    vscode.commands.executeCommand('revealFileInOS', uri);
+                }
+            });
     }
 
     // ─── Auto-naming ────────────────────────────────────────────────────────
