@@ -153,27 +153,61 @@ function listModels(providerId) {
  * Exception: `reasoning_content` is never stripped for reasoning-capable models
  * (capabilities.reasoning === true) because DeepSeek's API requires it to be
  * passed back in subsequent turns — omitting it causes HTTP 400.
+ *
+ * Additionally, for reasoning-capable models we enforce an invariant required
+ * by DeepSeek's thinking-mode protocol: once any assistant message in history
+ * carries a non-empty `reasoning_content`, EVERY subsequent assistant message
+ * MUST also carry one — otherwise the API rejects the request with
+ *   400 "reasoning_content in the thinking mode must be passed back to the API".
+ * We backfill a short placeholder on any assistant message that is missing it.
+ * This is a defence-in-depth net: callers should still attach the real thought
+ * stream when they have one, but if they forget (or the model returned an empty
+ * thought, or a synthetic assistant was injected mid-turn) we won't 400.
  */
+const REASONING_PLACEHOLDER = '(no thoughts surfaced for this step)';
+
 function sanitizeMessages(providerId, messages, modelId) {
     if (!Array.isArray(messages) || !messages.length) return messages;
     const strip = getProvider(providerId)?.quirks?.stripInputFields;
-    if (!Array.isArray(strip) || !strip.length) return messages;
-    // Reasoning-capable models MUST have reasoning_content passed back to the
-    // API; strip every other declared field but skip reasoning_content for them.
     const isReasoning = !!(modelId && getModel(providerId, modelId)?.capabilities?.reasoning);
-    const effectiveStrip = isReasoning ? strip.filter(f => f !== 'reasoning_content') : strip;
-    if (!effectiveStrip.length) return messages;
-    return messages.map(m => {
-        if (!m || typeof m !== 'object') return m;
-        let copy = m;
-        for (const k of effectiveStrip) {
-            if (Object.prototype.hasOwnProperty.call(copy, k)) {
-                if (copy === m) copy = Object.assign({}, m);
-                delete copy[k];
+    // For reasoning-capable models, strip every declared field except
+    // reasoning_content (which must round-trip).
+    const effectiveStrip = Array.isArray(strip)
+        ? (isReasoning ? strip.filter(f => f !== 'reasoning_content') : strip)
+        : [];
+
+    let out = messages;
+    if (effectiveStrip.length) {
+        out = out.map(m => {
+            if (!m || typeof m !== 'object') return m;
+            let copy = m;
+            for (const k of effectiveStrip) {
+                if (Object.prototype.hasOwnProperty.call(copy, k)) {
+                    if (copy === m) copy = Object.assign({}, m);
+                    delete copy[k];
+                }
             }
+            return copy;
+        });
+    }
+
+    // Reasoning-mode invariant backfill. Only kicks in once at least one
+    // assistant message already carries reasoning_content — that's the
+    // moment DeepSeek starts enforcing the "every assistant has it" rule.
+    if (isReasoning) {
+        const anyHasReasoning = out.some(
+            m => m && m.role === 'assistant' && typeof m.reasoning_content === 'string' && m.reasoning_content.length > 0,
+        );
+        if (anyHasReasoning) {
+            out = out.map(m => {
+                if (!m || m.role !== 'assistant') return m;
+                if (typeof m.reasoning_content === 'string' && m.reasoning_content.length > 0) return m;
+                return Object.assign({}, m, { reasoning_content: REASONING_PLACEHOLDER });
+            });
         }
-        return copy;
-    });
+    }
+
+    return out;
 }
 
 /**

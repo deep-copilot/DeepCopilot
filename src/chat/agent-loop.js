@@ -57,6 +57,15 @@ function injectSyntheticSkillRead(messages, skillName, body, skillPath) {
     messages.push({
         role: 'assistant',
         content: null,
+        // DeepSeek thinking-mode quirk: once any assistant message in history
+        // carries reasoning_content, every subsequent assistant message MUST
+        // also carry it, or the API returns 400 ("reasoning_content in the
+        // thinking mode must be passed back to the API"). Skill injection
+        // happens mid-turn (right after a real thinking-mode assistant
+        // message), so we must include a non-empty reasoning_content here.
+        // Sanitization (sanitizeMessages in providers/index.js) preserves
+        // this field for reasoning-capable models, so it survives to the API.
+        reasoning_content: `Loading skill SOP "${safeName}" via read_file to obtain its instructions before proceeding.`,
         tool_calls: [{
             id:       callId,
             type:     'function',
@@ -924,15 +933,23 @@ class AgentLoop {
                     { role: 'user', content: '<system-reminder>\nYou have reached the tool-call iteration limit without producing a user-facing answer. Stop calling tools. Write a concise plain-text reply that: (1) summarises what you tried, (2) states what you found or could not find, (3) suggests a concrete next step the user can take.\n</system-reminder>' },
                 ];
                 let tail = '';
+                let tailThoughts = '';
                 await streamChat(
                     { provider, apiKey, baseUrl, messages: finalMsgs, model, noTools: true },
                     {
                         onDelta:    t => { tail += t; run.reply.asst += t; this._postToRun(run, { type: 'replyDelta', text: t }); },
-                        onThinking: t => { run.reply.thoughts += t; this._postToRun(run, { type: 'thinkingDelta', text: t }); },
+                        onThinking: t => { tailThoughts += t; run.reply.thoughts += t; this._postToRun(run, { type: 'thinkingDelta', text: t }); },
                     },
                     signal,
                 ).catch(e => Logger.info('FORCE_FINAL_SUMMARY_ERROR', { message: e.message }));
-                if (tail) run.messages.push({ role: 'assistant', content: tail });
+                if (tail) run.messages.push({
+                    role: 'assistant',
+                    content: tail,
+                    // Preserve thinking output so the persisted/reloaded history
+                    // does not end with a reasoning-less assistant message, which
+                    // would 400 on the next turn under DeepSeek thinking mode.
+                    ...(tailThoughts ? { reasoning_content: tailThoughts } : {}),
+                });
             }
         } catch (e) {
             // Restore the last known-good message state to prevent persisting a
