@@ -15,6 +15,13 @@ const path = require('path');
 const { discoverSkills, DEEPCOPILOT_SKILLS_DIR } = require('../skills');
 const { wsRoot } = require('../utils/paths');
 
+// Issue #146 — Meta-skill that must review every skill_create call.
+// Accept a couple of common spelling variants to be permissive about how
+// the on-disk skill is named. Defined at module scope so both skill_invoke
+// (for "did you mean X?" handling) and the skill_create gate share the same
+// canonical variant set.
+const SKILL_CREATOR_NAMES = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
+
 // ─── skill_invoke ────────────────────────────────────────────────────────────
 
 /**
@@ -38,10 +45,9 @@ function skillInvoke(args, run) {
         //   2. No creator is installed at all.
         //      → return a soft notice so the agent can proceed straight to
         //        skill_create (the executor-side gate is a no-op here).
-        const SKILL_CREATOR_VARIANTS = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
-        if (SKILL_CREATOR_VARIANTS.has(name.toLowerCase())) {
+        if (SKILL_CREATOR_NAMES.has(name.toLowerCase())) {
             const installedCreator = all.find(
-                x => SKILL_CREATOR_VARIANTS.has(String(x && x.name || '').toLowerCase()),
+                x => SKILL_CREATOR_NAMES.has(String(x && x.name || '').toLowerCase()),
             );
             if (installedCreator) {
                 return `Error: skill "${name}" not found. Did you mean "${installedCreator.name}"? Call \`skill_invoke({ name: "${installedCreator.name}" })\` with that exact spelling.`;
@@ -87,11 +93,6 @@ const NAME_RE        = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const VALID_SOURCES  = new Set(['self', 'web', 'hybrid']);
 const VALID_TRUSTS   = new Set(['trusted', 'untrusted']);
 const MAX_BODY_BYTES = 64 * 1024; // 64 KB hard ceiling
-
-// Issue #146 — Meta-skill that must review every skill_create call.
-// Accept a couple of common spelling variants to be permissive about how
-// the on-disk skill is named.
-const SKILL_CREATOR_NAMES = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
 
 /**
  * Issue #146 — Check whether `skill_invoke({name: 'skill-creator'})` was

@@ -146,23 +146,26 @@ function listModels(providerId) {
  * Returns a NEW array; never mutates the input. The strip rule lives in the
  * provider JSON so a vendor's protocol quirks stay encapsulated.
  *
- * Example: DeepSeek 400s when the input contains `reasoning_content`.
- * deepseek.json sets quirks.stripInputFields: ["reasoning_content"], and this
- * function removes that field from each message before the API call.
+ * Two behaviours, switched on whether the call is in DeepSeek's thinking-mode
+ * round-trip protocol (provider declares `reasoning_content` in stripInputFields
+ * AND the chosen model is reasoning-capable):
  *
- * Exception: `reasoning_content` is never stripped for reasoning-capable models
- * (capabilities.reasoning === true) because DeepSeek's API requires it to be
- * passed back in subsequent turns — omitting it causes HTTP 400.
+ *  - **Non-thinking-mode call** (everything else, including non-reasoning
+ *    DeepSeek models and all OpenAI/Anthropic models): every field declared in
+ *    `quirks.stripInputFields` is removed. DeepSeek 400s when the input
+ *    contains `reasoning_content` outside thinking mode, so deepseek.json sets
+ *    `stripInputFields: ["reasoning_content"]` and we drop it here.
  *
- * Additionally, for reasoning-capable models we enforce an invariant required
- * by DeepSeek's thinking-mode protocol: once any assistant message in history
- * carries a non-empty `reasoning_content`, EVERY subsequent assistant message
- * MUST also carry one — otherwise the API rejects the request with
- *   400 "reasoning_content in the thinking mode must be passed back to the API".
- * We backfill a short placeholder on any assistant message that is missing it.
- * This is a defence-in-depth net: callers should still attach the real thought
- * stream when they have one, but if they forget (or the model returned an empty
- * thought, or a synthetic assistant was injected mid-turn) we won't 400.
+ *  - **Thinking-mode call** (DeepSeek reasoner family, etc.): `reasoning_content`
+ *    is NOT stripped because the API requires it to be passed back in
+ *    subsequent turns. On top of that we enforce the documented invariant
+ *    "once any assistant in history carries non-empty `reasoning_content`,
+ *    EVERY subsequent assistant message MUST also carry one" — otherwise the
+ *    API rejects with `400 "reasoning_content in the thinking mode must be
+ *    passed back to the API"`. We backfill a short placeholder on assistant
+ *    messages that come after the first one with thoughts, leaving earlier
+ *    pre-thinking messages alone. This is a defence-in-depth net: callers
+ *    should still attach the real thought stream when they have one.
  */
 const REASONING_PLACEHOLDER = '(no thoughts surfaced for this step)';
 
@@ -199,17 +202,21 @@ function sanitizeMessages(providerId, messages, modelId) {
         });
     }
 
-    // Reasoning-mode invariant backfill. Only kicks in once at least one
-    // assistant message already carries reasoning_content — that's the
-    // moment DeepSeek starts enforcing the "every assistant has it" rule.
-    // Scoped to providers that actually honor the round-trip protocol so we
-    // never inject reasoning_content into requests bound for OpenAI/Anthropic.
+    // Reasoning-mode invariant backfill. The DeepSeek rule is specifically
+    // about messages that come AFTER the first assistant message with
+    // non-empty reasoning_content — earlier "pre-thinking" assistant
+    // messages don't need it. Locating the first thinking index and only
+    // backfilling from there onward keeps payload size minimal and matches
+    // the documented protocol more precisely. Scoped to providers that
+    // actually honor the round-trip protocol so we never inject
+    // reasoning_content into OpenAI/Anthropic-bound requests.
     if (honorsReasoningRoundTrip) {
-        const anyHasReasoning = out.some(
+        const firstThinkingIdx = out.findIndex(
             m => m && m.role === 'assistant' && typeof m.reasoning_content === 'string' && m.reasoning_content.length > 0,
         );
-        if (anyHasReasoning) {
-            out = out.map(m => {
+        if (firstThinkingIdx !== -1) {
+            out = out.map((m, i) => {
+                if (i <= firstThinkingIdx) return m;
                 if (!m || m.role !== 'assistant') return m;
                 if (typeof m.reasoning_content === 'string' && m.reasoning_content.length > 0) return m;
                 return Object.assign({}, m, { reasoning_content: REASONING_PLACEHOLDER });
