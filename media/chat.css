@@ -202,9 +202,11 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .tl.run .tl-res::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#e8b86d;margin-right:4px;vertical-align:middle;animation:thpulse 1.4s ease-out infinite}
 /* Issue #162: completion indicator lives on the row itself, not just on .tl-stream,
    so completed tool rows show the green dot even when the live preview path never ran
-   (non-streaming providers, session replay, content-before-path field order, etc.). */
+   (non-streaming providers, session replay, content-before-path field order, etc.).
+   Failures intentionally get no coloured dot — see the "Suppress red failed styling"
+   block near the end of this file: tool errors are kept neutral so they blend with
+   normal output instead of alarming the user. */
 .tl.ok  .tl-res::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#7bc47f;margin-right:4px;vertical-align:middle}
-.tl.err .tl-res::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--vscode-errorForeground);margin-right:4px;vertical-align:middle}
 .tl.err .tl-res{color:var(--vscode-errorForeground);opacity:.9}
 .tl .tl-exp{flex-shrink:0;font-size:10px;font-family:"codicon";opacity:0;transition:opacity .12s,transform .15s;width:12px;color:var(--vscode-descriptionForeground);margin-left:2px;pointer-events:none}
 .tl.has-detail{cursor:pointer}
@@ -706,7 +708,9 @@ body.vscode-light .settings-test-result.ok{color:#267f26}
 .tl.err   .ico    { color: var(--vscode-descriptionForeground) !important; opacity: .7 !important; }
 .tl.err   .tl-res { color: var(--vscode-descriptionForeground) !important; opacity: .55 !important; }
 .tl-stream.done.err            { border-left-color: var(--vscode-panel-border) !important; }
-.tl-stream.done.err::before    { content: "done" !important; color: var(--vscode-descriptionForeground) !important; opacity: .55 !important; }
+/* Failed streams: clear the "failed" badge entirely rather than claim "done" —
+   we want failures to blend in, not to misrepresent themselves as successful. */
+.tl-stream.done.err::before    { content: "" !important; }
 
 /* ── Status dot: orange-pulsing while running → static green on success ──
    The orange running dot is defined inline on `.tool.run .h .nm::after`

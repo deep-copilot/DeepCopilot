@@ -2788,9 +2788,10 @@
           if (!tc._userToggled) tc.root.classList.add("open");
         } else if (tc.name === "run_shell" || m.name === "run_shell") {
           /* Replace the streaming live tail with the final, complete output.
-             GH-Copilot behaviour: success → auto-collapse (header summary is
-             enough); failure → keep expanded so the error is immediately
-             visible.  Respect any prior manual user toggle.
+             Behaviour: always auto-collapse on completion (success or failure)
+             — the header summary plus the row-level status dot is enough; users
+             expand manually when they need to read full output. Respect any
+             prior manual user toggle.
              When shell.js returns a structured JSON object, show the human-readable
              `text` field rather than raw JSON. */
           if (tc._livePre){ tc._livePre.remove(); tc._livePre = null; }
@@ -2804,7 +2805,9 @@
             tc.root.classList.remove("open");
           }
         } else if (tc.name === "read_terminal" || m.name === "read_terminal") {
-          /* Terminal poll: strip ANSI/progress-bar noise, keep collapsed on success */
+          /* Terminal poll: strip ANSI/progress-bar noise; always collapse on
+             completion (success or failure) — matches the unified UX with
+             run_shell / web_search above. */
           tc.body.textContent = stripAnsi(out);
           if (!tc._userToggled){
             /* Always collapse on completion (success or failure). */
@@ -2813,7 +2816,7 @@
           /* Refresh dedup map so the next poll can find this card */
           if (tc._rtKey) _readTermCardMap.set(tc._rtKey, tc);
         } else if (tc.name === "web_search" || m.name === "web_search") {
-          /* web_search: same rule as shell — collapse on success, expand on failure */
+          /* web_search: same rule as shell — always collapse on completion (success or failure). */
           tc.body.textContent = out;
           if (!tc._userToggled){
             /* Always collapse on completion (success or failure). */
@@ -2830,7 +2833,7 @@
          write_file from an in-flight one. After the move the row collapses to a
          single tidy line (matching read_file UX) and the user can click to
          re-expand the patched content. */
-      if (tc.isLine && tc._streamPre && tc.body) {
+      if (tc.isLine && tc._streamPre && tc.body && tc.root) {
         if (tc._streamPre.parentNode !== tc.body) {
           tc.body.appendChild(tc._streamPre);
         }
