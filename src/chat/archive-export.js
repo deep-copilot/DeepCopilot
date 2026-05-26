@@ -122,15 +122,30 @@ function renderSessionMarkdown(session) {
     const updated = session.updatedAt ? new Date(session.updatedAt).toISOString() : '';
     const archived = new Date().toISOString();
 
+    // `provider` is not persisted on the session record (only `model`/`mode`
+    // are), so we read the live setting at archive time. Token totals come
+    // from `session.totals`, which SessionStore accumulates per turn — see
+    // session-store.js ~L263. Both fields are best-effort: missing values
+    // are omitted by `_frontmatter` rather than rendered as empty strings.
+    let provider = '';
+    try {
+        provider = vscode.workspace.getConfiguration('deepseekAgent').get('provider') || '';
+    } catch { /* tests / no vscode runtime */ }
+    const totals = session.totals || {};
+
     const head = _frontmatter({
         sessionId: session.id || '',
         title: session.title || '',
         createdAt: created,
         updatedAt: updated,
         archivedAt: archived,
+        provider,
         model: session.model || '',
         mode: session.mode || '',
         messageCount: session.msgCount || (session.messages || []).length,
+        promptTokens: Number(totals.prompt_tokens) || 0,
+        completionTokens: Number(totals.completion_tokens) || 0,
+        totalTokens: Number(totals.total_tokens) || 0,
         workspace: session.ws || '',
     });
 
@@ -175,17 +190,19 @@ const PICK_CANCELLED = Symbol('pick-cancelled');
  *   - 1 folder  → returns its fsPath.
  *   - 2+        → returns the picked fsPath, or `PICK_CANCELLED` if the
  *                user dismissed the picker.
- * @param {string} sessionWs — the workspace the session was created in; used
- *   as a strong hint to skip the picker in multi-root scenarios.
+ * @param {string} _sessionWs — the workspace the session was created in.
+ *   Historically used to skip the picker when it matched a folder, but in
+ *   practice `session.ws` is always derived from `workspaceFolders[0]` (see
+ *   `ChatProvider._currentWs()`), so that shortcut effectively pinned the
+ *   archive to folder[0] and silently bypassed the picker. Now we always
+ *   show the picker when there are 2+ folders — the user explicitly chose
+ *   to archive *something*, asking which root takes a second of their time
+ *   and avoids surprising writes into the wrong project.
  */
-async function _pickWorkspaceRoot(sessionWs) {
+async function _pickWorkspaceRoot(_sessionWs) {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) return null;
     if (folders.length === 1) return folders[0].uri.fsPath;
-    if (sessionWs) {
-        const match = folders.find((f) => f.uri.fsPath === sessionWs);
-        if (match) return match.uri.fsPath;
-    }
     const picked = await vscode.window.showWorkspaceFolderPick({
         placeHolder: t('archivePickWorkspace'),
     });
