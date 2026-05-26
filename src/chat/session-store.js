@@ -389,13 +389,15 @@ class SessionStore {
             return;
         }
 
-        // Archive: try to export to Markdown first. If that fails (user
-        // cancelled save dialog, disk error, etc.) we still perform the
-        // soft-hide so the menu action does *something* visible — the user
-        // can re-trigger the export later via the un-archive → archive
-        // round-trip if they fix the underlying problem. Errors are surfaced
-        // through showErrorMessage but never thrown — the UI gesture must
-        // not leave the sidebar in an inconsistent state.
+        // Archive: render to Markdown FIRST. Only hide the session from the
+        // sidebar if we actually produced a file on disk. PR #166 review:
+        // setting `archived = true` on export failure (or on a user-cancelled
+        // save dialog) would leave the session inconsistent — invisible in
+        // the list while nothing was actually archived. The new contract is:
+        //   - savedPath is a string  → write succeeded, hide the session.
+        //   - savedPath is null      → user cancelled the save dialog; keep
+        //                              session visible, do nothing more.
+        //   - throw caught below     → fs error; surface message, keep visible.
         let savedPath = null;
         try {
             const { exportSessionToMarkdown } = require('./archive-export');
@@ -403,7 +405,9 @@ class SessionStore {
         } catch (err) {
             const msg = (err && err.message) || String(err);
             vscode.window.showErrorMessage(tf('archiveFailed', { msg }));
+            return; // do not toggle archived — keep state consistent
         }
+        if (!savedPath) return; // user cancelled; keep state consistent
 
         s.archived = true;
         if (this.sessionId === id) {
@@ -413,7 +417,7 @@ class SessionStore {
         await this.set(list);
         this.postList();
 
-        if (savedPath) this._notifyArchived(savedPath);
+        this._notifyArchived(savedPath);
     }
 
     /**

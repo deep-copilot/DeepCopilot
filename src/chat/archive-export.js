@@ -22,12 +22,19 @@ const { t } = require('../utils/i18n');
 
 const ARCHIVE_SUBDIR = '.deepcopilot/archives';
 
-/** Strip filesystem-hostile characters and trim length. */
+/**
+ * Strip filesystem-hostile characters and trim length.
+ * Removed character classes (per #166 review):
+ *   - `\ / : * ? " < > |` are reserved on Windows.
+ *   - `\u0000-\u001f` covers C0 control codes (NUL, newlines, tabs, ESC, …),
+ *     which corrupt filenames and can be abused for terminal injection when
+ *     the path is later printed to a log.
+ * Leading dots are also stripped so we never produce a hidden file (`.foo`)
+ * or a relative-path escape (`..`).
+ */
 function _safeTitle(raw) {
     const s = String(raw || '').trim();
     if (!s) return 'untitled';
-    // Forbidden on Windows: \ / : * ? " < > |  — plus control chars.
-    // Also drop leading dots so we never produce a hidden file.
     const cleaned = s
         .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
         .replace(/^\.+/, '_')
@@ -119,7 +126,11 @@ function renderSessionMarkdown(session) {
         }
     }
 
-    return parts.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+    // Compose the document. We intentionally do NOT run a global
+    // `\n{3,}` collapse here — that would mutate verbatim user/assistant
+    // text and break formatting inside fenced code blocks (PR #166 review).
+    // Instead, each section pushes its own controlled trailing blank line.
+    return parts.join('\n').trimEnd() + '\n';
 }
 
 /**
@@ -144,18 +155,27 @@ async function _pickWorkspaceRoot(sessionWs) {
     return picked ? picked.uri.fsPath : null;
 }
 
-/** Find a non-colliding path by appending "-1", "-2", … before ".md". */
+/**
+ * Reserve a non-colliding path atomically by `open(..., 'wx')` (exclusive
+ * create). This closes the TOCTOU window that an `fs.access` pre-check
+ * would leave open: two concurrent archive clicks in the same second
+ * could otherwise pick the same name and one would overwrite the other.
+ * The caller is responsible for writing content into the returned path;
+ * the empty placeholder file we create is overwritten by `fs.writeFile`.
+ */
 async function _uniquePath(dir, baseName) {
     const ext = '.md';
     const stem = baseName.replace(/\.md$/i, '');
-    let candidate = path.join(dir, stem + ext);
-    for (let i = 1; i < 1000; i++) {
+    for (let i = 0; i < 1000; i++) {
+        const candidate = path.join(dir, i === 0 ? stem + ext : `${stem}-${i}${ext}`);
         try {
-            await fs.access(candidate);
-        } catch {
+            const handle = await fs.open(candidate, 'wx');
+            await handle.close();
             return candidate;
+        } catch (err) {
+            if (err && err.code === 'EEXIST') continue;
+            throw err;
         }
-        candidate = path.join(dir, `${stem}-${i}${ext}`);
     }
     // Extremely unlikely; bail out with a timestamped name.
     return path.join(dir, `${stem}-${Date.now()}${ext}`);
@@ -186,10 +206,15 @@ async function exportSessionToMarkdown(session) {
         target = await _uniquePath(archiveDir, fileName);
     } else {
         // No workspace open — ask the user where to put it.
+        // `Uri.file()` requires an absolute path (PR #166 review): passing a
+        // bare filename resolves to a confusing location (drive root on
+        // Windows, `/` on POSIX). Anchor the default at the user's home so
+        // the dialog opens somewhere predictable.
+        const os = require('os');
         const uri = await vscode.window.showSaveDialog({
             saveLabel: t('archiveSaveLabel'),
             filters: { Markdown: ['md'] },
-            defaultUri: vscode.Uri.file(fileName),
+            defaultUri: vscode.Uri.file(path.join(os.homedir(), fileName)),
         });
         if (!uri) return null;
         target = uri.fsPath;
