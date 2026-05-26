@@ -235,11 +235,25 @@ function readUserMemory() {
 //
 // Issue #61 — Step 2 (skill index), Step 8 (trust warning).
 
-function readSkillIndex() {
+// Cheap memoization across a single buildSystemPrompt() call. Both
+// readSkillIndex() and getProblemSolvingParadigm() need the discovered
+// skills, but discoverSkills() walks the filesystem and reads every
+// SKILL.md body, so scanning twice per prompt build is wasteful. The cache
+// is reset at the start of every buildSystemPrompt() invocation.
+let _skillsCache = null;
+function _getSkills() {
+    if (_skillsCache !== null) return _skillsCache;
     try {
         const { discoverSkills } = require('../skills');
-        const root = wsRoot();
-        const skills = discoverSkills(root);
+        _skillsCache = discoverSkills(wsRoot());
+    } catch { _skillsCache = []; }
+    return _skillsCache;
+}
+function _resetSkillsCache() { _skillsCache = null; }
+
+function readSkillIndex() {
+    try {
+        const skills = _getSkills();
         if (!skills.length) return null;
 
         const lines = ['# Available skills'];
@@ -272,13 +286,12 @@ function getProblemSolvingParadigm() {
     // Issue #146 — only mention the skill-creator hard gate when a meta-skill
     // is actually installed. Otherwise the model fabricates a skill_invoke
     // call to a non-existent "skill-creator", producing a confusing error.
-    let skillCreatorInstalled = false;
-    try {
-        const { discoverSkills } = require('../skills');
-        const all = discoverSkills(wsRoot());
-        const variants = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
-        skillCreatorInstalled = all.some(s => variants.has(String(s && s.name || '').toLowerCase()));
-    } catch { /* ignore — treat as not installed */ }
+    // Reuses the memoized skills list shared with readSkillIndex() so we
+    // don't walk the filesystem twice per prompt build.
+    const variants = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
+    const skillCreatorInstalled = _getSkills().some(
+        s => variants.has(String(s && s.name || '').toLowerCase()),
+    );
 
     const gateParagraph = skillCreatorInstalled
         ? `\n\n**Issue #146 — skill_create quality gate**: A meta-skill matching \`skill-creator\` (or variant) is installed locally. You MUST call \`skill_invoke({ name: "<exact-installed-spelling>" })\` in the SAME turn BEFORE you call \`skill_create\`. The meta-skill performs description tightening, body structure check, and dedup. Calling \`skill_create\` without it will be rejected by the tool layer.`
@@ -379,6 +392,10 @@ function buildSystemPrompt(opts = {}) {
         : (process.platform === 'darwin' ? 'macOS' : 'Linux');
 
     const staticPart = getStaticCore();
+
+    // Reset the per-build skills cache so a freshly-installed skill becomes
+    // visible without a full process restart.
+    _resetSkillsCache();
 
     const dynamicParts = [getEnvironmentSection(osName)];
     const mem = readUserMemory();

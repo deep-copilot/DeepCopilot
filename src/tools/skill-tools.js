@@ -30,14 +30,22 @@ function skillInvoke(args, run) {
     const all = discoverSkills(wsRoot());
     const s = all.find(x => x.name === name);
     if (!s) {
-        // Issue #146 follow-up: when the model fabricates a call to a
-        // skill-creator meta-skill that isn't actually installed, return a
-        // soft notice instead of an error so the agent can simply proceed
-        // with `skill_create` (the executor-side gate is a no-op when no
-        // meta-skill is installed). This prevents the confusing
-        // "skill 'skill-creator' not found" failure users frequently see.
-        const variants = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
-        if (variants.has(name.toLowerCase())) {
+        // Issue #146 follow-up: handle a model that calls a skill-creator
+        // variant. Two distinct cases must be told apart:
+        //   1. A creator IS installed but the model used wrong casing/spelling.
+        //      → return an actionable "did you mean X" error so the gate
+        //        stays effective.
+        //   2. No creator is installed at all.
+        //      → return a soft notice so the agent can proceed straight to
+        //        skill_create (the executor-side gate is a no-op here).
+        const SKILL_CREATOR_VARIANTS = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
+        if (SKILL_CREATOR_VARIANTS.has(name.toLowerCase())) {
+            const installedCreator = all.find(
+                x => SKILL_CREATOR_VARIANTS.has(String(x && x.name || '').toLowerCase()),
+            );
+            if (installedCreator) {
+                return `Error: skill "${name}" not found. Did you mean "${installedCreator.name}"? Call \`skill_invoke({ name: "${installedCreator.name}" })\` with that exact spelling.`;
+            }
             return 'Notice: no skill-creator meta-skill is installed in this environment. The skill_create quality gate is inactive here — you may proceed to call `skill_create` directly when appropriate.';
         }
         const known = all.map(x => x.name).join(', ') || '(none installed)';

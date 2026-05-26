@@ -54,18 +54,20 @@ function injectSyntheticSkillRead(messages, skillName, body, skillPath) {
     const filePath = skillPath
         || path.join(DEEPCOPILOT_SKILLS_DIR, safeName, 'SKILL.md');
     const callId = `synthetic_skill_read_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-    messages.push({
+    // DeepSeek thinking-mode quirk: once any assistant message in history
+    // carries reasoning_content, every subsequent assistant message MUST
+    // also carry it, or the API returns 400 ("reasoning_content in the
+    // thinking mode must be passed back to the API"). Only attach a
+    // reasoning_content here when the history already shows thinking mode is
+    // live — that way non-DeepSeek providers (which don't round-trip this
+    // field) aren't poisoned by a synthetic value, and the providers/index.js
+    // backfill stays inactive until real thoughts have already appeared.
+    const thinkingLive = Array.isArray(messages) && messages.some(
+        m => m && m.role === 'assistant' && typeof m.reasoning_content === 'string' && m.reasoning_content.length > 0,
+    );
+    const asst = {
         role: 'assistant',
         content: null,
-        // DeepSeek thinking-mode quirk: once any assistant message in history
-        // carries reasoning_content, every subsequent assistant message MUST
-        // also carry it, or the API returns 400 ("reasoning_content in the
-        // thinking mode must be passed back to the API"). Skill injection
-        // happens mid-turn (right after a real thinking-mode assistant
-        // message), so we must include a non-empty reasoning_content here.
-        // Sanitization (sanitizeMessages in providers/index.js) preserves
-        // this field for reasoning-capable models, so it survives to the API.
-        reasoning_content: `Loading skill SOP "${safeName}" via read_file to obtain its instructions before proceeding.`,
         tool_calls: [{
             id:       callId,
             type:     'function',
@@ -74,7 +76,11 @@ function injectSyntheticSkillRead(messages, skillName, body, skillPath) {
                 arguments: JSON.stringify({ path: filePath }),
             },
         }],
-    });
+    };
+    if (thinkingLive) {
+        asst.reasoning_content = `Loading skill SOP "${safeName}" via read_file to obtain its instructions before proceeding.`;
+    }
+    messages.push(asst);
     messages.push({
         role:         'tool',
         tool_call_id: callId,

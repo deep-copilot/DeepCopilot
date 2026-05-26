@@ -170,10 +170,18 @@ function sanitizeMessages(providerId, messages, modelId) {
     if (!Array.isArray(messages) || !messages.length) return messages;
     const strip = getProvider(providerId)?.quirks?.stripInputFields;
     const isReasoning = !!(modelId && getModel(providerId, modelId)?.capabilities?.reasoning);
-    // For reasoning-capable models, strip every declared field except
-    // reasoning_content (which must round-trip).
+    // The reasoning_content round-trip rule is specific to providers that
+    // BOTH (a) declare reasoning_content as a stripInputField (i.e. the
+    // provider's API is known to care about this field) AND (b) are being
+    // used in a reasoning-capable mode. Without this narrower gate, OpenAI /
+    // Anthropic models that happen to flip `capabilities.reasoning` would
+    // get unknown `reasoning_content` fields pushed onto their requests.
+    const stripsReasoning = Array.isArray(strip) && strip.includes('reasoning_content');
+    const honorsReasoningRoundTrip = isReasoning && stripsReasoning;
+    // For models that honor the round-trip protocol, strip every declared
+    // field except reasoning_content. Otherwise strip everything declared.
     const effectiveStrip = Array.isArray(strip)
-        ? (isReasoning ? strip.filter(f => f !== 'reasoning_content') : strip)
+        ? (honorsReasoningRoundTrip ? strip.filter(f => f !== 'reasoning_content') : strip)
         : [];
 
     let out = messages;
@@ -194,7 +202,9 @@ function sanitizeMessages(providerId, messages, modelId) {
     // Reasoning-mode invariant backfill. Only kicks in once at least one
     // assistant message already carries reasoning_content — that's the
     // moment DeepSeek starts enforcing the "every assistant has it" rule.
-    if (isReasoning) {
+    // Scoped to providers that actually honor the round-trip protocol so we
+    // never inject reasoning_content into requests bound for OpenAI/Anthropic.
+    if (honorsReasoningRoundTrip) {
         const anyHasReasoning = out.some(
             m => m && m.role === 'assistant' && typeof m.reasoning_content === 'string' && m.reasoning_content.length > 0,
         );
