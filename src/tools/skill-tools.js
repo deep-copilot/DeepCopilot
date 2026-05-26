@@ -15,11 +15,15 @@ const path = require('path');
 const { discoverSkills, DEEPCOPILOT_SKILLS_DIR } = require('../skills');
 const { wsRoot } = require('../utils/paths');
 
-// Issue #146 — Meta-skill that must review every skill_create call.
-// Accept a couple of common spelling variants to be permissive about how
-// the on-disk skill is named. Defined at module scope so both skill_invoke
-// (for "did you mean X?" handling) and the skill_create gate share the same
-// canonical variant set.
+// Issue #146 — Canonical name variants for the optional `skill-creator`
+// meta-skill. When this skill is installed in the workspace, the `skill_create`
+// gate requires it to be invoked before any new skill can be created (a
+// quality-review step). When it is NOT installed the gate is a no-op and
+// `skill_create` proceeds directly — see `skillCreate` for the conditional
+// check and `system.js` / `schema.js` for the matching prompt/schema wording.
+// Accept a couple of common spellings to be permissive about how the on-disk
+// skill is named. Defined at module scope so both skill_invoke (for the "did
+// you mean X?" soft-notice path) and the skill_create gate share the same set.
 const SKILL_CREATOR_NAMES = new Set(['skill-creator', 'skill_creator', 'skillcreator']);
 
 // ─── skill_invoke ────────────────────────────────────────────────────────────
