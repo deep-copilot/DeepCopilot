@@ -532,6 +532,20 @@ class ToolExecutor {
                 if (!(run._sessionStartedBgJobs instanceof Set)) run._sessionStartedBgJobs = new Set();
                 run._sessionStartedBgJobs.add(jobId);
             };
+            // Watchdog/monitor detection: when the model inspects an existing
+            // deepseek-job-* terminal via read_terminal in this run, treat that
+            // as an active monitoring commitment. agent-loop's
+            // BG_WAIT_SKIPPED_MODEL_DONE guard refuses to end the turn while a
+            // monitored job is still alive — preventing the model from
+            // "promising to keep watching" and then immediately stopping when
+            // the underlying job was spawned in a previous turn.
+            if (name === 'read_terminal' && run && args && typeof args.terminal === 'string') {
+                const _jobId = args.terminal;
+                if (/^deepseek-job-/.test(_jobId)) {
+                    if (!(run._monitoredBgJobs instanceof Set)) run._monitoredBgJobs = new Set();
+                    run._monitoredBgJobs.add(_jobId);
+                }
+            }
             if (tcId) {
                 ctx.onStreamDelta = (delta) => {
                     if (!delta) return;

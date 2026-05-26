@@ -282,6 +282,12 @@ class AgentLoop {
         // ctx.registerBgJob into bg-shell so each freshly started jobId is
         // recorded here; we clear entries on end so memory is bounded.
         run._sessionStartedBgJobs = new Set();
+        // Bg jobs the model has actively inspected via read_terminal in this run.
+        // Populated by tool-executor; consumed by the BG_WAIT_SKIPPED_MODEL_DONE
+        // guard so the turn refuses to end while a monitored job is still alive
+        // (e.g. user asked the model to watch a training that was started in an
+        // earlier turn — `_sessionStartedBgJobs` alone wouldn't catch this).
+        run._monitoredBgJobs = new Set();
         // Only accept job-end events for jobs that belong to THIS session.
         // Require an exact sessionId match so events without a sessionId (orphaned
         // terminals not registered via addActiveBgJob) are also dropped — this
@@ -289,7 +295,10 @@ class AgentLoop {
         const _bgJobEndHandler = (payload) => {
             if (!payload || payload.sessionId !== sid) return;
             run._pendingBgJobEvents.push(payload);
-            if (payload.jobId) run._sessionStartedBgJobs.delete(payload.jobId);
+            if (payload.jobId) {
+                run._sessionStartedBgJobs.delete(payload.jobId);
+                run._monitoredBgJobs.delete(payload.jobId);
+            }
         };
         onBgJobEnded(_bgJobEndHandler);
 
@@ -642,10 +651,21 @@ class AgentLoop {
                             const _activeJobsNow = myBgJobs();
                             const _hasOwnRunningJob = [...run._sessionStartedBgJobs]
                                 .some(j => _activeJobsNow.has(j));
-                            if (!_hasPendingEvents && !_hasOwnRunningJob) {
+                            // Watchdog scenario: model is actively monitoring a
+                            // pre-existing bg job (e.g. training started in an
+                            // earlier turn). Detected when the model has called
+                            // read_terminal(terminal: "deepseek-job-X") in this
+                            // run. If any such monitored job is still active,
+                            // refuse to end the turn — the model committed to
+                            // watching it through completion.
+                            const _monitored = (run._monitoredBgJobs instanceof Set) ? run._monitoredBgJobs : null;
+                            const _hasMonitoredRunningJob = !!_monitored && [..._monitored]
+                                .some(j => _activeJobsNow.has(j));
+                            if (!_hasPendingEvents && !_hasOwnRunningJob && !_hasMonitoredRunningJob) {
                                 Logger.info('BG_WAIT_SKIPPED_MODEL_DONE', {
                                     jobs: [..._activeJobsNow],
                                     sessionStartedJobs: [...run._sessionStartedBgJobs],
+                                    monitoredJobs: _monitored ? [..._monitored] : [],
                                 });
                                 break;
                             }
