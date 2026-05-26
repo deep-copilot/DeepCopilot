@@ -522,6 +522,16 @@ class ToolExecutor {
             // the webview tagged with the tool-call id so the card can render
             // a live tail (GH-Copilot-style terminal card).
             const ctx = { abortSignal, secrets: this._context.secrets, sessionId: run?.sessionId ?? null };
+            // Issue #167: let run_shell_bg register the just-started jobId
+            // into the run's own "session-started" set, so agent-loop's
+            // BG_WAIT_SKIPPED_MODEL_DONE guard can refuse to end the turn while
+            // a freshly spawned background task is still alive. No-op when run
+            // is null (e.g. one-shot dispatch from tests).
+            ctx.registerBgJob = (jobId) => {
+                if (!jobId || !run) return;
+                if (!(run._sessionStartedBgJobs instanceof Set)) run._sessionStartedBgJobs = new Set();
+                run._sessionStartedBgJobs.add(jobId);
+            };
             if (tcId) {
                 ctx.onStreamDelta = (delta) => {
                     if (!delta) return;

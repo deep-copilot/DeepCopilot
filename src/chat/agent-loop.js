@@ -272,6 +272,16 @@ class AgentLoop {
         // that an unrelated session's long-running job doesn't trap this loop.
         const myBgJobs = () => getActiveBgJobsForSession(sid);
         run._pendingBgJobEvents = [];
+        // Issue #167: track bg jobs that were started by run_shell_bg WITHIN this
+        // run. The BG_WAIT_SKIPPED_MODEL_DONE early-exit path is safe for
+        // pre-existing long-running jobs (dev servers, watchers from earlier
+        // turns), but it must NOT fire when the model just spawned a new
+        // background task in this very turn — otherwise the model can
+        // "promise to notify you when done" and silently end the run before
+        // any completion event is delivered. tool-executor passes
+        // ctx.registerBgJob into bg-shell so each freshly started jobId is
+        // recorded here; we clear entries on end so memory is bounded.
+        run._sessionStartedBgJobs = new Set();
         // Only accept job-end events for jobs that belong to THIS session.
         // Require an exact sessionId match so events without a sessionId (orphaned
         // terminals not registered via addActiveBgJob) are also dropped — this
@@ -279,6 +289,7 @@ class AgentLoop {
         const _bgJobEndHandler = (payload) => {
             if (!payload || payload.sessionId !== sid) return;
             run._pendingBgJobEvents.push(payload);
+            if (payload.jobId) run._sessionStartedBgJobs.delete(payload.jobId);
         };
         onBgJobEnded(_bgJobEndHandler);
 
@@ -622,8 +633,20 @@ class AgentLoop {
                         // bypass this guard if we used a text-match heuristic.
                         if (assistantText.trim()) {
                             const _hasPendingEvents = !!(run._pendingBgJobEvents && run._pendingBgJobEvents.length);
-                            if (!_hasPendingEvents) {
-                                Logger.info('BG_WAIT_SKIPPED_MODEL_DONE', { jobs: [...myBgJobs()] });
+                            // Issue #167: in addition to the pending-event check,
+                            // refuse to break out of the wait loop when the model
+                            // started a new bg job IN THIS RUN that is still alive.
+                            // Without this guard, the model can defuse the wait by
+                            // emitting a single "I'll notify you when it's done"
+                            // sentence, leaving the just-spawned job orphaned.
+                            const _activeJobsNow = myBgJobs();
+                            const _hasOwnRunningJob = [...run._sessionStartedBgJobs]
+                                .some(j => _activeJobsNow.has(j));
+                            if (!_hasPendingEvents && !_hasOwnRunningJob) {
+                                Logger.info('BG_WAIT_SKIPPED_MODEL_DONE', {
+                                    jobs: [..._activeJobsNow],
+                                    sessionStartedJobs: [...run._sessionStartedBgJobs],
+                                });
                                 break;
                             }
                         }

@@ -118,6 +118,10 @@ async function toolRunShellBg(args, ctx = {}) {
     // removed, causing agent-loop to spin indefinitely.
     if (usedSI) {
         addActiveBgJob(jobId, ctx.sessionId || null);
+        // Issue #167: tell agent-loop this jobId was started in THIS run, so
+        // its BG_WAIT_SKIPPED_MODEL_DONE early-exit guard refuses to end the
+        // turn while the freshly spawned job is still alive.
+        try { ctx.registerBgJob && ctx.registerBgJob(jobId); } catch {}
     }
 
     // ── Early-failure capture: many commands fail within ~1–2 s (missing
@@ -175,19 +179,30 @@ async function toolRunShellBg(args, ctx = {}) {
         terminalName: jobId,
         status: 'running',
         shellIntegrationAvailable: usedSI,
+        // Issue #167: the previous hint promised the agent it would be
+        // "automatically woken when this job ends" and instructed it to
+        // "simply end your turn". That contract was incomplete — the agent
+        // loop used to break out of its wait the moment the model produced
+        // ANY closing sentence, leaving the just-spawned job orphaned. The
+        // loop now refuses to end while one of this run's own bg jobs is
+        // still alive, so the model MUST stay on duty. We restate the
+        // contract honestly here to discourage the model from emitting
+        // pseudo-completion messages like "I'll tell you when it's done".
         hint: [
             `Background job "${jobId}" started.`,
             usedSI
                 ? [
-                    `Shell integration active — the agent will be suspended and automatically woken when this job ends.`,
+                    `Shell integration active — agent-loop will KEEP YOU ON DUTY until this job ends.`,
+                    `You CANNOT close this turn by saying "I'll let you know later": the loop ignores any such promise while this job is alive and will re-invoke you with the real exit code + tail output as a <system-reminder> when the process exits.`,
                     `CRITICAL: do NOT call ping, sleep, Start-Sleep, or any wait/poll command — it wastes time and blocks failure detection.`,
-                    `CRITICAL: do NOT call read_terminal now. Simply end your turn; the system delivers the job result automatically.`,
+                    `CRITICAL: do NOT call read_terminal now — the system delivers the final result automatically. Either narrate genuine progress, or stay silent until you receive the end-of-job system-reminder.`,
                   ].join('\n')
                 : [
-                    `Shell integration unavailable — you must poll manually:`,
+                    `Shell integration unavailable — agent-loop CANNOT track this job's exit automatically; you must poll manually:`,
                     `  1. Wait: run_shell(command: "ping -n 16 127.0.0.1 > nul")  ← ~15 s pause on Windows`,
                     `  2. Check: read_terminal(terminal: "${jobId}")`,
                     `  Output shows "[exit N]" or "[finished]" when done; "[running]" means still active.`,
+                    `Do NOT tell the user "I'll notify you when it's done" in this branch — there is no automatic notification.`,
                   ].join('\n'),
             `To cancel: ask the user to close the terminal named "${jobId}".`,
         ].join('\n'),
