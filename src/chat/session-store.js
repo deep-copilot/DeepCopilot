@@ -102,6 +102,40 @@ class SessionStore {
         this._getBusy    = getBusy;         // (id) => bool   (is that session's run busy?)
         this._onDeleteRun = onDeleteRun;    // (id) => void   (abort + remove from _runs)
         this.sessionId   = null;            // currently displayed session id (null = empty view)
+
+        // Issue #169: archive semantics changed from "soft-hide + export" to
+        // "pure export". Sessions that were previously hidden by the old
+        // archive action are stuck invisible in globalState. Run a one-shot
+        // idempotent migration that flips every `archived: true` back to
+        // `false` so those records reappear in the sidebar after upgrade.
+        // Guarded by a globalState boolean so we only do this once per user.
+        // Fire-and-forget: any postList() call after the next tick will see
+        // the migrated data.
+        this._migrateArchivedFlagIfNeeded();
+    }
+
+    /**
+     * One-time migration for issue #169. Idempotent: subsequent runs no-op
+     * because the `archiveSemanticsV2Migrated` flag is set on first success.
+     * Errors are swallowed (logged via console.warn) — failure here must not
+     * block extension activation.
+     */
+    async _migrateArchivedFlagIfNeeded() {
+        try {
+            if (this._gs.get('deepseekAgent.archiveSemanticsV2Migrated', false)) return;
+            const list = this.all();
+            let touched = false;
+            for (const s of list) {
+                if (s.archived) { s.archived = false; touched = true; }
+            }
+            if (touched) await this.set(list);
+            await this._gs.update('deepseekAgent.archiveSemanticsV2Migrated', true);
+            if (touched) this.postList();
+        } catch (err) {
+            // Non-fatal: next launch will retry.
+            // eslint-disable-next-line no-console
+            console.warn('[deep-copilot] archive-v2 migration failed:', err && err.message || err);
+        }
     }
 
     // ─── Raw storage ────────────────────────────────────────────────────────
@@ -361,43 +395,28 @@ class SessionStore {
     }
 
     /**
-     * "Archive" a session — issue #165.
+     * "Archive" a session — issues #165, #169.
      *
-     * Original behaviour (pre-#165) was a soft-hide toggle: flip `archived`,
-     * disappear from the sidebar list, data stays in globalState. Users
-     * reported that this didn't match the menu label's promise: nothing was
-     * actually *archived* anywhere they could see, find, or grep.
+     * Behaviour evolution:
+     *   pre-#165 : soft-hide toggle (flip `archived`, disappear from list).
+     *   #165/#166: render to Markdown + soft-hide (export AND hide).
+     *   #169     : pure export. Render to Markdown, leave session state
+     *              completely untouched — it stays in the sidebar, stays
+     *              the active session, can be archived again to produce
+     *              another snapshot.
      *
-     * New behaviour: render the session to Markdown and write it under
-     *   <workspace>/.deep-copilot/archives/yyyyMMdd-HHmmss-<title>.md
-     * Then perform the original soft-hide so the session leaves the sidebar.
+     * Contract:
+     *   - exportSessionToMarkdown returns absolute path → toast + done.
+     *   - returns null (user cancelled folder picker / save dialog) → silent.
+     *   - throws → toast error; no state change.
      *
-     * The "un-archive" gesture (clicking again on an already-archived item)
-     * is still supported via the boolean toggle — it simply un-hides the
-     * record without touching the Markdown file on disk.
+     * Session state (`archived` flag, current sessionId, list ordering) is
+     * never mutated by this method.
      */
     async archive(id) {
-        const list = this.all();
-        const s = list.find(x => x.id === id);
+        const s = this.all().find(x => x.id === id);
         if (!s) return;
 
-        // Un-archive: just flip back to visible. No file I/O needed.
-        if (s.archived) {
-            s.archived = false;
-            await this.set(list);
-            this.postList();
-            return;
-        }
-
-        // Archive: render to Markdown FIRST. Only hide the session from the
-        // sidebar if we actually produced a file on disk — otherwise setting
-        // `archived = true` on export failure (or on a user-cancelled save
-        // dialog) would leave the session invisible in the list while nothing
-        // was actually archived. Contract:
-        //   - savedPath is a string  → write succeeded, hide the session.
-        //   - savedPath is null      → user cancelled the save dialog; keep
-        //                              session visible, do nothing more.
-        //   - throw caught below     → fs error; surface message, keep visible.
         let savedPath = null;
         try {
             const { exportSessionToMarkdown } = require('./archive-export');
@@ -405,17 +424,9 @@ class SessionStore {
         } catch (err) {
             const msg = (err && err.message) || String(err);
             vscode.window.showErrorMessage(tf('archiveFailed', { msg }));
-            return; // do not toggle archived — keep state consistent
+            return;
         }
-        if (!savedPath) return; // user cancelled; keep state consistent
-
-        s.archived = true;
-        if (this.sessionId === id) {
-            this.sessionId = null;
-            this._post({ type: 'sessionLoaded', id: null, messages: [] });
-        }
-        await this.set(list);
-        this.postList();
+        if (!savedPath) return; // user cancelled
 
         this._notifyArchived(savedPath);
     }
