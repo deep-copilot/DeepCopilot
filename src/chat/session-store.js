@@ -8,6 +8,7 @@
 const vscode = require('vscode');
 const { randomBytes } = require('crypto');
 const { t, tf } = require('../utils/i18n');
+const { Logger } = require('../logger');
 
 // ─── Orphan tool_calls sanitizer ───────────────────────────────────────────
 // Removes ANY incomplete assistant{tool_calls} group from a message array,
@@ -109,16 +110,19 @@ class SessionStore {
         // idempotent migration that flips every `archived: true` back to
         // `false` so those records reappear in the sidebar after upgrade.
         // Guarded by a globalState boolean so we only do this once per user.
-        // Fire-and-forget: any postList() call after the next tick will see
-        // the migrated data.
+        // Fire-and-forget: the migration runs asynchronously and triggers
+        // postList() itself once it finishes, so the sidebar refreshes as
+        // soon as the migrated data is persisted (not necessarily on the
+        // very next tick).
         this._migrateArchivedFlagIfNeeded();
     }
 
     /**
      * One-time migration for issue #169. Idempotent: subsequent runs no-op
      * because the `archiveSemanticsV2Migrated` flag is set on first success.
-     * Errors are swallowed (logged via console.warn) — failure here must not
-     * block extension activation.
+     * Errors are swallowed (logged via Logger) — failure here must not
+     * block extension activation; the next launch will retry automatically
+     * because the flag was never written.
      */
     async _migrateArchivedFlagIfNeeded() {
         try {
@@ -132,9 +136,13 @@ class SessionStore {
             await this._gs.update('deepseekAgent.archiveSemanticsV2Migrated', true);
             if (touched) this.postList();
         } catch (err) {
-            // Non-fatal: next launch will retry.
-            // eslint-disable-next-line no-console
-            console.warn('[deep-copilot] archive-v2 migration failed:', err && err.message || err);
+            // Non-fatal: next launch will retry. Route through Logger so the
+            // diagnostic respects deepseekAgent.enableDebugLog and lands in
+            // the "Deep Copilot Debug" output channel/log file.
+            Logger.info('ARCHIVE_V2_MIGRATION_FAILED', {
+                message: (err && err.message) || String(err),
+                stack:   (err && err.stack)   || undefined,
+            });
         }
     }
 
