@@ -434,17 +434,29 @@ class SessionStore {
 
         const openLabel   = t('archiveOpenFile');
         const revealLabel = t('archiveRevealInOS');
-        vscode.window
-            .showInformationMessage(tf('archiveSaved', { path: display }), openLabel, revealLabel)
-            .then((choice) => {
-                if (!choice) return;
-                const uri = vscode.Uri.file(absPath);
+        // Wrap both the toast .then() and the VS Code calls inside it so that
+        // a missing/deleted file or permission error after the user clicks
+        // does not surface as an unhandled promise rejection. We swallow the
+        // error after surfacing it as a non-fatal toast — failure to *open*
+        // the archive is not the archive itself failing.
+        Promise.resolve(
+            vscode.window.showInformationMessage(
+                tf('archiveSaved', { path: display }), openLabel, revealLabel,
+            ),
+        ).then(async (choice) => {
+            if (!choice) return;
+            const uri = vscode.Uri.file(absPath);
+            try {
                 if (choice === openLabel) {
-                    vscode.window.showTextDocument(uri);
+                    await vscode.window.showTextDocument(uri);
                 } else if (choice === revealLabel) {
-                    vscode.commands.executeCommand('revealFileInOS', uri);
+                    await vscode.commands.executeCommand('revealFileInOS', uri);
                 }
-            });
+            } catch (err) {
+                const msg = (err && err.message) || String(err);
+                vscode.window.showWarningMessage(tf('archiveOpenFailed', { msg }));
+            }
+        }).catch(() => { /* showInformationMessage itself never rejects, but be defensive */ });
     }
 
     // ─── Auto-naming ────────────────────────────────────────────────────────

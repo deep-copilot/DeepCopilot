@@ -86,6 +86,19 @@ function _renderThoughts(thoughts) {
 }
 
 /**
+ * Collapse newlines/tabs/control chars in a session title down to a single
+ * space before it is injected into a Markdown `# ...` heading. Without this,
+ * a title that contains "\n" (e.g. taken from the first user message or a
+ * pasted rename) would split the heading and break the document structure.
+ */
+function _safeHeadingTitle(raw) {
+    return String(raw || '')
+        .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
  * Render a session record to a Markdown string.
  * The record shape mirrors what SessionStore.append() persists:
  *   { id, title, createdAt, updatedAt, model, mode, ws, msgCount,
@@ -108,7 +121,8 @@ function renderSessionMarkdown(session) {
         workspace: session.ws || '',
     });
 
-    const parts = [head, `# ${session.title || t('sessionUntitled')}`, ''];
+    const heading = _safeHeadingTitle(session.title) || t('sessionUntitled');
+    const parts = [head, `# ${heading}`, ''];
     const messages = Array.isArray(session.messages) ? session.messages : [];
     for (const m of messages) {
         if (!m) continue;
@@ -134,10 +148,20 @@ function renderSessionMarkdown(session) {
 }
 
 /**
- * Pick the target workspace folder. Returns the folder fsPath or null.
- *   - 0 folders → null (caller falls back to save dialog).
- *   - 1 folder  → use it.
- *   - 2+        → prompt the user.
+ * Sentinel returned by `_pickWorkspaceRoot` when the user explicitly
+ * dismissed the multi-root workspace folder picker. We MUST distinguish this
+ * from the "no workspace open" case (returns `null`): in the cancel case we
+ * should abort the archive cleanly, not silently fall back to a save dialog
+ * (which would happily let the user save outside any workspace).
+ */
+const PICK_CANCELLED = Symbol('pick-cancelled');
+
+/**
+ * Pick the target workspace folder.
+ *   - 0 folders → returns `null` (caller falls back to save dialog).
+ *   - 1 folder  → returns its fsPath.
+ *   - 2+        → returns the picked fsPath, or `PICK_CANCELLED` if the
+ *                user dismissed the picker.
  * @param {string} sessionWs — the workspace the session was created in; used
  *   as a strong hint to skip the picker in multi-root scenarios.
  */
@@ -152,7 +176,7 @@ async function _pickWorkspaceRoot(sessionWs) {
     const picked = await vscode.window.showWorkspaceFolderPick({
         placeHolder: t('archivePickWorkspace'),
     });
-    return picked ? picked.uri.fsPath : null;
+    return picked ? picked.uri.fsPath : PICK_CANCELLED;
 }
 
 /**
@@ -199,8 +223,9 @@ async function _writeUnique(dir, baseName, content) {
 
 /**
  * Resolve the destination path, then write the markdown.
- * Returns the absolute path written, or null if the user cancelled the
- * save dialog in the no-workspace fallback.
+ * Returns the absolute path written, or `null` if:
+ *   - the user cancelled the multi-root workspace folder picker, OR
+ *   - the user cancelled the save dialog in the no-workspace fallback.
  * Throws on filesystem errors so the caller can surface a friendly message.
  */
 async function exportSessionToMarkdown(session) {
@@ -208,6 +233,7 @@ async function exportSessionToMarkdown(session) {
     const fileName = `${_timestamp()}-${_safeTitle(session.title)}.md`;
 
     const root = await _pickWorkspaceRoot(session.ws);
+    if (root === PICK_CANCELLED) return null;  // user dismissed the picker
     if (root) {
         const archiveDir = path.join(root, ARCHIVE_SUBDIR);
         // Defence in depth: even though fileName is sanitised, verify the
