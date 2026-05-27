@@ -76,9 +76,10 @@ async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', abortSig
 
 function _decodeXmlEntities(s) {
     return String(s || '')
-        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
         .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
         .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+        .replace(/&amp;/g, '&')
         .replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim();
 }
 
