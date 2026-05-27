@@ -411,7 +411,7 @@ class ChatViewProvider {
                 if (msg.provider) {
                     await cfg.update('provider', msg.provider, vscode.ConfigurationTarget.Global);
                 }
-                if (msg.webSearchProvider) {
+                if (msg.webSearchProvider && ['tavily', 'bing'].includes(msg.webSearchProvider)) {
                     await cfg.update('webSearchProvider', msg.webSearchProvider, vscode.ConfigurationTarget.Global);
                 }
                 // If the UI sent the currently selected model alongside the provider,
