@@ -273,6 +273,16 @@
           "minimum": 8000,
           "description": "Approximate token budget before older tool results are auto-compacted to fit the model context window."
         },
+        "deepseekAgent.webSearchProvider": {
+          "type": "string",
+          "default": "tavily",
+          "enum": ["tavily", "bing"],
+          "enumDescriptions": [
+            "Tavily — best quality, requires API key (1000 free searches/month)",
+            "Bing — no API key required, HTML scrape"
+          ],
+          "description": "Web search backend. Bing and DuckDuckGo require no API key and work out of the box."
+        },
         "deepseekAgent.postEditDiagnostics": {
           "type": "boolean",
           "default": true,

@@ -193,18 +193,27 @@ function buildWebviewHtml(webview, extensionUri) {
       </div>
       <div class="settings-divider"></div>
       <div class="settings-section">
-        <div class="settings-section-label">Web Search <span class="settings-section-badge">Tavily</span></div>
+        <div class="settings-section-label">Web Search</div>
         <div class="settings-field">
-          <label class="settings-label" for="s-tv-key">API Key <span class="settings-optional">(optional)</span></label>
-          <div class="settings-input-row">
-            <input type="password" id="s-tv-key" class="settings-input" placeholder="tvly-..." autocomplete="off" spellcheck="false"/>
-            <button class="settings-eye-btn" id="s-tv-key-eye" title="Show / hide" aria-label="Toggle key visibility">👁</button>
+          <label class="settings-label" for="s-ws-provider">Provider</label>
+          <select id="s-ws-provider" class="settings-input settings-select">
+            <option value="tavily">Tavily (needs API key, best quality)</option>
+            <option value="bing">Bing (no API key required)</option>
+          </select>
+        </div>
+        <div id="s-tv-section">
+          <div class="settings-field">
+            <label class="settings-label" for="s-tv-key">Tavily API Key <span class="settings-optional">(optional)</span></label>
+            <div class="settings-input-row">
+              <input type="password" id="s-tv-key" class="settings-input" placeholder="tvly-..." autocomplete="off" spellcheck="false"/>
+              <button class="settings-eye-btn" id="s-tv-key-eye" title="Show / hide" aria-label="Toggle key visibility">👁</button>
+            </div>
+            <div class="settings-test-row">
+              <button class="settings-test-btn" id="s-tv-test">▶ Test connection</button>
+              <span class="settings-test-result" id="s-tv-result"></span>
+            </div>
+            <a class="settings-link" id="s-tv-link" href="#">↗ app.tavily.com · 1000 free searches/month</a>
           </div>
-          <div class="settings-test-row">
-            <button class="settings-test-btn" id="s-tv-test">▶ Test connection</button>
-            <span class="settings-test-result" id="s-tv-result"></span>
-          </div>
-          <a class="settings-link" id="s-tv-link" href="#">↗ app.tavily.com · 1000 free searches/month</a>
         </div>
       </div>
     </div>
