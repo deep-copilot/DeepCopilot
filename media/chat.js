@@ -297,14 +297,26 @@
   var sbNewBtn        = document.getElementById('sb-new-btn');
   var sessionBackdrop = document.getElementById('session-backdrop');
   var rightPanel      = document.getElementById('right');
+  var _drawerPrevFocus = null;
 
   function openSessionDrawer() {
     if (rightPanel) rightPanel.classList.add('drawer-open');
     if (sessionBackdrop) sessionBackdrop.classList.add('open');
+    try { _drawerPrevFocus = document.activeElement; } catch(e){ _drawerPrevFocus = null; }
+    if (rightPanel) {
+      var focusTarget = rightPanel.querySelector('input, textarea, select, button, [tabindex]:not([tabindex="-1"]), a[href]');
+      if (focusTarget && typeof focusTarget.focus === 'function') {
+        try { focusTarget.focus(); } catch(e){}
+      }
+    }
   }
   function closeSessionDrawer() {
     if (rightPanel) rightPanel.classList.remove('drawer-open');
     if (sessionBackdrop) sessionBackdrop.classList.remove('open');
+    if (_drawerPrevFocus && typeof _drawerPrevFocus.focus === 'function') {
+      try { _drawerPrevFocus.focus(); } catch(e){}
+    }
+    _drawerPrevFocus = null;
   }
   if (sbSessionsBtn) sbSessionsBtn.addEventListener('click', function() {
     rightPanel && rightPanel.classList.contains('drawer-open') ? closeSessionDrawer() : openSessionDrawer();
@@ -317,6 +329,12 @@
     if (!si || !si.dataset.id) return;
     if (target.closest('.si-rename-inp, input, textarea, select, button, a, label, [contenteditable="true"], [contenteditable=""], [contenteditable]')) return;
     closeSessionDrawer();
+  });
+  /* Close drawer on Escape for keyboard accessibility */
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && rightPanel && rightPanel.classList.contains('drawer-open')) {
+      closeSessionDrawer();
+    }
   });
   /* Todo popup close button */
   var todoPopCloseBtn = document.getElementById("todo-pop-close");
