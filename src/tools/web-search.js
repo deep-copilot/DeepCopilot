@@ -90,11 +90,20 @@ function _decodeXmlEntities(s) {
         if (next === out) break;
         out = next;
     }
+    // Safely convert a numeric code point to a string. String.fromCodePoint throws
+    // RangeError for NaN, surrogate halves, or values > 0x10FFFF — guard against
+    // malformed entities in remote RSS so a single bad entity can't kill the
+    // whole Bing search. On failure, drop the entity (return '').
+    const fromCp = (cp) => {
+        if (!Number.isFinite(cp) || cp < 0 || cp > 0x10FFFF) return '';
+        if (cp >= 0xD800 && cp <= 0xDFFF) return ''; // surrogate halves
+        try { return String.fromCodePoint(cp); } catch { return ''; }
+    };
     out = out
         .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
         .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
-        .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-        .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => fromCp(parseInt(h, 16)))
+        .replace(/&#(\d+);/g, (_, n) => fromCp(Number(n)));
     return out.replace(/\s{2,}/g, ' ').trim();
 }
 
