@@ -18,6 +18,10 @@ function _request(opts, body, timeoutMs = 20000, abortSignal = null) {
         if (abortSignal && abortSignal.aborted) return reject(new Error('aborted'));
         const mod = opts.protocol === 'http:' ? http : https;
         const req = mod.request(opts, (res) => {
+            // Without this, an error on the response stream (e.g. socket reset
+            // mid-body) would surface as an unhandled 'error' event and could
+            // crash the extension host process.
+            res.on('error', reject);
             let chunks = '';
             res.setEncoding('utf8');
             res.on('data', (c) => { chunks += c; });
@@ -38,10 +42,10 @@ function _request(opts, body, timeoutMs = 20000, abortSignal = null) {
 
 // ─── Tavily backend ────────────────────────────────────────────────────────────
 
-async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', include_answer = true, abortSignal } = {}) {
+async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', includeAnswer = true, abortSignal } = {}) {
     const body = JSON.stringify({
         api_key: apiKey, query, max_results: max,
-        search_depth: depth, include_answer,
+        search_depth: depth, include_answer: includeAnswer,
         include_raw_content: false, include_images: false,
     });
     const res = await _request({
@@ -56,7 +60,7 @@ async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', include_
     try { data = JSON.parse(res.body); }
     catch (e) { throw new Error(`Tavily returned non-JSON response: ${e.message} (body preview: ${res.body.slice(0, 200)})`); }
     const lines = [`Query: ${query}`];
-    if (include_answer && data.answer) lines.push('', '## Synthesized answer', data.answer);
+    if (includeAnswer && data.answer) lines.push('', '## Synthesized answer', data.answer);
     const results = Array.isArray(data.results) ? data.results : [];
     if (!results.length) {
         lines.push('', '(No results.)');
@@ -166,8 +170,8 @@ async function toolWebSearch(args, ctx = {}) {
             return 'Error: Tavily API key not configured. Run command "Deep Copilot: Set Tavily API Key" or switch to Bing in settings (no key required).';
         }
         const depth = args.search_depth === 'advanced' ? 'advanced' : 'basic';
-        const include_answer = args.include_answer === false ? false : true;
-        return await _tavilySearch(query, { apiKey, max, depth, include_answer, abortSignal });
+        const includeAnswer = args.include_answer !== false;
+        return await _tavilySearch(query, { apiKey, max, depth, includeAnswer, abortSignal });
 
     } catch (e) { return `Error: ${e.message || String(e)}`; }
 }
