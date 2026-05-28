@@ -312,8 +312,11 @@
   if (sbNewBtn) sbNewBtn.addEventListener('click', function() { newSession(); });
   if (sessionBackdrop) sessionBackdrop.addEventListener('click', closeSessionDrawer);
   if (rightPanel) rightPanel.addEventListener('click', function(e) {
-    var si = e.target.closest('.si');
-    if (si && si.dataset.id) closeSessionDrawer();
+    var target = e.target;
+    var si = target.closest('.si');
+    if (!si || !si.dataset.id) return;
+    if (target.closest('.si-rename-inp, input, textarea, select, button, a, label, [contenteditable="true"], [contenteditable=""], [contenteditable]')) return;
+    closeSessionDrawer();
   });
   /* Todo popup close button */
   var todoPopCloseBtn = document.getElementById("todo-pop-close");

@@ -276,7 +276,6 @@ html[data-locale="en"] body{font-family:"Segoe UI","Inter",system-ui,-apple-syst
 #right .si .busy-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--vscode-button-background,#4ea1ff);margin-right:6px;vertical-align:middle;animation:sibusy 1s ease-in-out infinite}
 @keyframes sibusy{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
 #ia{grid-area:composer;padding:8px 24px;background:var(--vscode-sideBar-background)}
-body.narrow #ia{padding-left:8px;padding-right:8px}
 #cxb{display:none;font-size:11px;color:var(--vscode-button-background);padding:0 2px 6px}
 /* @file attachment chips */
 #at-chips{display:none;flex-wrap:wrap;gap:4px;padding:6px 10px 2px;max-width:100%}

@@ -157,7 +157,7 @@ function buildWebviewHtml(webview, extensionUri) {
     <span class="pill" id="ft-balance" title="${ui.balanceTitle}" style="display:none">${ui.balanceInit}</span>
   </div>
 </div>
-<!-- ── Session drawer backdrop (narrow mode) ── -->
+<!-- ── Session drawer backdrop (always-overlay drawer) ── -->
 <div id="session-backdrop"></div>
 <!-- ── Settings Modal ── -->
 <div id="settings-overlay" class="settings-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="settings-title">
