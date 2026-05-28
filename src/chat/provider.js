@@ -276,7 +276,8 @@ class ChatViewProvider {
                 const tvKey     = await this._context.secrets.get('deepseekAgent.tavilyKey') || '';
                 const baseUrl   = cfg.get('apiBaseUrl') || '';
                 const provider  = cfg.get('provider') || 'deepseek';
-                const wsProvider = cfg.get('webSearchProvider') || 'tavily';
+                const rawWsProvider = cfg.get('webSearchProvider');
+                const wsProvider = ['tavily', 'bing'].includes(rawWsProvider) ? rawWsProvider : 'tavily';
                 const maskKey   = (k) => k ? (k.slice(0, 6) + '...' + k.slice(-4)) : '';
                 this._post({
                     type:              'settingsLoaded',

@@ -52,9 +52,11 @@ async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', include_
     if (res.status < 200 || res.status >= 300)
         throw new Error(`Tavily HTTP ${res.status}: ${res.body.slice(0, 200)}`);
 
-    const data = JSON.parse(res.body);
+    let data;
+    try { data = JSON.parse(res.body); }
+    catch (e) { throw new Error(`Tavily returned non-JSON response: ${e.message} (body preview: ${res.body.slice(0, 200)})`); }
     const lines = [`Query: ${query}`];
-    if (data.answer) lines.push('', '## Synthesized answer', data.answer);
+    if (include_answer && data.answer) lines.push('', '## Synthesized answer', data.answer);
     const results = Array.isArray(data.results) ? data.results : [];
     if (!results.length) {
         lines.push('', '(No results.)');
@@ -74,12 +76,22 @@ async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', include_
 // no HTML scraping fragility.
 
 function _decodeXmlEntities(s) {
-    return String(s || '')
+    let out = String(s || '');
+    // Strip tags first so we don't accidentally feed HTML into the entity pass.
+    out = out.replace(/<[^>]+>/g, ' ');
+    // Decode &amp; first (and iterate to a fixed point) so double-escaped entities
+    // like &amp;lt; resolve correctly.
+    for (let i = 0; i < 3; i++) {
+        const next = out.replace(/&amp;/g, '&');
+        if (next === out) break;
+        out = next;
+    }
+    out = out
         .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
         .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
-        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-        .replace(/&amp;/g, '&')
-        .replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+        .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
+    return out.replace(/\s{2,}/g, ' ').trim();
 }
 
 function _parseBingRss(xml) {
