@@ -17,7 +17,7 @@ html[data-locale="en"] body{font-family:"Segoe UI","Inter",system-ui,-apple-syst
 .tbb.active{color:var(--vscode-button-background)}
 /* ── Top bar: always-visible session controls ── */
 #topbar{grid-area:topbar;display:flex;align-items:center;justify-content:flex-end;padding:0 8px;height:36px;flex-shrink:0;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-titleBar-activeBackground,var(--vscode-sideBar-background))}
-#sb-sessions-btn,#sb-new-btn{background:none;border:none;cursor:pointer;color:var(--vscode-icon-foreground);padding:5px 7px;border-radius:5px;display:flex;align-items:center;justify-content:center;opacity:.8}
+#sb-sessions-btn,#sb-new-btn{background:none;border:none;cursor:pointer;color:var(--vscode-icon-foreground);padding:5px 7px;border-radius:5px;display:flex;align-items:center;justify-content:center;opacity:.8;font-size:16px}
 #sb-sessions-btn:hover,#sb-new-btn:hover{opacity:1;background:var(--vscode-toolbar-hoverBackground)}
 /* ── #sb: notification bar (hidden by default, shown by backend status messages) ── */
 #sb{grid-area:sb;font-size:11px;color:var(--vscode-descriptionForeground);background:rgba(244,135,113,.1);border-bottom:1px solid var(--vscode-panel-border);display:none;align-items:center;padding:4px 12px}

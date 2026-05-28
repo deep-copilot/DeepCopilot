@@ -65,18 +65,8 @@ function buildWebviewHtml(webview, extensionUri) {
 <!-- #cbt kept hidden: chat.js references it for /clear command & Ctrl+K shortcut -->
 <button id="cbt" style="display:none" aria-hidden="true"></button>
 <div id="topbar">
-  <button id="sb-sessions-btn" title="${ui.sessions}" aria-label="Session history">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="1" y="3" width="14" height="2" rx="1" fill="currentColor"/>
-      <rect x="1" y="7" width="14" height="2" rx="1" fill="currentColor"/>
-      <rect x="1" y="11" width="10" height="2" rx="1" fill="currentColor"/>
-    </svg>
-  </button>
-  <button id="sb-new-btn" title="${ui.newSession}" aria-label="New session">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-    </svg>
-  </button>
+  <button id="sb-sessions-btn" title="${ui.sessions}" aria-label="Session history"><i class="codicon codicon-history"></i></button>
+  <button id="sb-new-btn" title="${ui.newSession}" aria-label="New session"><i class="codicon codicon-comment-add"></i></button>
 </div>
 <div id="sb"></div>
 <div id="main">
