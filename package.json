@@ -279,9 +279,9 @@
           "enum": ["tavily", "bing"],
           "enumDescriptions": [
             "Tavily — best quality, requires API key (1000 free searches/month)",
-            "Bing — no API key required, HTML scrape"
+            "Bing — no API key required, uses Bing RSS"
           ],
-          "description": "Web search backend. Bing and DuckDuckGo require no API key and work out of the box."
+          "description": "Web search backend. Tavily requires an API key; Bing works out of the box without an API key."
         },
         "deepseekAgent.postEditDiagnostics": {
           "type": "boolean",

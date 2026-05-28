@@ -1,11 +1,10 @@
 // web_search: multi-backend web search.
 // Backends:
-//   - Tavily   (requires API key, best quality)
-//   - Bing     (no API key required, HTML scrape via DuckDuckGo-lite endpoint)
-//   - DuckDuckGo (no API key required, HTML scrape)
+//   - Tavily (requires API key, best quality)
+//   - Bing   (no API key required, uses Bing RSS endpoint)
 //
 // Active backend is determined by the 'deepseekAgent.webSearchProvider' setting.
-// Falls back to Tavily when configured.
+// Supported providers in this module are Tavily and Bing.
 'use strict';
 
 const https  = require('https');
@@ -39,10 +38,10 @@ function _request(opts, body, timeoutMs = 20000, abortSignal = null) {
 
 // ─── Tavily backend ────────────────────────────────────────────────────────────
 
-async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', abortSignal } = {}) {
+async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', include_answer = true, abortSignal } = {}) {
     const body = JSON.stringify({
         api_key: apiKey, query, max_results: max,
-        search_depth: depth, include_answer: true,
+        search_depth: depth, include_answer,
         include_raw_content: false, include_images: false,
     });
     const res = await _request({
@@ -152,10 +151,11 @@ async function toolWebSearch(args, ctx = {}) {
         if (!secrets) return 'Error: SecretStorage unavailable (internal).';
         const apiKey  = await secrets.get('deepseekAgent.tavilyKey');
         if (!apiKey) {
-            return 'Error: Tavily API key not configured. Run command "Deep Copilot: Set Tavily API Key" or switch to Bing/DuckDuckGo in settings (no key required).';
+            return 'Error: Tavily API key not configured. Run command "Deep Copilot: Set Tavily API Key" or switch to Bing in settings (no key required).';
         }
         const depth = args.search_depth === 'advanced' ? 'advanced' : 'basic';
-        return await _tavilySearch(query, { apiKey, max, depth, abortSignal });
+        const include_answer = args.include_answer === false ? false : true;
+        return await _tavilySearch(query, { apiKey, max, depth, include_answer, abortSignal });
 
     } catch (e) { return `Error: ${e.message || String(e)}`; }
 }

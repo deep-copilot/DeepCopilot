@@ -2262,6 +2262,7 @@
   var _stgDsKeySet = false, _stgTvKeySet = false;
   var _stgOrigBaseUrl = '';
   var _stgOrigProvider = 'deepseek';
+  var _stgOrigWsProvider = 'tavily';
   var _stgTestTimers = {};
 
   var stgOverlay   = document.getElementById('settings-overlay');
@@ -2290,7 +2291,8 @@
     return (stgDsKey && stgDsKey.value !== '') ||
            (stgTvKey && stgTvKey.value !== '') ||
            (stgBaseUrl && stgBaseUrl.value !== _stgOrigBaseUrl) ||
-           (stgProvider && stgProvider.value !== _stgOrigProvider);
+           (stgProvider && stgProvider.value !== _stgOrigProvider) ||
+           (stgWsProvider && stgWsProvider.value !== _stgOrigWsProvider);
   }
   function _stgUpdateDirtyBar(){
     if (stgDirtyBar) stgDirtyBar.style.display = _stgIsDirty() ? 'flex' : 'none';
@@ -2311,7 +2313,10 @@
     var v = stgWsProvider ? stgWsProvider.value : 'tavily';
     if (stgTvSection) stgTvSection.style.display = v === 'tavily' ? '' : 'none';
   }
-  if (stgWsProvider) stgWsProvider.addEventListener('change', _stgUpdateWsProvider);
+  if (stgWsProvider) stgWsProvider.addEventListener('change', function(){
+    _stgUpdateWsProvider();
+    _stgUpdateDirtyBar();
+  });
 
   function openSettingsModal(){
     if (_stgOpen) return;
@@ -2322,6 +2327,7 @@
     if (stgBaseUrl) stgBaseUrl.value = '';
     _stgOrigBaseUrl = '';
     _stgOrigProvider = 'deepseek';
+    _stgOrigWsProvider = 'tavily';
     _stgDsKeySet = false; _stgTvKeySet = false;
     if (stgDirtyBar) stgDirtyBar.style.display = 'none';
     _stgSetResult(stgDsResult, 'ds', '', '');
@@ -2354,6 +2360,10 @@
     if (stgTvKey) stgTvKey.value = '';
     if (stgBaseUrl) stgBaseUrl.value = _stgOrigBaseUrl;
     if (stgProvider) stgProvider.value = _stgOrigProvider;
+    if (stgWsProvider) {
+      stgWsProvider.value = _stgOrigWsProvider;
+      _stgUpdateWsProvider();
+    }
     closeSettingsModal(true);
   });
   stgDsKey  && stgDsKey.addEventListener('input',  _stgUpdateDirtyBar);
@@ -2449,8 +2459,9 @@
       if (stgDsKey) { stgDsKey.value = ''; stgDsKey.placeholder = _stgDsKeySet ? (m.dsKeyHint || '(configured)') : 'sk-...'; }
       if (stgTvKey) { stgTvKey.value = ''; stgTvKey.placeholder = _stgTvKeySet ? (m.tvKeyHint || '(configured)') : 'tvly-...'; }
       if (stgBaseUrl) stgBaseUrl.value = _stgOrigBaseUrl;
+      _stgOrigWsProvider = m.webSearchProvider || 'tavily';
       if (stgWsProvider) {
-        stgWsProvider.value = m.webSearchProvider || 'tavily';
+        stgWsProvider.value = _stgOrigWsProvider;
         _stgUpdateWsProvider();
       }
       if (stgProvider) {
