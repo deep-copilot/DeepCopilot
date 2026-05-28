@@ -214,7 +214,7 @@ const TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'web_search',
-            description: 'Search the live web (Tavily) for up-to-date information. Use ONLY when the user asks about recent events, current versions, latest documentation, news, or facts that may have changed after your training data. Do NOT use for code that lives in the workspace (use grep_search/read_file). Returns a list of {title, url, content} snippets and an optional synthesized answer. Results are returned in Markdown format. Requires the user to have configured a Tavily API key (command: "Deep Copilot: Set Tavily API Key").',
+            description: 'Search the live web for up-to-date information. Use ONLY when the user asks about recent events, current versions, latest documentation, news, or facts that may have changed after your training data. Do NOT use for code that lives in the workspace (use grep_search/read_file). Returns a list of {title, url, content} snippets and (Tavily only) an optional synthesized answer, in Markdown. Backend is chosen by the user via the "deepseekAgent.webSearchProvider" setting: "tavily" (default, requires API key set via command "Deep Copilot: Set Tavily API Key") or "bing" (no key required, uses Bing RSS). Safe to call even when no Tavily key is configured — the user can switch to Bing in settings.',
             parameters: {
                 type: 'object',
                 properties: {

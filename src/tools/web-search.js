@@ -11,7 +11,12 @@ const https  = require('https');
 const http   = require('http');
 const { truncate } = require('./utils');
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// Cap on a single HTTP response body to bound memory usage. Web search
+// endpoints (Tavily JSON / Bing RSS) normally return well under 100 KB; anything
+// bigger than this is almost certainly anomalous and not worth buffering.
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────────────
 
 function _request(opts, body, timeoutMs = 20000, abortSignal = null) {
     return new Promise((resolve, reject) => {
@@ -23,9 +28,20 @@ function _request(opts, body, timeoutMs = 20000, abortSignal = null) {
             // crash the extension host process.
             res.on('error', reject);
             let chunks = '';
+            let bytes  = 0;
+            let aborted = false;
             res.setEncoding('utf8');
-            res.on('data', (c) => { chunks += c; });
-            res.on('end', () => resolve({ status: res.statusCode, body: chunks }));
+            res.on('data', (c) => {
+                if (aborted) return;
+                bytes += Buffer.byteLength(c, 'utf8');
+                if (bytes > MAX_RESPONSE_BYTES) {
+                    aborted = true;
+                    try { req.destroy(); } catch {}
+                    return reject(new Error(`Response body exceeded ${MAX_RESPONSE_BYTES} bytes`));
+                }
+                chunks += c;
+            });
+            res.on('end', () => { if (!aborted) resolve({ status: res.statusCode, body: chunks }); });
         });
         req.on('error', reject);
         req.on('timeout', () => { req.destroy(new Error('Request timeout')); });
@@ -67,7 +83,12 @@ async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', includeA
     } else {
         lines.push('', `## Top ${results.length} result(s)`);
         results.forEach((r, i) => {
-            lines.push('', `### ${i + 1}. ${(r.title || '').replace(/\s+/g, ' ').trim()}`);
+            let title = (r.title || '').replace(/\s+/g, ' ').trim();
+            if (!title) {
+                try { title = r.url ? new URL(r.url).hostname : '(no title)'; }
+                catch { title = '(no title)'; }
+            }
+            lines.push('', `### ${i + 1}. ${title}`);
             if (r.url) lines.push(r.url);
             if (r.content) lines.push(r.content.replace(/\s+/g, ' ').trim());
         });
