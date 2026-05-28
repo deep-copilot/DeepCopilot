@@ -2259,6 +2259,7 @@
   var _stgDsKeySet = false, _stgTvKeySet = false;
   var _stgOrigBaseUrl = '';
   var _stgOrigProvider = 'deepseek';
+  var _stgOrigWsProvider = 'tavily';
   var _stgTestTimers = {};
 
   var stgOverlay   = document.getElementById('settings-overlay');
@@ -2270,6 +2271,8 @@
   var stgDsLink    = document.getElementById('s-ds-link');
   var stgBaseUrl   = document.getElementById('s-base-url');
   var stgBaseReset = document.getElementById('s-base-url-reset');
+  var stgWsProvider = document.getElementById('s-ws-provider');
+  var stgTvSection  = document.getElementById('s-tv-section');
   var stgTvKey     = document.getElementById('s-tv-key');
   var stgTvEye     = document.getElementById('s-tv-key-eye');
   var stgTvTest    = document.getElementById('s-tv-test');
@@ -2285,7 +2288,8 @@
     return (stgDsKey && stgDsKey.value !== '') ||
            (stgTvKey && stgTvKey.value !== '') ||
            (stgBaseUrl && stgBaseUrl.value !== _stgOrigBaseUrl) ||
-           (stgProvider && stgProvider.value !== _stgOrigProvider);
+           (stgProvider && stgProvider.value !== _stgOrigProvider) ||
+           (stgWsProvider && stgWsProvider.value !== _stgOrigWsProvider);
   }
   function _stgUpdateDirtyBar(){
     if (stgDirtyBar) stgDirtyBar.style.display = _stgIsDirty() ? 'flex' : 'none';
@@ -2302,6 +2306,15 @@
       }, 5000);
     }
   }
+  function _stgUpdateWsProvider(){
+    var v = stgWsProvider ? stgWsProvider.value : 'tavily';
+    if (stgTvSection) stgTvSection.style.display = v === 'tavily' ? '' : 'none';
+  }
+  if (stgWsProvider) stgWsProvider.addEventListener('change', function(){
+    _stgUpdateWsProvider();
+    _stgUpdateDirtyBar();
+  });
+
   function openSettingsModal(){
     if (_stgOpen) return;
     _stgOpen = true;
@@ -2311,6 +2324,7 @@
     if (stgBaseUrl) stgBaseUrl.value = '';
     _stgOrigBaseUrl = '';
     _stgOrigProvider = 'deepseek';
+    _stgOrigWsProvider = 'tavily';
     _stgDsKeySet = false; _stgTvKeySet = false;
     if (stgDirtyBar) stgDirtyBar.style.display = 'none';
     _stgSetResult(stgDsResult, 'ds', '', '');
@@ -2343,6 +2357,10 @@
     if (stgTvKey) stgTvKey.value = '';
     if (stgBaseUrl) stgBaseUrl.value = _stgOrigBaseUrl;
     if (stgProvider) stgProvider.value = _stgOrigProvider;
+    if (stgWsProvider) {
+      stgWsProvider.value = _stgOrigWsProvider;
+      _stgUpdateWsProvider();
+    }
     closeSettingsModal(true);
   });
   stgDsKey  && stgDsKey.addEventListener('input',  _stgUpdateDirtyBar);
@@ -2403,17 +2421,19 @@
     vscode.postMessage({ type: 'testApiKey', which: 'tv', key: key || null });
   });
   stgSaveBtn && stgSaveBtn.addEventListener('click', function(){
-    var dsKey    = stgDsKey   ? stgDsKey.value.trim()   : null;
-    var tvKey    = stgTvKey   ? stgTvKey.value.trim()   : null;
-    var baseUrl  = stgBaseUrl ? stgBaseUrl.value.trim() : null;
-    var provider = stgProvider ? stgProvider.value : 'deepseek';
+    var dsKey      = stgDsKey     ? stgDsKey.value.trim()     : null;
+    var tvKey      = stgTvKey     ? stgTvKey.value.trim()     : null;
+    var baseUrl    = stgBaseUrl   ? stgBaseUrl.value.trim()   : null;
+    var provider   = stgProvider  ? stgProvider.value         : 'deepseek';
+    var wsProvider = stgWsProvider ? stgWsProvider.value : 'tavily';
     vscode.postMessage({
       type: 'saveApiSettings',
-      dsKey:   dsKey   || null,
-      tvKey:   tvKey   || null,
-      baseUrl: baseUrl !== null ? baseUrl : _stgOrigBaseUrl,
-      provider: provider,
-      model: getSelectedModel(),
+      dsKey:          dsKey   || null,
+      tvKey:          tvKey   || null,
+      baseUrl:        baseUrl !== null ? baseUrl : _stgOrigBaseUrl,
+      provider:       provider,
+      webSearchProvider: wsProvider,
+      model:          getSelectedModel(),
     });
     switchToProvider(provider);
     closeSettingsModal(true);
@@ -2436,6 +2456,11 @@
       if (stgDsKey) { stgDsKey.value = ''; stgDsKey.placeholder = _stgDsKeySet ? (m.dsKeyHint || '(configured)') : 'sk-...'; }
       if (stgTvKey) { stgTvKey.value = ''; stgTvKey.placeholder = _stgTvKeySet ? (m.tvKeyHint || '(configured)') : 'tvly-...'; }
       if (stgBaseUrl) stgBaseUrl.value = _stgOrigBaseUrl;
+      _stgOrigWsProvider = m.webSearchProvider || 'tavily';
+      if (stgWsProvider) {
+        stgWsProvider.value = _stgOrigWsProvider;
+        _stgUpdateWsProvider();
+      }
       if (stgProvider) {
         stgProvider.value = _stgOrigProvider;
         // Update the key link for the current provider

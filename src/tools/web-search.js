@@ -1,82 +1,208 @@
-// web_search: Tavily-backed web search.
-// API key stored in VS Code SecretStorage under 'deepseekAgent.tavilyKey'.
+// web_search: multi-backend web search.
+// Backends:
+//   - Tavily (requires API key, best quality)
+//   - Bing   (no API key required, uses Bing RSS endpoint)
+//
+// Active backend is determined by the 'deepseekAgent.webSearchProvider' setting.
+// Supported providers in this module are Tavily and Bing.
 'use strict';
 
-const https = require('https');
+const https  = require('https');
+const http   = require('http');
 const { truncate } = require('./utils');
 
-function _tavilyRequest(payload, timeoutMs = 20000, abortSignal = null) {
+// Cap on a single HTTP response body to bound memory usage. Web search
+// endpoints (Tavily JSON / Bing RSS) normally return well under 100 KB; anything
+// bigger than this is almost certainly anomalous and not worth buffering.
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────────────
+
+function _request(opts, body, timeoutMs = 20000, abortSignal = null) {
     return new Promise((resolve, reject) => {
         if (abortSignal && abortSignal.aborted) return reject(new Error('aborted'));
-        const body = JSON.stringify(payload);
-        const req  = https.request({
-            method: 'POST',
-            hostname: 'api.tavily.com',
-            path: '/search',
-            headers: {
-                'Content-Type':   'application/json',
-                'Content-Length': Buffer.byteLength(body),
-            },
-            timeout: timeoutMs,
-        }, (res) => {
+        const mod = opts.protocol === 'http:' ? http : https;
+        const req = mod.request(opts, (res) => {
+            // Without this, an error on the response stream (e.g. socket reset
+            // mid-body) would surface as an unhandled 'error' event and could
+            // crash the extension host process.
+            res.on('error', reject);
             let chunks = '';
+            let bytes  = 0;
+            let aborted = false;
             res.setEncoding('utf8');
-            res.on('data', (c) => { chunks += c; });
-            res.on('end', () => {
-                if (res.statusCode < 200 || res.statusCode >= 300)
-                    return reject(new Error(`Tavily HTTP ${res.statusCode}: ${chunks.slice(0, 500)}`));
-                try { resolve(JSON.parse(chunks)); }
-                catch (e) { reject(new Error(`Tavily JSON parse failed: ${e.message}`)); }
+            res.on('data', (c) => {
+                if (aborted) return;
+                bytes += Buffer.byteLength(c, 'utf8');
+                if (bytes > MAX_RESPONSE_BYTES) {
+                    aborted = true;
+                    try { req.destroy(); } catch {}
+                    return reject(new Error(`Response body exceeded ${MAX_RESPONSE_BYTES} bytes`));
+                }
+                chunks += c;
             });
+            res.on('end', () => { if (!aborted) resolve({ status: res.statusCode, body: chunks }); });
         });
         req.on('error', reject);
-        req.on('timeout', () => { req.destroy(new Error('Tavily request timeout')); });
+        req.on('timeout', () => { req.destroy(new Error('Request timeout')); });
         if (abortSignal) {
             const onAbort = () => { try { req.destroy(new Error('aborted')); } catch {} reject(new Error('aborted')); };
             abortSignal.addEventListener('abort', onAbort, { once: true });
             req.once('close', () => { try { abortSignal.removeEventListener('abort', onAbort); } catch {} });
         }
-        req.write(body);
+        req.setTimeout(timeoutMs);
+        if (body) req.write(body);
         req.end();
     });
 }
+
+// ─── Tavily backend ────────────────────────────────────────────────────────────
+
+async function _tavilySearch(query, { apiKey, max = 5, depth = 'basic', includeAnswer = true, abortSignal } = {}) {
+    const body = JSON.stringify({
+        api_key: apiKey, query, max_results: max,
+        search_depth: depth, include_answer: includeAnswer,
+        include_raw_content: false, include_images: false,
+    });
+    const res = await _request({
+        method: 'POST', hostname: 'api.tavily.com', path: '/search',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, body, 20000, abortSignal);
+
+    if (res.status < 200 || res.status >= 300)
+        throw new Error(`Tavily HTTP ${res.status}: ${res.body.slice(0, 200)}`);
+
+    let data;
+    try { data = JSON.parse(res.body); }
+    catch (e) { throw new Error(`Tavily returned non-JSON response: ${e.message} (body preview: ${res.body.slice(0, 200)})`); }
+    const lines = [`Query: ${query}`];
+    if (includeAnswer && data.answer) lines.push('', '## Synthesized answer', data.answer);
+    const results = Array.isArray(data.results) ? data.results : [];
+    if (!results.length) {
+        lines.push('', '(No results.)');
+    } else {
+        lines.push('', `## Top ${results.length} result(s)`);
+        results.forEach((r, i) => {
+            let title = (r.title || '').replace(/\s+/g, ' ').trim();
+            if (!title) {
+                try { title = r.url ? new URL(r.url).hostname : '(no title)'; }
+                catch { title = '(no title)'; }
+            }
+            lines.push('', `### ${i + 1}. ${title}`);
+            if (r.url) lines.push(r.url);
+            if (r.content) lines.push(r.content.replace(/\s+/g, ' ').trim());
+        });
+    }
+    return truncate(lines.join('\n'));
+}
+
+// ─── Bing RSS backend (no API key) ────────────────────────────────────────────
+// Uses Bing's ?format=rss endpoint which returns stable XML — no bot detection,
+// no HTML scraping fragility.
+
+function _decodeXmlEntities(s) {
+    let out = String(s || '');
+    // Strip tags first so we don't accidentally feed HTML into the entity pass.
+    out = out.replace(/<[^>]+>/g, ' ');
+    // Decode &amp; first (and iterate to a fixed point) so double-escaped entities
+    // like &amp;lt; resolve correctly.
+    for (let i = 0; i < 3; i++) {
+        const next = out.replace(/&amp;/g, '&');
+        if (next === out) break;
+        out = next;
+    }
+    // Safely convert a numeric code point to a string. String.fromCodePoint throws
+    // RangeError for NaN, surrogate halves, or values > 0x10FFFF — guard against
+    // malformed entities in remote RSS so a single bad entity can't kill the
+    // whole Bing search. On failure, drop the entity (return '').
+    const fromCp = (cp) => {
+        if (!Number.isFinite(cp) || cp < 0 || cp > 0x10FFFF) return '';
+        if (cp >= 0xD800 && cp <= 0xDFFF) return ''; // surrogate halves
+        try { return String.fromCodePoint(cp); } catch { return ''; }
+    };
+    out = out
+        .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => fromCp(parseInt(h, 16)))
+        .replace(/&#(\d+);/g, (_, n) => fromCp(Number(n)));
+    return out.replace(/\s{2,}/g, ' ').trim();
+}
+
+function _parseBingRss(xml) {
+    const results = [];
+    const items = xml.split('<item>').slice(1);
+    for (const item of items) {
+        const titleM = item.match(/<title>([\s\S]*?)<\/title>/i);
+        const linkM  = item.match(/<link>([\s\S]*?)<\/link>/i)
+                    || item.match(/<link\s+[^>]*href="([^"]+)"/i);
+        const descM  = item.match(/<description>([\s\S]*?)<\/description>/i);
+        if (titleM && linkM) {
+            results.push({
+                title:   _decodeXmlEntities(titleM[1]).slice(0, 120),
+                url:     _decodeXmlEntities(linkM[1]).trim(),
+                snippet: descM ? _decodeXmlEntities(descM[1]).slice(0, 300) : '',
+            });
+        }
+    }
+    return results;
+}
+
+async function _bingSearch(query, { max = 5, abortSignal } = {}) {
+    const q   = encodeURIComponent(query);
+    const res = await _request({
+        method:   'GET',
+        hostname: 'www.bing.com',
+        path:     `/search?q=${q}&format=rss&count=${max}`,
+        headers:  {
+            'User-Agent':      'Mozilla/5.0 (compatible; DeepCopilot/1.0)',
+            'Accept':          'application/rss+xml, text/xml, */*',
+            'Accept-Encoding': 'identity',
+        },
+    }, null, 15000, abortSignal);
+
+    if (res.status < 200 || res.status >= 300)
+        throw new Error(`Bing HTTP ${res.status}`);
+
+    const results = _parseBingRss(res.body);
+    if (!results.length) return `Query: ${query}\n\n(No results from Bing.)`;
+
+    const lines = [`Query: ${query}`, '', `## Top ${results.length} result(s)`];
+    results.slice(0, max).forEach((r, i) => {
+        lines.push('', `### ${i + 1}. ${r.title}`);
+        if (r.url) lines.push(r.url);
+        if (r.snippet) lines.push(r.snippet);
+    });
+    return truncate(lines.join('\n'));
+}
+
+// ─── Main dispatch ─────────────────────────────────────────────────────────────
 
 async function toolWebSearch(args, ctx = {}) {
     try {
         const query = String(args.query || '').trim();
         if (!query) return 'Error: query is empty.';
 
+        const vscode   = require('vscode');
+        const cfg      = vscode.workspace.getConfiguration('deepseekAgent');
+        const provider = cfg.get('webSearchProvider') || 'tavily';
+        const max      = Math.max(1, Math.min(10, Number.isFinite(args.max_results) ? args.max_results : 5));
+        const abortSignal = ctx && ctx.abortSignal;
+
+        if (provider === 'bing') {
+            return await _bingSearch(query, { max, abortSignal });
+        }
+
+        // Default: Tavily (requires key)
         const secrets = ctx && ctx.secrets;
         if (!secrets) return 'Error: SecretStorage unavailable (internal).';
         const apiKey  = await secrets.get('deepseekAgent.tavilyKey');
         if (!apiKey) {
-            return 'Error: Tavily API key not configured. Run command "Deep Copilot: Set Tavily API Key" (or visit https://app.tavily.com to get a free key), then retry.';
+            return 'Error: Tavily API key not configured. Run command "Deep Copilot: Set Tavily API Key" or switch to Bing in settings (no key required).';
         }
-
-        const max          = Math.max(1, Math.min(10, Number.isFinite(args.max_results) ? args.max_results : 5));
-        const depth        = args.search_depth === 'advanced' ? 'advanced' : 'basic';
+        const depth = args.search_depth === 'advanced' ? 'advanced' : 'basic';
         const includeAnswer = args.include_answer !== false;
+        return await _tavilySearch(query, { apiKey, max, depth, includeAnswer, abortSignal });
 
-        const data = await _tavilyRequest({
-            api_key: apiKey, query, max_results: max,
-            search_depth: depth, include_answer: includeAnswer,
-            include_raw_content: false, include_images: false,
-        }, 20000, ctx && ctx.abortSignal);
-
-        const lines = [`Query: ${query}`];
-        if (includeAnswer && data.answer) { lines.push('', '## Synthesized answer', data.answer); }
-        const results = Array.isArray(data.results) ? data.results : [];
-        if (!results.length) {
-            lines.push('', '(No results.)');
-        } else {
-            lines.push('', `## Top ${results.length} result(s)`);
-            results.forEach((r, i) => {
-                lines.push('', `### ${i + 1}. ${(r.title || '(no title)').replace(/\s+/g, ' ').trim()}`);
-                if (r.url) lines.push(r.url);
-                if (r.content) lines.push((r.content).replace(/\s+/g, ' ').trim());
-            });
-        }
-        return truncate(lines.join('\n'));
     } catch (e) { return `Error: ${e.message || String(e)}`; }
 }
 
