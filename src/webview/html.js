@@ -64,7 +64,20 @@ function buildWebviewHtml(webview, extensionUri) {
 <div id="prog" class="prog"></div>
 <!-- #cbt kept hidden: chat.js references it for /clear command & Ctrl+K shortcut -->
 <button id="cbt" style="display:none" aria-hidden="true"></button>
-<button id="edgeR" class="edge-toggle edge-r" title="${ui.sessions}" aria-label="toggle right panel"></button>
+<div id="topbar">
+  <button id="sb-sessions-btn" title="${ui.sessions}" aria-label="Session history">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="1" y="3" width="14" height="2" rx="1" fill="currentColor"/>
+      <rect x="1" y="7" width="14" height="2" rx="1" fill="currentColor"/>
+      <rect x="1" y="11" width="10" height="2" rx="1" fill="currentColor"/>
+    </svg>
+  </button>
+  <button id="sb-new-btn" title="${ui.newSession}" aria-label="New session">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  </button>
+</div>
 <div id="sb"></div>
 <div id="main">
   <div id="es">
@@ -154,6 +167,8 @@ function buildWebviewHtml(webview, extensionUri) {
     <span class="pill" id="ft-balance" title="${ui.balanceTitle}" style="display:none">${ui.balanceInit}</span>
   </div>
 </div>
+<!-- ── Session drawer backdrop (narrow mode) ── -->
+<div id="session-backdrop"></div>
 <!-- ── Settings Modal ── -->
 <div id="settings-overlay" class="settings-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="settings-title">
   <div class="settings-modal">

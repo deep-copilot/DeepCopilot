@@ -8,8 +8,6 @@
   var sbtn = document.getElementById("sbtn");
   var es   = document.getElementById("es");
   var apibt = document.getElementById("apibt");
-  var edgeL = document.getElementById("edgeL");
-  var edgeR = document.getElementById("edgeR");
   var newSessionBtn = document.getElementById("newSessionBtn");
   var scopeWs = document.getElementById("scopeWs");
   var scopeAll = document.getElementById("scopeAll");
@@ -294,29 +292,28 @@
     else jumpBtn.classList.add("show");
   }
 
-  /* Auto narrow mode based on width (use webview container width, not full VS Code window) */
-  function checkNarrow(){
-    var w = document.documentElement.clientWidth || window.innerWidth;
-    document.body.classList.toggle("narrow", w < 600);
+  /* ── Session drawer ── */
+  var sbSessionsBtn   = document.getElementById('sb-sessions-btn');
+  var sbNewBtn        = document.getElementById('sb-new-btn');
+  var sessionBackdrop = document.getElementById('session-backdrop');
+  var rightPanel      = document.getElementById('right');
+
+  function openSessionDrawer() {
+    if (rightPanel) rightPanel.classList.add('drawer-open');
+    if (sessionBackdrop) sessionBackdrop.classList.add('open');
   }
-  window.addEventListener("resize", checkNarrow);
-  if (typeof ResizeObserver !== "undefined") {
-    try { new ResizeObserver(checkNarrow).observe(document.documentElement); } catch(e){}
+  function closeSessionDrawer() {
+    if (rightPanel) rightPanel.classList.remove('drawer-open');
+    if (sessionBackdrop) sessionBackdrop.classList.remove('open');
   }
-  checkNarrow();
-  /* Edge toggles: right panel only (left panel removed). */
-  var _ui = {};
-  try { _ui = (vscode.getState() && vscode.getState().ui) || {}; } catch(e){}
-  function applyPanelState(){
-    document.body.classList.toggle("no-right", _ui.rightCollapsed !== false);
-  }
-  function savePanelState(){
-    try { var s = vscode.getState() || {}; s.ui = _ui; vscode.setState(s); } catch(e){}
-  }
-  applyPanelState();
-  if (edgeR) edgeR.addEventListener("click", function(){
-    _ui.rightCollapsed = !document.body.classList.contains("no-right");
-    applyPanelState(); savePanelState();
+  if (sbSessionsBtn) sbSessionsBtn.addEventListener('click', function() {
+    rightPanel && rightPanel.classList.contains('drawer-open') ? closeSessionDrawer() : openSessionDrawer();
+  });
+  if (sbNewBtn) sbNewBtn.addEventListener('click', function() { newSession(); });
+  if (sessionBackdrop) sessionBackdrop.addEventListener('click', closeSessionDrawer);
+  if (rightPanel) rightPanel.addEventListener('click', function(e) {
+    var si = e.target.closest('.si');
+    if (si && si.dataset.id) closeSessionDrawer();
   });
   /* Todo popup close button */
   var todoPopCloseBtn = document.getElementById("todo-pop-close");
