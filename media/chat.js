@@ -302,6 +302,7 @@
   function openSessionDrawer() {
     if (rightPanel) rightPanel.classList.add('drawer-open');
     if (sessionBackdrop) sessionBackdrop.classList.add('open');
+    if (sbSessionsBtn) sbSessionsBtn.setAttribute('aria-expanded', 'true');
     try { _drawerPrevFocus = document.activeElement; } catch(e){ _drawerPrevFocus = null; }
     if (rightPanel) {
       var focusTarget = rightPanel.querySelector('input, textarea, select, button, [tabindex]:not([tabindex="-1"]), a[href]');
@@ -313,6 +314,7 @@
   function closeSessionDrawer() {
     if (rightPanel) rightPanel.classList.remove('drawer-open');
     if (sessionBackdrop) sessionBackdrop.classList.remove('open');
+    if (sbSessionsBtn) sbSessionsBtn.setAttribute('aria-expanded', 'false');
     if (_drawerPrevFocus && typeof _drawerPrevFocus.focus === 'function') {
       try { _drawerPrevFocus.focus(); } catch(e){}
     }
@@ -325,6 +327,7 @@
   if (sessionBackdrop) sessionBackdrop.addEventListener('click', closeSessionDrawer);
   if (rightPanel) rightPanel.addEventListener('click', function(e) {
     var target = e.target;
+    if (!target || typeof target.closest !== 'function') return;
     var si = target.closest('.si');
     if (!si || !si.dataset.id) return;
     if (target.closest('.si-rename-inp, input, textarea, select, button, a, label, [contenteditable="true"], [contenteditable=""], [contenteditable]')) return;

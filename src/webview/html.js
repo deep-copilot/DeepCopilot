@@ -65,8 +65,8 @@ function buildWebviewHtml(webview, extensionUri) {
 <!-- #cbt kept hidden: chat.js references it for /clear command & Ctrl+K shortcut -->
 <button id="cbt" style="display:none" aria-hidden="true"></button>
 <div id="topbar">
-  <button id="sb-sessions-btn" title="${ui.sessions}" aria-label="Session history"><i class="codicon codicon-history"></i></button>
-  <button id="sb-new-btn" title="${ui.newSession}" aria-label="New session"><i class="codicon codicon-comment-add"></i></button>
+  <button id="sb-sessions-btn" title="${ui.sessions}" aria-label="${ui.sessions}" aria-controls="right" aria-expanded="false"><i class="codicon codicon-history"></i></button>
+  <button id="sb-new-btn" title="${ui.newSession}" aria-label="${ui.newSession}"><i class="codicon codicon-comment-add"></i></button>
 </div>
 <div id="sb"></div>
 <div id="main">
