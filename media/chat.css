@@ -1,21 +1,10 @@
 ﻿*{box-sizing:border-box;margin:0;padding:0}
 body{font-family:var(--vscode-font-family);font-size:13px;color:var(--vscode-foreground);background:var(--vscode-sideBar-background);height:100vh;overflow:hidden;position:relative;
-  display:grid;grid-template-columns:1fr 280px;grid-template-rows:auto 1fr auto auto;
-  grid-template-areas:"sb sb" "main right" "composer right" "foot foot"}
+  display:grid;grid-template-columns:1fr;grid-template-rows:auto auto 1fr auto auto;
+  grid-template-areas:"topbar" "sb" "main" "composer" "foot"}
 /* ── Locale-aware fonts ── */
 html[data-locale="zh"] body{font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Source Han Sans CN","WenQuanYi Micro Hei",sans-serif}
 html[data-locale="en"] body{font-family:"Segoe UI","Inter",system-ui,-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
-body.no-right{grid-template-columns:1fr 0}
-body.no-right #right{display:none}
-body.no-right{grid-template-columns:1fr 0}
-body.narrow{grid-template-columns:1fr;grid-template-areas:"sb" "main" "composer" "foot"}
-body.narrow #right{display:none}
-/* CSS-only fallback: force narrow layout when webview viewport < 600px (independent of JS) */
-@media (max-width: 599px){
-  body{grid-template-columns:1fr !important;grid-template-areas:"sb" "main" "composer" "foot" !important}
-  body #right{display:none !important}
-  .edge-toggle{display:none !important}
-}
 #tb{display:none}
 #tb .logo{flex:1;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px}
 #tb .logo-img{width:22px;height:22px;display:block;opacity:1;border-radius:4px;background:transparent}
@@ -26,19 +15,18 @@ body.narrow #right{display:none}
 .tbb{background:none;border:none;cursor:pointer;color:var(--vscode-icon-foreground);padding:3px 8px;border-radius:3px;font-size:11px}
 .tbb:hover{background:var(--vscode-toolbar-hoverBackground)}
 .tbb.active{color:var(--vscode-button-background)}
-#sb{grid-area:sb;padding:4px 12px;font-size:11px;color:var(--vscode-descriptionForeground);background:rgba(244,135,113,.1);border-bottom:1px solid var(--vscode-panel-border);display:none}
-/* Edge toggle buttons: half-circle pill on left/right edge to expand/collapse side panels */
-.edge-toggle{position:fixed;top:50%;transform:translateY(-50%);width:20px;height:64px;border:1px solid rgba(127,127,127,.55);background:rgba(127,127,127,.22);color:var(--vscode-foreground);font-size:13px;font-weight:600;line-height:64px;text-align:center;cursor:pointer;padding:0;z-index:50;opacity:.85;box-shadow:0 0 0 1px rgba(0,0,0,.12), 0 2px 4px rgba(0,0,0,.18);transition:opacity .15s,background .15s,border-color .15s,transform .15s,left .25s,right .25s;display:flex;align-items:center;justify-content:center}
-.edge-toggle:hover{opacity:1;background:rgba(127,127,127,.42);border-color:rgba(127,127,127,.95);color:var(--vscode-foreground)}
-.edge-toggle:active{background:rgba(127,127,127,.55)}
-.edge-toggle.edge-r{right:0;border-right:none;border-radius:14px 0 0 14px}
-.edge-toggle::before{content:"";font-family:"Segoe UI Symbol",sans-serif}
-body.no-right .edge-toggle.edge-r::before{content:"\25C2"} /* ◂ expand (point inward) */
-body:not(.no-right) .edge-toggle.edge-r{right:280px}
-body:not(.no-right) .edge-toggle.edge-r::before{content:"\25B8"} /* ▸ collapse */
-body.narrow .edge-toggle{display:none}
+/* ── Top bar: always-visible session controls (kept above the drawer overlay) ── */
+#topbar{grid-area:topbar;position:relative;z-index:201;display:flex;align-items:center;justify-content:flex-end;padding:0 8px;height:36px;flex-shrink:0;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-titleBar-activeBackground,var(--vscode-sideBar-background))}
+#sb-sessions-btn,#sb-new-btn{background:none;border:none;cursor:pointer;color:var(--vscode-icon-foreground);padding:5px 7px;border-radius:5px;display:flex;align-items:center;justify-content:center;opacity:.8;font-size:16px}
+#sb-sessions-btn:hover,#sb-new-btn:hover{opacity:1;background:var(--vscode-toolbar-hoverBackground)}
+/* ── #sb: notification bar (hidden by default, shown by backend status messages) ── */
+#sb{grid-area:sb;font-size:11px;color:var(--vscode-descriptionForeground);background:rgba(244,135,113,.1);border-bottom:1px solid var(--vscode-panel-border);display:none;align-items:center;padding:4px 12px}
+/* ── Session drawer (always overlay, never in grid; sits below #topbar) ── */
+#right{display:none;position:fixed;right:0;top:36px;bottom:0;z-index:200;width:280px;flex-direction:column;border-left:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background);box-shadow:-4px 0 16px rgba(0,0,0,.25)}
+#right.drawer-open{display:flex}
+#session-backdrop{display:none;position:fixed;left:0;right:0;top:36px;bottom:0;z-index:199;background:rgba(0,0,0,.35);cursor:pointer}
+#session-backdrop.open{display:block}
 #main{grid-area:main;overflow-y:auto;padding:10px 24px;display:flex;flex-direction:column;gap:12px;min-height:0}
-body.narrow #main{padding-left:12px;padding-right:12px}
 .msgU{background:rgba(128,128,128,.18);outline:1px solid transparent;border-radius:8px 8px 2px 8px;padding:8px 12px;align-self:flex-end;max-width:88%;word-break:break-word;line-height:1.5;position:relative;cursor:pointer;transition:outline-color .15s,background .15s}
 .msgU-hd{display:none}
 .msgU-body{white-space:pre-wrap;word-break:break-word;line-height:1.5;pointer-events:none}
@@ -235,7 +223,6 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 .tl-group.open .tl-list{display:flex;flex-direction:column;max-height:200px;overflow-y:auto}
 .err{color:var(--vscode-errorForeground);font-size:12px;padding:6px 10px;background:rgba(244,135,113,.08);border-radius:6px;border-left:3px solid var(--vscode-errorForeground);align-self:flex-start;width:100%;white-space:pre-wrap}
 #left{grid-area:left;display:flex;flex-direction:column;border-right:1px solid var(--vscode-panel-border);overflow:hidden;min-width:0;background:var(--vscode-sideBar-background)}
-#right{grid-area:right;display:flex;flex-direction:column;border-left:1px solid var(--vscode-panel-border);overflow:hidden;min-width:0;background:var(--vscode-sideBar-background)}
 .pnl{display:flex;flex-direction:column;border-bottom:1px solid var(--vscode-panel-border);min-height:0;flex:1 1 0}
 .pnl.pnl-mini{flex:0 0 auto}
 .pnl[data-open="0"]{flex:0 0 auto}
@@ -289,7 +276,6 @@ body.narrow #main{padding-left:12px;padding-right:12px}
 #right .si .busy-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--vscode-button-background,#4ea1ff);margin-right:6px;vertical-align:middle;animation:sibusy 1s ease-in-out infinite}
 @keyframes sibusy{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
 #ia{grid-area:composer;padding:8px 24px;background:var(--vscode-sideBar-background)}
-body.narrow #ia{padding-left:8px;padding-right:8px}
 #cxb{display:none;font-size:11px;color:var(--vscode-button-background);padding:0 2px 6px}
 /* @file attachment chips */
 #at-chips{display:none;flex-wrap:wrap;gap:4px;padding:6px 10px 2px;max-width:100%}

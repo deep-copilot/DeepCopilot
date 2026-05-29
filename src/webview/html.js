@@ -64,7 +64,10 @@ function buildWebviewHtml(webview, extensionUri) {
 <div id="prog" class="prog"></div>
 <!-- #cbt kept hidden: chat.js references it for /clear command & Ctrl+K shortcut -->
 <button id="cbt" style="display:none" aria-hidden="true"></button>
-<button id="edgeR" class="edge-toggle edge-r" title="${ui.sessions}" aria-label="toggle right panel"></button>
+<div id="topbar">
+  <button id="sb-sessions-btn" title="${ui.sessions}" aria-label="${ui.sessions}" aria-controls="right" aria-expanded="false"><i class="codicon codicon-history"></i></button>
+  <button id="sb-new-btn" title="${ui.newSession}" aria-label="${ui.newSession}"><i class="codicon codicon-comment-add"></i></button>
+</div>
 <div id="sb"></div>
 <div id="main">
   <div id="es">
@@ -154,6 +157,8 @@ function buildWebviewHtml(webview, extensionUri) {
     <span class="pill" id="ft-balance" title="${ui.balanceTitle}" style="display:none">${ui.balanceInit}</span>
   </div>
 </div>
+<!-- ── Session drawer backdrop (always-overlay drawer) ── -->
+<div id="session-backdrop"></div>
 <!-- ── Settings Modal ── -->
 <div id="settings-overlay" class="settings-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="settings-title">
   <div class="settings-modal">
