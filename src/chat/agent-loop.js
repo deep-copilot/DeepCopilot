@@ -118,15 +118,23 @@ class AgentLoop {
 
     // ─── Main entry ──────────────────────────────────────────────────────────
 
-    async handleSend(text, attachments = [], skillContent = null) {
-        // Allow attachment-only turns (e.g. user sent just `#symbol:Foo` with
-        // no other text). Only reject when there is neither prose nor any
-        // attachment payload to ground the model on.
-        const hasText = !!(text && text.trim());
-        const hasAtt  = Array.isArray(attachments) && attachments.length > 0;
-        if (!hasText && !hasAtt) return;
+    async handleSend(text, attachments = [], skillContent = null, options = {}) {
+        // autoResume: when set, this turn is triggered by wake-scheduler (not the
+        // user). Skip user-input handling — the wake digest is already queued in
+        // run._pendingWakeEvents and will be injected at the top of the agent loop.
+        const autoResume = options && options.autoResume ? options.autoResume : null;
 
-        const existingActive = this._getRun(this._store.sessionId);
+        if (!autoResume) {
+            // Allow attachment-only turns (e.g. user sent just `#symbol:Foo` with
+            // no other text). Only reject when there is neither prose nor any
+            // attachment payload to ground the model on.
+            const hasText = !!(text && text.trim());
+            const hasAtt  = Array.isArray(attachments) && attachments.length > 0;
+            if (!hasText && !hasAtt) return;
+        }
+
+        const _busyCheckSid = autoResume ? autoResume.sid : this._store.sessionId;
+        const existingActive = this._getRun(_busyCheckSid);
         if (existingActive && existingActive.busy) return;
 
         const cfg      = vscode.workspace.getConfiguration('deepseekAgent');
@@ -139,7 +147,7 @@ class AgentLoop {
             return;
         }
 
-        const sid = await this._store.ensure(text);
+        const sid = autoResume ? autoResume.sid : await this._store.ensure(text);
         let run = this._getRun(sid);
         if (!run) {
             const seed = this._store.loadApiMessages(sid);
@@ -158,7 +166,19 @@ class AgentLoop {
         // Separate text attachments from image attachments (imageData = base64 data URI).
         const imageAttachments = (attachments || []).filter(a => a && a.imageData);
         const textAttachments  = (attachments || []).filter(a => a && !a.imageData && a.path);
-        if (textAttachments.length) {
+        // DeepSeek prefix-cache tuning: emit text attachments in a stable
+        // order (path, then line-range) so the same set of files added in a
+        // different click order produces byte-identical user content.
+        // Without this, "select A then B" and "select B then A" generated
+        // two different prefixes and lost the server-side KV cache hit.
+        // Sort is stable via a single composite key; a localeCompare-based
+        // sort is fine since paths are normalised by wsRelLabel earlier.
+        textAttachments.sort((a, b) => {
+            const ka = `${a.path}#${a.startLine || ''}-${a.endLine || ''}`;
+            const kb = `${b.path}#${b.startLine || ''}-${b.endLine || ''}`;
+            return ka < kb ? -1 : ka > kb ? 1 : 0;
+        });
+        if (!autoResume && textAttachments.length) {
             const MAX_TOTAL = 256 * 1024;
             let totalSize = 0;
             for (const a of textAttachments) {
@@ -177,13 +197,13 @@ class AgentLoop {
         // This mirrors exactly how GitHub Copilot works: the model "reads" the SKILL.md via
         // tool call, then acts on it as self-obtained instructions rather than user-injected text.
         // The synthetic messages are inserted into run.messages BEFORE the user turn.
-        if (skillContent) {
+        if (!autoResume && skillContent) {
             const skillName = skillContent._skillName || 'skill';
             const skillPath = skillContent._skillPath || null;
             const body      = typeof skillContent === 'string' ? skillContent : skillContent.body;
             injectSyntheticSkillRead(run.messages, skillName, body, skillPath);
         }
-        const fullText = attachmentBlocks ? attachmentBlocks + text : text;
+        const fullText = attachmentBlocks ? attachmentBlocks + (text || '') : (text || '');
 
         // Build content: array (multimodal) when images present, plain string otherwise.
         // DeepSeek vision API accepts the standard OpenAI image_url content block format.
@@ -197,13 +217,38 @@ class AgentLoop {
             userContent = fullText;
         }
 
-        run.reply = { user: text, asst: '', thoughts: '' };
-        run.messages.push({ role: 'user', content: userContent });
-
-        Logger.info('USER_SEND', { sid, len: text.length, model, baseUrl, mode, text: text.slice(0, 2000) });
-        this._postToRun(run, { type: 'userEcho', text });
-        this._postToRun(run, { type: 'replyStart' });
-        this._postSessionList();
+        if (autoResume) {
+            // Preserve any prior reply object so post-loop persistence still works.
+            run.reply = run.reply || { user: '', asst: '', thoughts: '' };
+            run.reply.asst = '';
+            run.reply.thoughts = '';
+            // Reset the per-turn yield counter so a fresh resumed turn gets full budget.
+            run._yieldCount = 0;
+            // Reset the "summary-before-sleep" nudge guard so each resumed turn is
+            // again required to surface a summary before it suspends.
+            run._yieldSummaryNudged = false;
+            Logger.info('AUTO_RESUME_TURN', {
+                sid,
+                watcherId: autoResume.watcherId || null,
+                trigger:   autoResume.trigger  || null,
+                pendingWakes: (run._pendingWakeEvents || []).length,
+            });
+            this._postToRun(run, {
+                type: 'status',
+                text: isZh()
+                    ? `🔔 自动唤醒（${autoResume.trigger || 'trigger'}）`
+                    : `🔔 Auto-resumed (${autoResume.trigger || 'trigger'})`,
+            });
+            this._postToRun(run, { type: 'replyStart' });
+            this._postSessionList();
+        } else {
+            run.reply = { user: text, asst: '', thoughts: '' };
+            run.messages.push({ role: 'user', content: userContent });
+            Logger.info('USER_SEND', { sid, len: (text || '').length, model, baseUrl, mode, text: (text || '').slice(0, 2000) });
+            this._postToRun(run, { type: 'userEcho', text });
+            this._postToRun(run, { type: 'replyStart' });
+            this._postSessionList();
+        }
 
         run.abortCtrl = new AbortController();
         const signal  = run.abortCtrl.signal;
@@ -229,7 +274,7 @@ class AgentLoop {
         // 0 (or unset) means "run until task is complete" — stagnation detection
         // (repeat-tool hints + ABAB cycle guard) is the real runaway guard.
         const MAX_ITERS = (_itersRaw > 0) ? Math.min(200, _itersRaw) : 9999;
-        const COMPACT_BUDGET = Math.max(8000, Number(cfg.get('compactBudgetTokens')) || Math.floor(modelCfg.contextWindow * 0.5));
+        const COMPACT_BUDGET = Math.max(8000, Number(cfg.get('compactBudgetTokens')) || Math.floor(modelCfg.contextWindow * 0.7));
         const MODEL_CTX_HARD_LIMIT = Math.floor(modelCfg.contextWindow * 0.9);
         const askMode = interactionMode === 'ask';
         Logger.info('INTERACTION_MODE', { mode: interactionMode });
@@ -272,6 +317,11 @@ class AgentLoop {
         // that an unrelated session's long-running job doesn't trap this loop.
         const myBgJobs = () => getActiveBgJobsForSession(sid);
         run._pendingBgJobEvents = [];
+        // Wake-scheduler auto-resume events (watch/yield_turn). Provider.autoResume
+        // may have queued events BEFORE handleSend was invoked (the resume path),
+        // so only initialise when the field does not already exist — preserving
+        // anything the scheduler pushed in.
+        if (!Array.isArray(run._pendingWakeEvents)) run._pendingWakeEvents = [];
         // Issue #167: track bg jobs that were started by run_shell_bg WITHIN this
         // run. The BG_WAIT_SKIPPED_MODEL_DONE early-exit path is safe for
         // pre-existing long-running jobs (dev servers, watchers from earlier
@@ -350,15 +400,39 @@ class AgentLoop {
                         Logger.info('BG_JOB_END_INJECTED', { jobId: ev.jobId, exitCode: ev.exitCode, durSec });
                     }
                 }
+                // ── Inject pending auto-wake events (from wake-scheduler) ─────
+                // Same pattern as bg-job events: pushed by wake-scheduler when a
+                // watch condition fires; surfaced as system-reminder so the model
+                // sees the digest at the top of its next turn.
+                if (run._pendingWakeEvents && run._pendingWakeEvents.length) {
+                    const wevs = run._pendingWakeEvents.splice(0);
+                    for (const ev of wevs) {
+                        run.messages.push({
+                            role: 'user',
+                            content: [
+                                '<system-reminder channel="auto-wake">',
+                                ev.digest || '(no digest)',
+                                '</system-reminder>',
+                            ].join('\n'),
+                        });
+                        Logger.info('WAKE_EVENT_INJECTED', {
+                            sid,
+                            watcherId: ev.watcherId,
+                            trigger: ev.trigger,
+                            digestLen: (ev.digest || '').length,
+                        });
+                    }
+                }
                 const compactApiConfig = { apiKey, baseUrl, model, provider };
-                // Issue #142 P1-2: rolling proactive compaction.  Every 12
-                // iterations we tighten the budget to 80% of normal so the
-                // model performs an incremental summary instead of waiting
-                // until we are already over budget.
-                const proactiveBudget = (iter > 0 && iter % 12 === 0)
-                    ? Math.floor(COMPACT_BUDGET * 0.8)
-                    : COMPACT_BUDGET;
-                const compactRes = await autoCompactIfNeeded(run.messages, proactiveBudget, 12, compactApiConfig);
+                // DeepSeek prefix-cache tuning: removed the "every 12
+                // iterations tighten budget to 80%" proactive trigger. That
+                // periodic re-compaction rewrote the head of the history and
+                // fully invalidated the server-side KV prefix cache on a
+                // fixed cadence — exactly the opposite of what we want. Now
+                // compaction only fires when the real token estimate
+                // genuinely exceeds the (already-generous) COMPACT_BUDGET,
+                // i.e. once per session in most runs.
+                const compactRes = await autoCompactIfNeeded(run.messages, COMPACT_BUDGET, 12, compactApiConfig);
                 if (compactRes.compacted) {
                     // Issue #145: compaction may slice between an
                     // assistant{tool_calls} and its tool block. Drop any
@@ -368,7 +442,7 @@ class AgentLoop {
                     if (run.messages.length !== _before) {
                         Logger.info('ORPHAN_TOOLCALL_DROPPED', { sid, iter, before: _before, after: run.messages.length, site: 'autocompact' });
                     }
-                    Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped, truncated: compactRes.truncated, deduped: compactRes.deduped, proactive: proactiveBudget !== COMPACT_BUDGET });
+                    Logger.info('AUTOCOMPACT', { sid, iter, dropped: compactRes.dropped, truncated: compactRes.truncated, deduped: compactRes.deduped });
                     this._postToRun(run, { type: 'status', text: isZh() ? '🗜 压缩历史…' : 'Compacting history…' });
                     postProgress('compacting');
                 }
@@ -594,10 +668,52 @@ class AgentLoop {
 
                 if (usage) {
                     const { cost_cny, breakdown } = computeCost(model, usage);
-                    this._postToRun(run, { type: 'usage', usage: { ...usage, cost_cny, breakdown, model } });
+                    // DeepSeek prefix-cache visibility: surface the per-turn
+                    // cache hit rate so users can see when prefix-cache
+                    // optimisations pay off. DeepSeek's OpenAI-compatible
+                    // /chat/completions response includes
+                    // prompt_cache_hit_tokens and prompt_cache_miss_tokens
+                    // inside `usage`; other providers omit them, in which
+                    // case cache_hit_rate stays `null`.
+                    const hit  = Number(usage.prompt_cache_hit_tokens || 0);
+                    const miss = Number(usage.prompt_cache_miss_tokens || 0);
+                    const cache_hit_rate = (hit + miss) > 0 ? +(hit / (hit + miss)).toFixed(4) : null;
+                    if (cache_hit_rate !== null) {
+                        Logger.info('CACHE_HIT_RATE', { sid, iter, hit, miss, rate: cache_hit_rate });
+                    }
+                    this._postToRun(run, { type: 'usage', usage: { ...usage, cost_cny, breakdown, model, cache_hit_rate } });
                 }
 
                 if (!toolCalls.length) {
+                    // ── P0: empty-response self-heal ──────────────────────────────
+                    // A turn that produces NO tool calls is normally a final reply.
+                    // But occasionally the model emits a degenerate response: no
+                    // tool call AND no assistant text (often just mimicking the
+                    // reasoning placeholder, then stopping). The old code treated
+                    // that as "done" and broke out of the loop, silently ending the
+                    // turn mid-task ("ghost interruption"). Instead, when the reply
+                    // is empty and there are no background jobs to wait on, inject a
+                    // forward nudge and retry — capped to avoid an infinite loop if
+                    // the model genuinely has nothing to say.
+                    if (!assistantText.trim() && myBgJobs().size === 0) {
+                        run._emptyReplyRetries = (run._emptyReplyRetries || 0) + 1;
+                        if (run._emptyReplyRetries <= 2) {
+                            Logger.info('EMPTY_REPLY_RETRY', { sid, iter, attempt: run._emptyReplyRetries });
+                            run.messages.push({
+                                role: 'user',
+                                content: '<system-reminder>\nYour previous response was empty — no text and no tool call. Do NOT stop here. Continue the task: call the next appropriate tool, or if every step is genuinely complete, write the final summary for the user.\n</system-reminder>',
+                            });
+                            continue; // outer while → one more API call
+                        }
+                        // Retries exhausted: fall through to the normal end-of-turn
+                        // path so the loop can terminate instead of spinning.
+                        Logger.info('EMPTY_REPLY_GIVEUP', { sid, iter, attempts: run._emptyReplyRetries });
+                    } else {
+                        // Any non-empty (or bg-job-bearing) reply resets the counter
+                        // so the cap only applies to CONSECUTIVE empty responses.
+                        run._emptyReplyRetries = 0;
+                    }
+
                     run.messages.push({ role: 'assistant', content: assistantText, ...(reasoningText ? { reasoning_content: reasoningText } : {}) });
 
                     // ── Keep loop alive while bg jobs are running ─────────────────
@@ -742,6 +858,10 @@ class AgentLoop {
 
                     break;
                 }
+
+                // Reached only when toolCalls.length > 0: a productive turn, so
+                // clear the consecutive-empty-response counter (P0 self-heal).
+                run._emptyReplyRetries = 0;
 
                 run.messages.push({
                     role: 'assistant',
@@ -964,6 +1084,47 @@ class AgentLoop {
                 if (toolCalls.length > 0 && toolCalls.every(tc => tc.name === 'update_plan')) {
                     iter--;
                     Logger.info('PLAN_ONLY_ITER_RECLAIMED', { sid, iter });
+                }
+
+                // ── yield_turn: model explicitly suspended this turn ──────────
+                // The yield_turn tool sets run._yieldRequested when at least one
+                // watcher is armed. Break out cleanly so the turn ends; the
+                // session will auto-resume via Provider.autoResume when the
+                // scheduler fires.
+                if (run._yieldRequested) {
+                    const _yr = run._yieldRequested;
+                    run._yieldRequested = null;
+
+                    // ── Summary-before-sleep guard ────────────────────────────
+                    // A clean suspend should always be preceded by a short
+                    // user-facing message ("here's what I set up / now waiting for
+                    // X"). When the model armed a watcher and yielded with NO prose
+                    // in this turn, the user would otherwise see only a bare
+                    // "💤 Suspended" status. Nudge once to produce the summary, then
+                    // let it yield again. Capped via run._yieldSummaryNudged so a
+                    // stubbornly-silent model still suspends instead of looping.
+                    if (!assistantText.trim() && !run._yieldSummaryNudged) {
+                        run._yieldSummaryNudged = true;
+                        Logger.info('YIELD_SUMMARY_NUDGE', { sid, iter, watchers: _yr.watcherIds });
+                        run.messages.push({
+                            role: 'user',
+                            content: '<system-reminder>\nYou armed a watcher and yielded the turn, but produced NO user-facing text — the user would see the chat freeze with no explanation. Before suspending, write a brief plain-text message (1-3 sentences) that: (1) summarises what you set up / did so far, (2) states exactly what you are now waiting for and the watch conditions, (3) notes the session will auto-resume and report back. Then call `yield_turn` again to suspend.\n</system-reminder>',
+                        });
+                        continue; // outer while → one more API call to get the summary
+                    }
+
+                    Logger.info('YIELD_REQUESTED', {
+                        sid, iter,
+                        reason: _yr.reason,
+                        watchers: _yr.watcherIds,
+                    });
+                    this._postToRun(run, {
+                        type: 'status',
+                        text: isZh()
+                            ? `💤 已挂起：${_yr.reason}（${_yr.watcherIds.length} 个 watcher 监听中）`
+                            : `💤 Suspended: ${_yr.reason} (${_yr.watcherIds.length} watcher(s) armed)`,
+                    });
+                    break;
                 }
             } // end while
 

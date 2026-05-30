@@ -61,6 +61,8 @@ class ChatViewProvider {
                 if (run) { run.discarded = true; try { run.abortCtrl?.abort(); } catch {} this._runs.delete(id); }
                 // Session was deleted → drop its pending edits map too.
                 this._pendingEditsBySession.delete(id);
+                // Also cancel any armed wake watchers for the session.
+                try { require('./wake-scheduler').cancelAll(id); } catch {}
             },
         });
 
@@ -86,6 +88,49 @@ class ChatViewProvider {
 
         const wsR = wsRoot();
         if (wsR) mcpManager.init(wsR).catch(e => Logger.info('MCP_INIT_ERROR', { message: e.message }));
+
+        // Wake-scheduler: declarative watchers fire autoResume() to wake suspended sessions.
+        try { require('./wake-scheduler').attach(this); }
+        catch (e) { Logger.info('WAKE_SCHEDULER_ATTACH_ERROR', { message: e.message }); }
+    }
+
+    /**
+     * Wake-scheduler entry point. Called when a registered watcher fires.
+     * Queues the digest as a pending wake-event and dispatches a turn (or
+     * piggy-backs on the currently-busy run if one is in flight).
+     */
+    async autoResume(sessionId, evidence) {
+        if (!sessionId || !evidence) return;
+        try {
+            const live = this._runs.get(sessionId);
+            if (live && live.busy) {
+                // A turn is already running for this session — just enqueue;
+                // the agent loop picks it up at the top of the next iteration.
+                live._pendingWakeEvents = live._pendingWakeEvents || [];
+                live._pendingWakeEvents.push(evidence);
+                Logger.info('AUTO_RESUME_PIGGYBACK', { sid: sessionId, watcherId: evidence.watcherId });
+                return;
+            }
+            // No live run: hydrate from store and prime the wake queue, then dispatch.
+            const seed = this._store.loadApiMessages(sessionId);
+            const run = this._newRun(sessionId, seed);
+            run._pendingWakeEvents = [evidence];
+            Logger.info('AUTO_RESUME_DISPATCH', {
+                sid: sessionId,
+                watcherId: evidence.watcherId,
+                trigger:   evidence.trigger,
+            });
+            // Fire-and-forget; handleSend manages its own busy flag and cleanup.
+            this._loop.handleSend(null, [], null, {
+                autoResume: {
+                    sid: sessionId,
+                    watcherId: evidence.watcherId,
+                    trigger:   evidence.trigger,
+                },
+            }).catch(e => Logger.info('AUTO_RESUME_HANDLE_ERROR', { message: e.message }));
+        } catch (e) {
+            Logger.info('AUTO_RESUME_ERROR', { sid: sessionId, message: e.message });
+        }
     }
 
     _newRun(sessionId, seedMessages = []) {

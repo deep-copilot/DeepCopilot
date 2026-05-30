@@ -1,0 +1,320 @@
+// Wake-scheduler: registers declarative "watchers" that auto-resume an agent
+// session when a condition fires (bg-job end, output match, output silent,
+// time elapsed, or a `first_of` composition). The model uses the `watch` +
+// `yield_turn` tools to declare these; the scheduler owns lifecycle, polling,
+// rate-limiting, and routing the trigger evidence back through Provider.autoResume.
+//
+// Scope notes (v1, intentional simplifications):
+//   - In-memory only; watchers do NOT survive an extension reload (logged as
+//     SCHEDULER_VOLATILE_WARN on register).
+//   - Fixed 5s poll interval (no exponential backoff yet).
+//   - Rate limit is a flat per-hour cap per session (default 12, configurable
+//     via deepCopilot.autoResume.maxResumesPerHour).
+//   - No quiet-hours / file-changed / port-open conditions in v1.
+'use strict';
+
+const vscode = require('vscode');
+const { Logger } = require('../logger');
+const {
+    onBgJobEnded,
+    offBgJobEnded,
+    findTerminalByName,
+    getRecentExecutions,
+} = require('../tools/terminal-monitor');
+const { buildDigest } = require('./digest');
+
+let _provider = null;
+const _watchers = new Map();    // watcherId -> Watcher
+const _bySession = new Map();   // sessionId -> Set<watcherId>
+const _resumeHistory = new Map(); // sessionId -> [timestamps]
+let _seq = 0;
+
+const MAX_WATCHERS_PER_SESSION = 8;
+const POLL_INTERVAL_MS = 5000;
+const DEFAULT_MAX_RESUMES_PER_HOUR = 12;
+
+function attach(provider) { _provider = provider; }
+function isAttached() { return !!_provider; }
+
+function _maxResumesPerHour() {
+    try {
+        const v = vscode.workspace
+            .getConfiguration('deepCopilot.autoResume')
+            .get('maxResumesPerHour');
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_RESUMES_PER_HOUR;
+    } catch { return DEFAULT_MAX_RESUMES_PER_HOUR; }
+}
+
+function _newId() { return `w_${Date.now().toString(36)}_${(++_seq).toString(36)}`; }
+
+function _flattenLeaves(cond) {
+    if (!cond) return [];
+    if (cond.kind === 'first_of' && Array.isArray(cond.any)) {
+        return cond.any.flatMap(_flattenLeaves);
+    }
+    return [cond];
+}
+
+function _checkRateLimit(sessionId) {
+    const now = Date.now();
+    const hist = _resumeHistory.get(sessionId) || [];
+    const cutoff = now - 3600_000;
+    const recent = hist.filter(t => t > cutoff);
+    _resumeHistory.set(sessionId, recent);
+    return recent.length < _maxResumesPerHour();
+}
+
+function _recordResume(sessionId) {
+    const hist = _resumeHistory.get(sessionId) || [];
+    hist.push(Date.now());
+    _resumeHistory.set(sessionId, hist);
+}
+
+function _arm(w) {
+    const conds = _flattenLeaves(w.spec.condition);
+    const pollNeeded = conds.some(c =>
+        c.kind === 'output_match' || c.kind === 'output_silent' || c.kind === 'progress_at',
+    );
+    const bgEndJobs = new Set(
+        conds.filter(c => c.kind === 'job_end' && c.job).map(c => c.job),
+    );
+
+    for (const c of conds) {
+        if (c.kind === 'time_elapsed') {
+            const ms = Math.max(1000, (Number(c.seconds) | 0) * 1000);
+            const t = setTimeout(() => _fire(w, { kind: 'time_elapsed' }), ms);
+            w._timers.push(t);
+        }
+    }
+
+    if (bgEndJobs.size) {
+        const handler = (ev) => {
+            if (!ev || !bgEndJobs.has(ev.jobId)) return;
+            _fire(w, {
+                kind: 'job_end',
+                jobId: ev.jobId,
+                exitCode: ev.exitCode,
+                duration: ev.durationMs,
+                output: ev.output,
+            });
+        };
+        onBgJobEnded(handler);
+        w._offBgEnd = () => offBgJobEnded(handler);
+    }
+
+    if (pollNeeded) {
+        const poll = setInterval(() => _pollOutput(w, conds), POLL_INTERVAL_MS);
+        w._poll = poll;
+    }
+}
+
+function _readJobOutput(jobId) {
+    const term = findTerminalByName(jobId);
+    if (!term) return null;
+    const recs = getRecentExecutions(term, 20);
+    return recs.map(r => r.output || '').join('\n');
+}
+
+function _pollOutput(w, conds) {
+    if (w.firedAt) return;
+    for (const c of conds) {
+        if (!c.job) continue;
+        const out = _readJobOutput(c.job);
+        if (out == null) continue;
+
+        const prevLen = w._lastSeenLen.get(c.job) || 0;
+        const newSlice = out.length > prevLen ? out.slice(prevLen) : '';
+        if (newSlice.length > 0) {
+            w._lastSeenLen.set(c.job, out.length);
+            w._lastOutputChangeAt.set(c.job, Date.now());
+        }
+
+        if (c.kind === 'output_match' && c.regex) {
+            try {
+                const re = new RegExp(c.regex, c.flags || 'i');
+                if (re.test(newSlice) || (prevLen === 0 && re.test(out))) {
+                    return _fire(w, {
+                        kind: 'output_match',
+                        jobId: c.job,
+                        regex: c.regex,
+                        output: out,
+                        lastSeenLen: prevLen,
+                    });
+                }
+            } catch (e) {
+                Logger.info('WATCHER_REGEX_ERROR', { id: w.id, regex: c.regex, error: e.message });
+            }
+        } else if (c.kind === 'output_silent' && c.seconds) {
+            const last = w._lastOutputChangeAt.get(c.job) || w.createdAt;
+            if (Date.now() - last > Number(c.seconds) * 1000) {
+                return _fire(w, {
+                    kind: 'output_silent',
+                    jobId: c.job,
+                    idleSec: Math.round((Date.now() - last) / 1000),
+                    output: out,
+                    lastSeenLen: prevLen,
+                });
+            }
+        } else if (c.kind === 'progress_at' && c.regex) {
+            try {
+                const re = new RegExp(c.regex, c.flags || 'i');
+                if (newSlice && re.test(newSlice)) {
+                    return _fire(w, {
+                        kind: 'progress_at',
+                        jobId: c.job,
+                        output: out,
+                        lastSeenLen: prevLen,
+                    });
+                }
+            } catch (e) {
+                Logger.info('WATCHER_REGEX_ERROR', { id: w.id, regex: c.regex, error: e.message });
+            }
+        }
+    }
+}
+
+function _cleanupWatcher(w) {
+    for (const t of w._timers || []) { try { clearTimeout(t); } catch {} }
+    w._timers = [];
+    if (w._poll) { try { clearInterval(w._poll); } catch {} w._poll = null; }
+    if (w._offBgEnd) { try { w._offBgEnd(); } catch {} w._offBgEnd = null; }
+    _watchers.delete(w.id);
+    const set = _bySession.get(w.sessionId);
+    if (set) {
+        set.delete(w.id);
+        if (!set.size) _bySession.delete(w.sessionId);
+    }
+}
+
+function _fire(w, evidence) {
+    if (w.firedAt) return;
+    w.firedAt = Date.now();
+    _cleanupWatcher(w);
+
+    if (!_checkRateLimit(w.sessionId)) {
+        Logger.info('WATCHER_RATE_LIMITED', {
+            sessionId: w.sessionId,
+            id: w.id,
+            trigger: evidence.kind,
+        });
+        return;
+    }
+    _recordResume(w.sessionId);
+
+    const digest = buildDigest({
+        trigger: evidence.kind,
+        watcherId: w.id,
+        watcherDesc: w.spec.description || '',
+        jobId: evidence.jobId,
+        exitCode: evidence.exitCode,
+        durationMs: evidence.duration,
+        output: evidence.output || '',
+        lastSeenLen: evidence.lastSeenLen,
+    });
+
+    Logger.info('WATCHER_FIRED', {
+        sessionId: w.sessionId,
+        id: w.id,
+        trigger: evidence.kind,
+        digestLen: digest.length,
+    });
+
+    if (_provider && typeof _provider.autoResume === 'function') {
+        try {
+            _provider.autoResume(w.sessionId, {
+                watcherId: w.id,
+                trigger: evidence.kind,
+                digest,
+            });
+        } catch (e) {
+            Logger.info('WATCHER_AUTORESUME_ERROR', { id: w.id, error: e.message });
+        }
+    } else {
+        Logger.info('WATCHER_NO_PROVIDER', { id: w.id });
+    }
+}
+
+function registerWatcher(sessionId, spec) {
+    if (!sessionId) return { ok: false, error: 'sessionId required' };
+    if (!spec || !spec.condition) return { ok: false, error: 'spec.condition required' };
+
+    const existing = _bySession.get(sessionId) || new Set();
+    if (existing.size >= MAX_WATCHERS_PER_SESSION) {
+        return {
+            ok: false,
+            error: `Max ${MAX_WATCHERS_PER_SESSION} active watchers per session — cancel one first.`,
+        };
+    }
+
+    const id = _newId();
+    const w = {
+        id,
+        sessionId,
+        spec,
+        createdAt: Date.now(),
+        firedAt: null,
+        _timers: [],
+        _poll: null,
+        _offBgEnd: null,
+        _lastSeenLen: new Map(),
+        _lastOutputChangeAt: new Map(),
+    };
+    _watchers.set(id, w);
+    existing.add(id);
+    _bySession.set(sessionId, existing);
+
+    try { _arm(w); }
+    catch (e) {
+        _cleanupWatcher(w);
+        Logger.info('WATCHER_ARM_ERROR', { id, error: e.message });
+        return { ok: false, error: `arming failed: ${e.message}` };
+    }
+
+    Logger.info('WATCHER_REGISTERED', {
+        sessionId, id,
+        condition: spec.condition,
+        description: spec.description || '',
+    });
+    Logger.info('SCHEDULER_VOLATILE_WARN', { id });
+    return { ok: true, watcherId: id };
+}
+
+function cancel(sessionId, watcherId) {
+    if (!watcherId) return false;
+    const w = _watchers.get(watcherId);
+    if (!w || w.sessionId !== sessionId) return false;
+    _cleanupWatcher(w);
+    return true;
+}
+
+function cancelAll(sessionId) {
+    const set = _bySession.get(sessionId);
+    if (!set) return 0;
+    let n = 0;
+    for (const id of [...set]) { if (cancel(sessionId, id)) n++; }
+    return n;
+}
+
+function listActive(sessionId) {
+    const set = _bySession.get(sessionId);
+    if (!set) return [];
+    return [...set].map(id => {
+        const w = _watchers.get(id);
+        return {
+            id,
+            createdAt: w.createdAt,
+            condition: w.spec.condition,
+            description: w.spec.description || '',
+        };
+    });
+}
+
+module.exports = {
+    attach,
+    isAttached,
+    registerWatcher,
+    cancel,
+    cancelAll,
+    listActive,
+};

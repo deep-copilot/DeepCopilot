@@ -155,13 +155,20 @@ function truncateLongToolResults(messages, opts = {}) {
     let truncCount = 0;
     const result = messages.map(m => {
         if (m.role !== 'tool') return m;
+        // Cache-friendly: if a tool result was already truncated by a prior
+        // pass, reuse it verbatim. Re-running the smart truncator on a body
+        // that already contains "[truncated — …]" can still produce a byte-
+        // identical result, but flagging it explicitly with `_cacheFrozen`
+        // guarantees object identity (and hence byte identity) for the
+        // DeepSeek prefix-cache hash.
+        if (m._cacheFrozen) return m;
         const body = typeof m.content === 'string' ? m.content
             : (Array.isArray(m.content) ? m.content.map(p => (p && p.text) || '').join('') : '');
         if (body.length <= threshold) return m;
         truncCount++;
         const toolName = m.tool_call_id ? idToName.get(m.tool_call_id) : null;
         const newBody = _smartTruncateByTool(body, toolName, headKeep, tailKeep);
-        return { ...m, content: newBody };
+        return { ...m, content: newBody, _cacheFrozen: true };
     });
     return { messages: result, truncCount };
 }
@@ -419,11 +426,14 @@ async function autoCompactIfNeeded(messages, budgetTokens, keepTail = 12, apiCon
         return _measureVal;
     };
 
-    // Step 0 (Issue #142 P1-3): dedup repeated file reads — cheap, lossless
-    // (latest copy preserved).  Only runs when the current token estimate is
-    // already above 80% of budget, so the dedup pass itself is paid for by
-    // the savings it produces.
-    if (measure(working) > budgetTokens * 0.8) {
+    // Step 0 (Issue #142 P1-3 / DeepSeek prefix-cache tuning):
+    // dedup repeated file reads rewrites middle-of-history tool messages,
+    // which fully invalidates the DeepSeek server-side KV prefix cache from
+    // the first rewritten byte onward. Defer it to a near-overflow trigger
+    // (95% of budget) so we only pay the cache-bust cost when truly
+    // necessary — the cheaper head-drop and tail truncation usually free
+    // enough tokens first without disturbing the byte-stable prefix.
+    if (measure(working) > budgetTokens * 0.95) {
         const ded = dedupRepeatedReads(working);
         if (ded.replaced > 0) {
             working = ded.messages;

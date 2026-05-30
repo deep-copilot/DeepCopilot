@@ -554,6 +554,45 @@ const TOOL_DEFS = [
             },
         },
     },
+    // ─── watch + yield_turn: declarative auto-resume for long tasks ─────────
+    {
+        type: 'function',
+        function: {
+            name: 'watch',
+            description: 'Register a declarative trigger that will auto-resume this conversation later. Use ONLY for genuinely long-running background tasks (training, large builds, servers, long downloads) started via run_shell_bg. The conversation suspends after you call `yield_turn`, then auto-resumes when any condition fires — you receive a structured digest (anomalies, progress, output tail) and continue. CRITICAL: the condition MUST include a `time_elapsed` safety bound (wrap in `first_of` with a fallback timer) so the session cannot get stuck forever. After calling `watch`, you MUST call `yield_turn` in the same turn — otherwise the watcher is wasted. Do NOT use for quick tasks, conversational replies, or tasks that should complete within the current turn.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    condition: {
+                        type: 'object',
+                        description: 'Trigger condition. One of: { kind:"time_elapsed", seconds:N (5..86400) } | { kind:"job_end", job:"<jobId>" } | { kind:"output_match", job:"<jobId>", regex:"..." } | { kind:"output_silent", job:"<jobId>", seconds:N } | { kind:"progress_at", job:"<jobId>", regex:"epoch (\\\\d+)/" } | { kind:"first_of", any:[...sub-conditions] }. Compose with first_of for robust setups (e.g. wake on success OR error OR hang OR timeout).',
+                    },
+                    description: {
+                        type: 'string',
+                        description: 'Short human-readable label for this watcher (shown in logs).',
+                    },
+                },
+                required: ['condition'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'yield_turn',
+            description: 'Cleanly end the current agent turn so the conversation can be auto-resumed later by a `watch` trigger. Use ONLY immediately after calling `watch` for a long-running background task. The current turn ends gracefully (final assistant reply, if any, is preserved); the conversation will auto-resume when the watcher fires with a digest of what happened. NEVER call yield_turn without first registering at least one watch — that would suspend the session forever. NEVER call yield_turn to "wait" for quick operations — just use the normal tool flow. Max 6 yields per turn; exceeding that returns an error and you must produce a normal reply.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    reason: {
+                        type: 'string',
+                        description: 'Short human-readable explanation of what you are waiting for (e.g. "training run ~30min, will resume on completion or OOM"). Shown in the UI as a status hint while suspended.',
+                    },
+                },
+                required: ['reason'],
+            },
+        },
+    },
 ];
 
 module.exports = { TOOL_DEFS, getToolDefs };

@@ -270,28 +270,19 @@ class SessionStore {
             // persists a broken sequence. See issue #145.
             sanitized = _dropOrphanToolCallGroups(sanitized);
 
-            // Issue #142 P0-3: token-aware pre-compaction before persistence.
-            // Without this, a "full" session is reloaded as-is on next open and
-            // immediately bumps into the context limit again.  We aim for ~40%
-            // of the model's window so the next turn has plenty of headroom.
-            try {
-                const { getModel, resolveModel } = require('../providers');
-                const { autoCompactIfNeeded, estimateMessagesTokens } = require('./compact');
-                const provider = cfg.get('provider') || 'deepseek';
-                const modelName = cfg.get('defaultModel') || 'deepseek-v4-pro';
-                const modelCfg  = getModel(provider, resolveModel(provider, modelName)) || { contextWindow: 65536 };
-                const persistBudget = Math.floor(modelCfg.contextWindow * 0.4);
-                if (estimateMessagesTokens(sanitized) > persistBudget) {
-                    const res = await autoCompactIfNeeded(sanitized, persistBudget, 12, null);
-                    if (res && res.compacted) {
-                        // Compaction itself may slice through a tool_calls block;
-                        // run the full-array sanitizer rather than tail-only.
-                        sanitized = _dropOrphanToolCallGroups(res.messages);
-                    }
-                }
-            } catch (_e) {
-                // Silent failure — never block persistence on compaction error.
-            }
+            // DeepSeek prefix-cache tuning: removed the eager
+            // pre-compaction-on-persist branch (formerly compressed the
+            // history to 40% of the model's context window every time the
+            // turn was saved). That pass rewrote the head of the history on
+            // session save and reload, which broke the byte-stable prefix
+            // the server-side KV cache depends on — every "reopen the same
+            // session" then paid a full prefix-cache miss on the next turn.
+            //
+            // Compaction now fires lazily inside the agent loop only when
+            // the real token estimate exceeds COMPACT_BUDGET (default 70%
+            // of the model window). On reload, agent-loop.js still defends
+            // against an oversized history via the same path, so we don't
+            // need to do anything proactively here.
 
             s.apiMessages = sanitized;
         }

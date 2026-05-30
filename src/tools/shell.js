@@ -92,6 +92,27 @@ function _adaptCommandForShell(command) {
     return command;
 }
 
+// ─── Windows inline-script footgun hint ──────────────────────────────────────
+// On win32, run_shell spawns with `shell: true`, which routes through cmd.exe.
+// cmd.exe treats a literal newline as a command separator, so a multi-line
+// inline script passed via `python -c "..."` / `node -e "..."` gets split apart
+// mid-quote and usually runs as a no-op (exit 0, empty stdout) — which then
+// confuses the model ("did my script run?"). Detect this exact shape and return
+// an actionable hint nudging the model to write a temp script file instead.
+// Returns '' when not applicable. Pure string helper — no behavioural change.
+const _INLINE_CODE_FLAG = /\b(python3?|node|deno|bun|ruby|perl)\b[^\n]*\s-(c|e)\b/i;
+function _win32InlineScriptHint(command) {
+    if (process.platform !== 'win32') return '';
+    const s = String(command || '');
+    if (!/\n/.test(s)) return '';            // only multi-line commands are at risk
+    if (!_INLINE_CODE_FLAG.test(s)) return '';
+    return '[run_shell hint] This is a multi-line inline script (e.g. python -c / node -e) '
+        + 'running through cmd.exe on Windows, where a literal newline is treated as a command '
+        + 'separator — the script likely did NOT run as intended (this is the usual cause of '
+        + '"exit 0 with no output"). Write the code to a temporary file and execute that file '
+        + 'instead (e.g. write_file then `python tmp.py`), or pass a single-line command.';
+}
+
 // ─── long-running command heuristic ──────────────────────────────────────────
 // The model frequently picks run_shell even for training jobs / dev servers,
 // then complains the 30s timeout fires. Auto-detect obvious long-runners and
@@ -221,10 +242,13 @@ async function _runInVscodeTerminal(command, ctx, timeoutMs) {
             const exitCode = (typeof p.exitCode === 'number') ? p.exitCode : null;
             const output   = String(p.output || '');
             const durSec   = Math.round((p.durationMs || 0) / 1000);
+            const _inlineHint = _win32InlineScriptHint(command);
             let text;
             if (exitCode == null)        text = truncate(`(terminal closed before completion, ${durSec}s)\n${output}`);
             else if (exitCode !== 0)     text = truncate(`Exit ${exitCode}: ${output || '(no output)'}`);
-            else if (!output)            text = '(no output, exit 0)';
+            else if (!output)            text = _inlineHint
+                ? `(no output — command exited 0 with no stdout/stderr)\n${_inlineHint}`
+                : '(no output, exit 0)';
             else                          text = truncate(output);
             finish({
                 command,
@@ -474,9 +498,13 @@ async function toolRunShell(args, ctx = {}) {
             // already settled, `settle()` is a no-op.
             const exitCode = (code == null && signal) ? `signal:${signal}` : code;
             // Build backward-compatible text field (same as the old string return value).
+            const _inlineHint = _win32InlineScriptHint(command);
             let text;
             if (exitCode !== 0) text = truncate(`Exit ${exitCode}: ${stderr || stdout || '(no output)'}`);
-            else if (!stdout && !stderr) text = '(no output, exit 0)';
+            else if (!stdout && !stderr) {
+                text = '(no output — command exited 0 with no stdout/stderr)';
+                if (_inlineHint) text += `\n${_inlineHint}`;
+            }
             else if (!stdout && stderr)  text = truncate(`(stdout empty, exit 0)\n--- stderr ---\n${stderr}`);
             else text = truncate(stderr ? `${stdout}\n--- stderr ---\n${stderr}` : stdout);
             // Return structured result so the model can clearly inspect exitCode,
