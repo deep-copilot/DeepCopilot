@@ -302,6 +302,7 @@
   function openSessionDrawer() {
     if (rightPanel) rightPanel.classList.add('drawer-open');
     if (sessionBackdrop) sessionBackdrop.classList.add('open');
+    document.body.classList.add('drawer-open');
     if (sbSessionsBtn) sbSessionsBtn.setAttribute('aria-expanded', 'true');
     try { _drawerPrevFocus = document.activeElement; } catch(e){ _drawerPrevFocus = null; }
     if (rightPanel) {
@@ -314,6 +315,7 @@
   function closeSessionDrawer() {
     if (rightPanel) rightPanel.classList.remove('drawer-open');
     if (sessionBackdrop) sessionBackdrop.classList.remove('open');
+    document.body.classList.remove('drawer-open');
     if (sbSessionsBtn) sbSessionsBtn.setAttribute('aria-expanded', 'false');
     if (_drawerPrevFocus && typeof _drawerPrevFocus.focus === 'function') {
       try { _drawerPrevFocus.focus(); } catch(e){}

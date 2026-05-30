@@ -61,6 +61,8 @@ class ChatViewProvider {
                 if (run) { run.discarded = true; try { run.abortCtrl?.abort(); } catch {} this._runs.delete(id); }
                 // Session was deleted → drop its pending edits map too.
                 this._pendingEditsBySession.delete(id);
+                // Also cancel any armed wake watchers for the session.
+                try { require('./wake-scheduler').cancelAll(id); } catch {}
             },
         });
 
@@ -86,6 +88,70 @@ class ChatViewProvider {
 
         const wsR = wsRoot();
         if (wsR) mcpManager.init(wsR).catch(e => Logger.info('MCP_INIT_ERROR', { message: e.message }));
+
+        // Wake-scheduler: declarative watchers fire autoResume() to wake suspended sessions.
+        try { require('./wake-scheduler').attach(this); }
+        catch (e) { Logger.info('WAKE_SCHEDULER_ATTACH_ERROR', { message: e.message }); }
+    }
+
+    /**
+     * Wake-scheduler entry point. Called when a registered watcher fires.
+     * Queues the digest as a pending wake-event and dispatches a turn (or
+     * piggy-backs on the currently-busy run if one is in flight).
+     */
+    async autoResume(sessionId, evidence) {
+        if (!sessionId || !evidence) return;
+        try {
+            const live = this._runs.get(sessionId);
+            if (live && live.busy) {
+                // A turn is already running for this session — just enqueue;
+                // the agent loop picks it up at the top of the next iteration.
+                live._pendingWakeEvents = live._pendingWakeEvents || [];
+                live._pendingWakeEvents.push(evidence);
+                Logger.info('AUTO_RESUME_PIGGYBACK', { sid: sessionId, watcherId: evidence.watcherId });
+                return;
+            }
+            // Reuse an existing (but idle) run if one is present — e.g. the run
+            // that just yielded/suspended this turn. Calling _newRun() here would
+            // overwrite it in _runs and discard its in-memory state (toolCache,
+            // pending edits, queued events) and could desync the live history
+            // against the persisted store. Only hydrate a fresh run from the
+            // SessionStore when no run object exists at all.
+            let run = live;
+            if (run) {
+                run._pendingWakeEvents = run._pendingWakeEvents || [];
+                run._pendingWakeEvents.push(evidence);
+            } else {
+                // Race guard: a watcher can fire after the session was deleted
+                // (onDeleteRun cancels watchers, but the fire may already be in
+                // flight). loadApiMessages() would then return [] and the
+                // resumed turn could re-persist a phantom record for the
+                // deleted session. Bail out if the session no longer exists.
+                const exists = this._store.all().some(s => s.id === sessionId);
+                if (!exists) {
+                    Logger.info('AUTO_RESUME_SESSION_GONE', { sid: sessionId, watcherId: evidence.watcherId });
+                    return;
+                }
+                const seed = this._store.loadApiMessages(sessionId);
+                run = this._newRun(sessionId, seed);
+                run._pendingWakeEvents = [evidence];
+            }
+            Logger.info('AUTO_RESUME_DISPATCH', {
+                sid: sessionId,
+                watcherId: evidence.watcherId,
+                trigger:   evidence.trigger,
+            });
+            // Fire-and-forget; handleSend manages its own busy flag and cleanup.
+            this._loop.handleSend(null, [], null, {
+                autoResume: {
+                    sid: sessionId,
+                    watcherId: evidence.watcherId,
+                    trigger:   evidence.trigger,
+                },
+            }).catch(e => Logger.info('AUTO_RESUME_HANDLE_ERROR', { message: e.message }));
+        } catch (e) {
+            Logger.info('AUTO_RESUME_ERROR', { sid: sessionId, message: e.message });
+        }
     }
 
     _newRun(sessionId, seedMessages = []) {

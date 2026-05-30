@@ -26,6 +26,10 @@ html[data-locale="en"] body{font-family:"Segoe UI","Inter",system-ui,-apple-syst
 #right.drawer-open{display:flex}
 #session-backdrop{display:none;position:fixed;left:0;right:0;top:36px;bottom:0;z-index:199;background:rgba(0,0,0,.35);cursor:pointer}
 #session-backdrop.open{display:block}
+/* Push-layout: shrink main/composer so the drawer sits beside them instead of covering them */
+body.drawer-open{padding-right:280px;transition:padding-right .15s ease}
+body.drawer-open #session-backdrop{display:none!important}
+@media (max-width:640px){body.drawer-open{padding-right:0}body.drawer-open #session-backdrop.open{display:block}}
 #main{grid-area:main;overflow-y:auto;padding:10px 24px;display:flex;flex-direction:column;gap:12px;min-height:0}
 .msgU{background:rgba(128,128,128,.18);outline:1px solid transparent;border-radius:8px 8px 2px 8px;padding:8px 12px;align-self:flex-end;max-width:88%;word-break:break-word;line-height:1.5;position:relative;cursor:pointer;transition:outline-color .15s,background .15s}
 .msgU-hd{display:none}

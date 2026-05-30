@@ -2,7 +2,7 @@
   "name": "deep-copilot",
   "displayName": "Deep Copilot",
   "description": "Deep Copilot — AI coding agent embedded in VS Code. Powered by DeepSeek V4, with file editing, terminal, search, and plan/todos. Standalone, no backend required.",
-  "version": "0.41.6",
+  "version": "0.43.0",
   "publisher": "ZhouChaunge",
   "icon": "imgs/logo.png",
   "repository": {
@@ -272,6 +272,13 @@
           "default": 96000,
           "minimum": 8000,
           "description": "Approximate token budget before older tool results are auto-compacted to fit the model context window."
+        },
+        "deepseekAgent.autoResumeMaxPerHour": {
+          "type": "number",
+          "default": 12,
+          "minimum": 1,
+          "maximum": 120,
+          "description": "后台唤醒调度：每个会话每小时最多自动恢复（auto-resume）的次数上限，防止 watcher 频繁唤醒造成 API 成本失控。默认 12。"
         },
         "deepseekAgent.webSearchProvider": {
           "type": "string",

@@ -170,8 +170,17 @@ function listModels(providerId) {
  *    messages that come after the first one with thoughts, leaving earlier
  *    pre-thinking messages alone. This is a defence-in-depth net: callers
  *    should still attach the real thought stream when they have one.
+ *
+ * Placeholder choice (verified via scripts/probe-reasoning-placeholder.js):
+ * the thinking-mode 400 gate only requires a NON-EMPTY string — any non-empty
+ * value (even a single space) is accepted. We deliberately use a forward-
+ * nudging instruction rather than a "nothing happened" phrase: when this string
+ * is repeated across many turns it can become a strong in-context pattern the
+ * model mimics. A cessation-flavoured placeholder (e.g. "no thoughts surfaced")
+ * then induces the model to emit it and STOP, producing a silent/empty turn.
+ * A forward-nudging placeholder mimics into "keep going", which is harmless.
  */
-const REASONING_PLACEHOLDER = '(no thoughts surfaced for this step)';
+const REASONING_PLACEHOLDER = 'Continue with the next concrete step.';
 
 function sanitizeMessages(providerId, messages, modelId) {
     if (!Array.isArray(messages) || !messages.length) return messages;
@@ -192,13 +201,36 @@ function sanitizeMessages(providerId, messages, modelId) {
         : [];
 
     let out = messages;
+    // Always strip any `_`-prefixed internal field (e.g. `_cacheFrozen`,
+    // `_compactionAnchor`). These flags are used by the compactor / agent
+    // loop to mark messages whose byte content is stable for DeepSeek
+    // prefix-cache reuse, and must never reach the provider's HTTP payload
+    // (OpenAI-compatible APIs reject unknown fields with HTTP 400).
+    out = out.map(m => {
+        if (!m || typeof m !== 'object') return m;
+        let copy = m;
+        for (const k of Object.keys(m)) {
+            if (k.length > 1 && k.charCodeAt(0) === 95 /* '_' */) {
+                // Spread (not Object.assign) to copy: a message could carry an
+                // own `__proto__` key (it starts with `_` and lands in this
+                // branch), and Object.assign would invoke the `__proto__`
+                // setter on the target — a classic prototype-pollution footgun.
+                // Object spread defines own properties instead of triggering
+                // setters, so it copies the field safely before we delete it.
+                if (copy === m) copy = { ...m };
+                delete copy[k];
+            }
+        }
+        return copy;
+    });
+
     if (effectiveStrip.length) {
         out = out.map(m => {
             if (!m || typeof m !== 'object') return m;
             let copy = m;
             for (const k of effectiveStrip) {
                 if (Object.prototype.hasOwnProperty.call(copy, k)) {
-                    if (copy === m) copy = Object.assign({}, m);
+                    if (copy === m) copy = { ...m };
                     delete copy[k];
                 }
             }

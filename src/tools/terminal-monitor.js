@@ -209,6 +209,7 @@ function start(context) {
                 endedAt:   null,
                 output:    '',
                 running:   true,
+                truncated: false,
             };
             _push(terminal, rec);
             // Register execution → rec mapping for precise end-event lookup.
@@ -216,14 +217,18 @@ function start(context) {
 
             // Stream stdout/stderr into the record. read() yields strings.
             // Break immediately once the byte cap is reached — continuing to
-            // iterate over a large stream wastes CPU with no benefit.
+            // iterate over a large stream wastes CPU with no benefit. Mark the
+            // record as `truncated` so consumers (e.g. the wake-scheduler's
+            // output_silent watcher) know the capture saturated and that a
+            // subsequent lack of growth does NOT mean the job went quiet.
             try {
                 const stream = execution.read();
                 for await (const chunk of stream) {
                     const remain = MAX_BYTES_PER_EXECUTION - rec.output.length;
-                    if (remain <= 0) break;
+                    if (remain <= 0) { rec.truncated = true; break; }
                     const s = typeof chunk === 'string' ? chunk : String(chunk || '');
-                    rec.output += s.length > remain ? s.slice(0, remain) : s;
+                    if (s.length > remain) { rec.output += s.slice(0, remain); rec.truncated = true; }
+                    else { rec.output += s; }
                 }
             } catch (err) {
                 Logger.info('TERMINAL_MONITOR_READ_ERROR', { message: String(err && err.message || err) });

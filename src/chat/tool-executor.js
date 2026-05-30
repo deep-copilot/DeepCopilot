@@ -565,6 +565,13 @@ class ToolExecutor {
         if (name === 'skill_invoke')     return skillInvoke(args, run);
         if (name === 'skill_create')     return skillCreate(args, run, tcId);
 
+        // Watch + yield_turn: auto-resume primitives. Both need `run` for
+        // session-scoped state (yield flag, watcher session binding).
+        if (name === 'watch' || name === 'yield_turn') {
+            const { toolWatch, toolYieldTurn } = require('../tools/sleep');
+            return name === 'watch' ? toolWatch(args, run) : toolYieldTurn(args, run);
+        }
+
         // Sub-agent dispatch
         if (name === 'spawn_agent')      return this._handleSpawnAgent(args, run, abortSignal);
 
