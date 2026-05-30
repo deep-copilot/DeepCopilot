@@ -111,10 +111,21 @@ class ChatViewProvider {
                 Logger.info('AUTO_RESUME_PIGGYBACK', { sid: sessionId, watcherId: evidence.watcherId });
                 return;
             }
-            // No live run: hydrate from store and prime the wake queue, then dispatch.
-            const seed = this._store.loadApiMessages(sessionId);
-            const run = this._newRun(sessionId, seed);
-            run._pendingWakeEvents = [evidence];
+            // Reuse an existing (but idle) run if one is present — e.g. the run
+            // that just yielded/suspended this turn. Calling _newRun() here would
+            // overwrite it in _runs and discard its in-memory state (toolCache,
+            // pending edits, queued events) and could desync the live history
+            // against the persisted store. Only hydrate a fresh run from the
+            // SessionStore when no run object exists at all.
+            let run = live;
+            if (run) {
+                run._pendingWakeEvents = run._pendingWakeEvents || [];
+                run._pendingWakeEvents.push(evidence);
+            } else {
+                const seed = this._store.loadApiMessages(sessionId);
+                run = this._newRun(sessionId, seed);
+                run._pendingWakeEvents = [evidence];
+            }
             Logger.info('AUTO_RESUME_DISPATCH', {
                 sid: sessionId,
                 watcherId: evidence.watcherId,

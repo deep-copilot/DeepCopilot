@@ -6,9 +6,12 @@
 //   - Reversibility × Blast Radius as the single framework for caution.
 //   - update_plan triggers by INTENT (does the user need to track progress?),
 //     not by counting steps or files.
-//   - __DYNAMIC_BOUNDARY__ marker physically separates the static (cacheable)
-//     half from the dynamic (env / memory / workspace) half. Static half is
-//     stable across requests, maximizing context-cache hit rate.
+//   - DYNAMIC_BOUNDARY is a LOGICAL split point between the static (cacheable)
+//     half and the dynamic (env / memory / workspace) half. It is NOT written
+//     into the prompt text — sections are simply ordered most-stable-first so
+//     the longest possible byte-prefix stays identical across requests,
+//     maximizing context-cache hit rate. The marker is exported only so a
+//     split-aware caller can re-derive the boundary if it ever needs to.
 //   - "Verify before reporting complete" + "report failures faithfully":
 //     executable behavior gates, not vague encouragement.
 //   - Workspace instructions (DEEPCOPILOT.md) injected only when the caller
@@ -23,8 +26,10 @@ const os = require('os');
 const path = require('path');
 const { wsRoot } = require('../utils/paths');
 
-// Literal marker between static and dynamic sections. Keep it stable —
-// downstream tooling (and future context-cache breakpoints) may split on it.
+// Logical boundary name between the static and dynamic sections. NOTE: this
+// is NOT inserted into the assembled prompt (see buildSystemPrompt) — it is
+// exported purely as a stable identifier for any future split-aware caller
+// (e.g. an Anthropic cache-breakpoint helper) that re-assembles the halves.
 const DYNAMIC_BOUNDARY = '__DYNAMIC_BOUNDARY__';
 
 // ---------- static core (cacheable across all requests) ----------
@@ -399,9 +404,9 @@ function readWorkspaceInstructions() {
 
 /**
  * Build the system prompt.
- * Layout:
+ * Layout (DYNAMIC_BOUNDARY below is a logical split, NOT emitted as text):
  *   [static core]                       ← stable, cacheable
- *   __DYNAMIC_BOUNDARY__
+ *   ──────── DYNAMIC_BOUNDARY (logical) ────────
  *   [environment]
  *   [user memory]                       ← if present
  *   [skill index]                       ← if any skills installed (Issue #61)

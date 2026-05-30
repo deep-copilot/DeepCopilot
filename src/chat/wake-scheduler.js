@@ -71,6 +71,18 @@ function _recordResume(sessionId) {
     _resumeHistory.set(sessionId, hist);
 }
 
+// Milliseconds until the session frees a rate-limit slot, i.e. when the
+// oldest in-window resume ages past the 1-hour cutoff. Used to re-arm a
+// throttled watcher instead of dropping it. Floored at 1s.
+function _msUntilRateSlot(sessionId) {
+    const hist = (_resumeHistory.get(sessionId) || []).slice().sort((a, b) => a - b);
+    const max = _maxResumesPerHour();
+    if (hist.length < max) return 1000;
+    const idx = hist.length - max; // oldest timestamp that must expire
+    const freeAt = hist[idx] + 3600_000;
+    return Math.max(1000, freeAt - Date.now() + 100);
+}
+
 function _arm(w) {
     const conds = _flattenLeaves(w.spec.condition);
     const pollNeeded = conds.some(c =>
@@ -113,15 +125,23 @@ function _readJobOutput(jobId) {
     const term = findTerminalByName(jobId);
     if (!term) return null;
     const recs = getRecentExecutions(term, 20);
-    return recs.map(r => r.output || '').join('\n');
+    return {
+        text: recs.map(r => r.output || '').join('\n'),
+        // True when the most-recent execution saturated the capture cap
+        // (terminal-monitor stops appending past MAX_BYTES_PER_EXECUTION).
+        // Its captured output then stops growing even though the job keeps
+        // emitting — so a flat length must NOT be read as "went silent".
+        truncated: recs.length > 0 && !!recs[recs.length - 1].truncated,
+    };
 }
 
 function _pollOutput(w, conds) {
     if (w.firedAt) return;
     for (const c of conds) {
         if (!c.job) continue;
-        const out = _readJobOutput(c.job);
-        if (out == null) continue;
+        const res = _readJobOutput(c.job);
+        if (res == null) continue;
+        const out = res.text;
 
         const prevLen = w._lastSeenLen.get(c.job) || 0;
         const newSlice = out.length > prevLen ? out.slice(prevLen) : '';
@@ -146,6 +166,13 @@ function _pollOutput(w, conds) {
                 Logger.info('WATCHER_REGEX_ERROR', { id: w.id, regex: c.regex, error: e.message });
             }
         } else if (c.kind === 'output_silent' && c.seconds) {
+            // When the capture saturated (hit the byte cap) the output length
+            // freezes even though the job is still chatty — treat that as
+            // "still active", keep the idle clock fresh, and do NOT fire.
+            if (res.truncated) {
+                w._lastOutputChangeAt.set(c.job, Date.now());
+                continue;
+            }
             const last = w._lastOutputChangeAt.get(c.job) || w.createdAt;
             if (Date.now() - last > Number(c.seconds) * 1000) {
                 return _fire(w, {
@@ -189,17 +216,27 @@ function _cleanupWatcher(w) {
 
 function _fire(w, evidence) {
     if (w.firedAt) return;
-    w.firedAt = Date.now();
-    _cleanupWatcher(w);
 
+    // Check the rate limit BEFORE committing (firedAt) and BEFORE cleanup.
+    // Previously the watcher was torn down first and only then rate-checked,
+    // so a throttled wake permanently destroyed the watcher — leaving the
+    // suspended session with nothing left to ever resume it. Instead, keep
+    // the watcher armed and re-arm a retry for when a slot frees up.
     if (!_checkRateLimit(w.sessionId)) {
+        const retryMs = _msUntilRateSlot(w.sessionId);
         Logger.info('WATCHER_RATE_LIMITED', {
             sessionId: w.sessionId,
             id: w.id,
             trigger: evidence.kind,
+            retryMs,
         });
+        w._timers = w._timers || [];
+        w._timers.push(setTimeout(() => _fire(w, evidence), retryMs));
         return;
     }
+
+    w.firedAt = Date.now();
+    _cleanupWatcher(w);
     _recordResume(w.sessionId);
 
     const digest = buildDigest({
