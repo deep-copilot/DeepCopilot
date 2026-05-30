@@ -218,16 +218,20 @@ class AgentLoop {
             userContent = fullText;
         }
 
+        // Reset the per-turn yield budget and the "summary-before-sleep" nudge
+        // guard at the start of EVERY turn (user-triggered and auto-resumed
+        // alike). These were previously reset only on the autoResume path, so a
+        // normal turn could inherit a non-zero _yieldCount / a tripped
+        // _yieldSummaryNudged from an earlier turn — eventually making
+        // yield_turn fail and skipping the pre-suspend summary nudge.
+        run._yieldCount = 0;
+        run._yieldSummaryNudged = false;
+
         if (autoResume) {
             // Preserve any prior reply object so post-loop persistence still works.
             run.reply = run.reply || { user: '', asst: '', thoughts: '' };
             run.reply.asst = '';
             run.reply.thoughts = '';
-            // Reset the per-turn yield counter so a fresh resumed turn gets full budget.
-            run._yieldCount = 0;
-            // Reset the "summary-before-sleep" nudge guard so each resumed turn is
-            // again required to surface a summary before it suspends.
-            run._yieldSummaryNudged = false;
             Logger.info('AUTO_RESUME_TURN', {
                 sid,
                 watcherId: autoResume.watcherId || null,

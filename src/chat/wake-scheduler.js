@@ -9,7 +9,7 @@
 //     SCHEDULER_VOLATILE_WARN on register).
 //   - Fixed 5s poll interval (no exponential backoff yet).
 //   - Rate limit is a flat per-hour cap per session (default 12, configurable
-//     via deepCopilot.autoResume.maxResumesPerHour).
+//     via deepseekAgent.autoResumeMaxPerHour).
 //   - No quiet-hours / file-changed / port-open conditions in v1.
 'use strict';
 
@@ -35,6 +35,11 @@ const DEFAULT_MAX_RESUMES_PER_HOUR = 12;
 // Trailing window kept from a job's joined output on each poll tick. Bounds the
 // per-tick allocation (was up to ~1.28MB) since only recent output is scanned.
 const MAX_OUTPUT_TAIL = 200 * 1024;
+// Size of the trailing slice used as an activity signature. Once the joined
+// output saturates MAX_OUTPUT_TAIL its length stops growing, so _pollOutput
+// compares this tail slice to detect output that is still moving, and uses it
+// as the regex haystack in that capped case.
+const TAIL_SIG_BYTES = 4 * 1024;
 
 function attach(provider) { _provider = provider; }
 function isAttached() { return !!_provider; }
@@ -157,23 +162,33 @@ function _pollOutput(w, conds) {
         const out = res.text;
 
         const prevLen = w._lastSeenLen.get(c.job) || 0;
-        const newSlice = out.length > prevLen ? out.slice(prevLen) : '';
-        if (newSlice.length > 0) {
+        // Signature of the trailing window. Once the joined output saturates
+        // MAX_OUTPUT_TAIL, out.length stops growing even while fresh lines slide
+        // through the tail — so a length delta alone misses ongoing activity.
+        // Comparing the tail content catches that "capped but still moving" case.
+        const tailSig = out.length > TAIL_SIG_BYTES ? out.slice(-TAIL_SIG_BYTES) : out;
+        const prevSig = w._lastTailSig.get(c.job);
+        const grew = out.length > prevLen;
+        const shrank = out.length < prevLen;
+        const tailChanged = prevSig !== undefined && tailSig !== prevSig;
+        const newSlice = grew ? out.slice(prevLen) : '';
+        if (grew || shrank || tailChanged) {
+            // Any of: more bytes, buffer shrank/reset (ring-buffer drop or job
+            // restart), or the tail content moved while length was capped — all
+            // count as activity, so re-baseline length+signature and refresh the
+            // idle clock to keep output_silent from firing spuriously.
             w._lastSeenLen.set(c.job, out.length);
-            w._lastOutputChangeAt.set(c.job, Date.now());
-        } else if (out.length < prevLen) {
-            // Buffer shrank/reset (ring-buffer dropped older executions, or the
-            // job restarted). That IS activity, not silence — re-baseline the
-            // seen length and refresh the idle clock so output_silent does not
-            // fire spuriously.
-            w._lastSeenLen.set(c.job, out.length);
+            w._lastTailSig.set(c.job, tailSig);
             w._lastOutputChangeAt.set(c.job, Date.now());
         }
 
         if (c.kind === 'output_match' && c.regex) {
             try {
                 const re = new RegExp(c.regex, c.flags || 'i');
-                if (re.test(newSlice) || (prevLen === 0 && re.test(out))) {
+                // When length is capped but the tail moved, newSlice is empty —
+                // fall back to scanning the recent tail so matches still fire.
+                const hay = newSlice || (tailChanged ? tailSig : '');
+                if (re.test(hay) || (prevLen === 0 && re.test(out))) {
                     return _fire(w, {
                         kind: 'output_match',
                         jobId: c.job,
@@ -206,7 +221,8 @@ function _pollOutput(w, conds) {
         } else if (c.kind === 'progress_at' && c.regex) {
             try {
                 const re = new RegExp(c.regex, c.flags || 'i');
-                if (newSlice && re.test(newSlice)) {
+                const hay = newSlice || (tailChanged ? tailSig : '');
+                if (hay && re.test(hay)) {
                     return _fire(w, {
                         kind: 'progress_at',
                         jobId: c.job,
@@ -315,6 +331,7 @@ function registerWatcher(sessionId, spec) {
         _poll: null,
         _offBgEnd: null,
         _lastSeenLen: new Map(),
+        _lastTailSig: new Map(),
         _lastOutputChangeAt: new Map(),
     };
     _watchers.set(id, w);
