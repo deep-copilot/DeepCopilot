@@ -13,6 +13,15 @@ const PROGRESS_RE = /(?:epoch\s*[:=]?\s*(\d+)\s*[\/of]\s*(\d+)|step\s*[:=]?\s*(\
 
 const MAX_OUTPUT_SCAN = 200 * 1024; // hard cap on bytes scanned per digest
 
+// Neutralize any literal <system-reminder> / </system-reminder> tag that may
+// appear in untrusted job output, so embedded output cannot break out of the
+// reminder wrapper and inject higher-priority prompt content. A zero-width
+// space after the angle bracket keeps the text human-readable while preventing
+// the tag from being parsed as a wrapper boundary.
+function sanitizeForReminder(s) {
+    return String(s == null ? '' : s).replace(/<(\/?)(\s*)system-reminder/gi, '<$1$2\u200bsystem-reminder');
+}
+
 function _splitLines(s) {
     return String(s || '').split(/\r?\n/);
 }
@@ -125,11 +134,11 @@ function buildDigest(opts) {
         }
     }
 
-    let result = parts.join('\n').trimEnd();
+    let result = sanitizeForReminder(parts.join('\n').trimEnd());
     if (result.length > maxChars) {
         result = result.slice(0, maxChars) + `\n…[digest truncated, ${result.length - maxChars} more chars]`;
     }
     return result;
 }
 
-module.exports = { extractAnomalies, extractProgress, buildDigest };
+module.exports = { extractAnomalies, extractProgress, buildDigest, sanitizeForReminder };

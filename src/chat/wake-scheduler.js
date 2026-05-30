@@ -32,6 +32,9 @@ let _seq = 0;
 const MAX_WATCHERS_PER_SESSION = 8;
 const POLL_INTERVAL_MS = 5000;
 const DEFAULT_MAX_RESUMES_PER_HOUR = 12;
+// Trailing window kept from a job's joined output on each poll tick. Bounds the
+// per-tick allocation (was up to ~1.28MB) since only recent output is scanned.
+const MAX_OUTPUT_TAIL = 200 * 1024;
 
 function attach(provider) { _provider = provider; }
 function isAttached() { return !!_provider; }
@@ -39,8 +42,8 @@ function isAttached() { return !!_provider; }
 function _maxResumesPerHour() {
     try {
         const v = vscode.workspace
-            .getConfiguration('deepCopilot.autoResume')
-            .get('maxResumesPerHour');
+            .getConfiguration('deepseekAgent')
+            .get('autoResumeMaxPerHour');
         const n = Number(v);
         return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_RESUMES_PER_HOUR;
     } catch { return DEFAULT_MAX_RESUMES_PER_HOUR; }
@@ -94,7 +97,10 @@ function _arm(w) {
 
     for (const c of conds) {
         if (c.kind === 'time_elapsed') {
-            const ms = Math.max(1000, (Number(c.seconds) | 0) * 1000);
+            // Round (not bitwise-truncate) so fractional seconds behave
+            // predictably and large values aren't mangled by 32-bit coercion
+            // (e.g. 5.9s → 6s, not 5s; 86400s stays 86400s).
+            const ms = Math.max(1000, Math.round(Number(c.seconds) || 0) * 1000);
             const t = setTimeout(() => _fire(w, { kind: 'time_elapsed' }), ms);
             w._timers.push(t);
         }
@@ -125,8 +131,15 @@ function _readJobOutput(jobId) {
     const term = findTerminalByName(jobId);
     if (!term) return null;
     const recs = getRecentExecutions(term, 20);
+    let text = recs.map(r => r.output || '').join('\n');
+    // Tail-cap the joined text: up to 20×64KB (~1.28MB) is re-allocated on every
+    // poll tick per watcher (5s × up to 8 watchers/session). Downstream logic
+    // (regex checks + digest builder) only needs recent output, so keep just the
+    // trailing window. Truncation is reported separately below, so dropping the
+    // head here does not lose the saturation signal.
+    if (text.length > MAX_OUTPUT_TAIL) text = text.slice(-MAX_OUTPUT_TAIL);
     return {
-        text: recs.map(r => r.output || '').join('\n'),
+        text,
         // True when the most-recent execution saturated the capture cap
         // (terminal-monitor stops appending past MAX_BYTES_PER_EXECUTION).
         // Its captured output then stops growing even though the job keeps
@@ -146,6 +159,13 @@ function _pollOutput(w, conds) {
         const prevLen = w._lastSeenLen.get(c.job) || 0;
         const newSlice = out.length > prevLen ? out.slice(prevLen) : '';
         if (newSlice.length > 0) {
+            w._lastSeenLen.set(c.job, out.length);
+            w._lastOutputChangeAt.set(c.job, Date.now());
+        } else if (out.length < prevLen) {
+            // Buffer shrank/reset (ring-buffer dropped older executions, or the
+            // job restarted). That IS activity, not silence — re-baseline the
+            // seen length and refresh the idle clock so output_silent does not
+            // fire spuriously.
             w._lastSeenLen.set(c.job, out.length);
             w._lastOutputChangeAt.set(c.job, Date.now());
         }

@@ -21,6 +21,7 @@ const {
     estimateMessagesTokens, autoCompactIfNeeded, nuclearCompact, ToolArgsStreamer,
 } = require('./compact');
 const { _dropOrphanToolCallGroups } = require('./session-store');
+const { sanitizeForReminder } = require('./digest');
 const {
     onBgJobEnded, offBgJobEnded,
     getActiveBgJobsForSession, waitForNextBgJobEvent,
@@ -393,7 +394,7 @@ class AgentLoop {
                                 '<system-reminder>',
                                 `Background job "${ev.jobId}" has FINISHED.`,
                                 `Exit code: ${ev.exitCode ?? 'unknown'} (${exitLabel}) | Duration: ${durSec}s`,
-                                ev.output ? `Last output:\n${ev.output}` : '(no output captured)',
+                                ev.output ? `Last output:\n${sanitizeForReminder(ev.output)}` : '(no output captured)',
                                 '</system-reminder>',
                             ].join('\n'),
                         });
@@ -411,7 +412,7 @@ class AgentLoop {
                             role: 'user',
                             content: [
                                 '<system-reminder channel="auto-wake">',
-                                ev.digest || '(no digest)',
+                                sanitizeForReminder(ev.digest || '(no digest)'),
                                 '</system-reminder>',
                             ].join('\n'),
                         });

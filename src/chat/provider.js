@@ -122,6 +122,16 @@ class ChatViewProvider {
                 run._pendingWakeEvents = run._pendingWakeEvents || [];
                 run._pendingWakeEvents.push(evidence);
             } else {
+                // Race guard: a watcher can fire after the session was deleted
+                // (onDeleteRun cancels watchers, but the fire may already be in
+                // flight). loadApiMessages() would then return [] and the
+                // resumed turn could re-persist a phantom record for the
+                // deleted session. Bail out if the session no longer exists.
+                const exists = this._store.all().some(s => s.id === sessionId);
+                if (!exists) {
+                    Logger.info('AUTO_RESUME_SESSION_GONE', { sid: sessionId, watcherId: evidence.watcherId });
+                    return;
+                }
                 const seed = this._store.loadApiMessages(sessionId);
                 run = this._newRun(sessionId, seed);
                 run._pendingWakeEvents = [evidence];

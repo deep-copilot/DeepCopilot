@@ -586,10 +586,10 @@ const TOOL_DEFS = [
                 properties: {
                     reason: {
                         type: 'string',
-                        description: 'Short human-readable explanation of what you are waiting for (e.g. "training run ~30min, will resume on completion or OOM"). Shown in the UI as a status hint while suspended.',
+                        description: 'Short human-readable explanation of what you are waiting for (e.g. "training run ~30min, will resume on completion or OOM"). Strongly recommended — shown in the UI as a status hint while suspended. If omitted, a generic placeholder is used.',
                     },
                 },
-                required: ['reason'],
+                required: [],
             },
         },
     },
