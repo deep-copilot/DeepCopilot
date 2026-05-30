@@ -211,7 +211,13 @@ function sanitizeMessages(providerId, messages, modelId) {
         let copy = m;
         for (const k of Object.keys(m)) {
             if (k.length > 1 && k.charCodeAt(0) === 95 /* '_' */) {
-                if (copy === m) copy = Object.assign({}, m);
+                // Spread (not Object.assign) to copy: a message could carry an
+                // own `__proto__` key (it starts with `_` and lands in this
+                // branch), and Object.assign would invoke the `__proto__`
+                // setter on the target — a classic prototype-pollution footgun.
+                // Object spread defines own properties instead of triggering
+                // setters, so it copies the field safely before we delete it.
+                if (copy === m) copy = { ...m };
                 delete copy[k];
             }
         }
@@ -224,7 +230,7 @@ function sanitizeMessages(providerId, messages, modelId) {
             let copy = m;
             for (const k of effectiveStrip) {
                 if (Object.prototype.hasOwnProperty.call(copy, k)) {
-                    if (copy === m) copy = Object.assign({}, m);
+                    if (copy === m) copy = { ...m };
                     delete copy[k];
                 }
             }

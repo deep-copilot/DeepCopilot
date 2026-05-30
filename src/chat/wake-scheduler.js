@@ -240,6 +240,7 @@ function _pollOutput(w, conds) {
 function _cleanupWatcher(w) {
     for (const t of w._timers || []) { try { clearTimeout(t); } catch {} }
     w._timers = [];
+    if (w._retryTimer) { try { clearTimeout(w._retryTimer); } catch {} w._retryTimer = null; }
     if (w._poll) { try { clearInterval(w._poll); } catch {} w._poll = null; }
     if (w._offBgEnd) { try { w._offBgEnd(); } catch {} w._offBgEnd = null; }
     _watchers.delete(w.id);
@@ -266,8 +267,18 @@ function _fire(w, evidence) {
             trigger: evidence.kind,
             retryMs,
         });
-        w._timers = w._timers || [];
-        w._timers.push(setTimeout(() => _fire(w, evidence), retryMs));
+        // Keep at most ONE pending retry timer per watcher. Conditions like
+        // output_match re-fire on every 5s poll tick, so unconditionally
+        // pushing a new timer here accumulated many pending _fire() calls for
+        // the same watcher (CPU/memory waste + redundant wakes). Instead, stash
+        // the latest evidence and (re)arm a single retry; the existing timer is
+        // cleared first so only one is ever outstanding.
+        w._latestEvidence = evidence;
+        if (w._retryTimer) { try { clearTimeout(w._retryTimer); } catch {} }
+        w._retryTimer = setTimeout(() => {
+            w._retryTimer = null;
+            _fire(w, w._latestEvidence);
+        }, retryMs);
         return;
     }
 
@@ -327,6 +338,8 @@ function registerWatcher(sessionId, spec) {
         spec,
         createdAt: Date.now(),
         firedAt: null,
+        _retryTimer: null,
+        _latestEvidence: null,
         _timers: [],
         _poll: null,
         _offBgEnd: null,
